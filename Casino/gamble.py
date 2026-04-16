@@ -1,154 +1,18 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import sqlite3
 import random
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import sys
 from pathlib import Path
 
 # Add Casino folder to path to import variables.py
 sys.path.insert(0, str(Path(__file__).parent))
 import variables as var
+from database_management.db_manager import DatabaseManager  # Import your DatabaseManager
 
-# ============================================================================
-# DATABASE FUNCTIONS
-# ============================================================================
-
-def init_database():
-    """Initialize the SQLite database and create tables if they don't exist."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS casino (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER NOT NULL DEFAULT 0,
-            total_won INTEGER DEFAULT 0,
-            total_lost INTEGER DEFAULT 0,
-            games_played INTEGER DEFAULT 0,
-            last_daily REAL DEFAULT 0,
-            created_at REAL DEFAULT (julianday('now'))
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    print(f"✅ Database initialized: {var.DATABASE_NAME}")
-
-def get_user_balance(user_id: int) -> int:
-    """Get user balance, create account if doesn't exist."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT balance FROM casino WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    
-    if result is None:
-        cursor.execute(
-            'INSERT INTO casino (user_id, balance) VALUES (?, ?)',
-            (user_id, var.STARTING_BALANCE)
-        )
-        conn.commit()
-        conn.close()
-        return var.STARTING_BALANCE
-    
-    conn.close()
-    return result[0]
-
-def update_balance(user_id: int, amount: int, won: bool = False):
-    """Update user balance and statistics."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    if won:
-        cursor.execute('''
-            UPDATE casino 
-            SET balance = balance + ?,
-                total_won = total_won + ?,
-                games_played = games_played + 1
-            WHERE user_id = ?
-        ''', (amount, amount, user_id))
-    else:
-        cursor.execute('''
-            UPDATE casino 
-            SET balance = balance - ?,
-                total_lost = total_lost + ?,
-                games_played = games_played + 1
-            WHERE user_id = ?
-        ''', (amount, amount, user_id))
-    
-    conn.commit()
-    conn.close()
-
-def get_user_stats(user_id: int) -> dict:
-    """Get user statistics."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT balance, total_won, total_lost, games_played, last_daily
-        FROM casino WHERE user_id = ?
-    ''', (user_id,))
-    
-    result = cursor.fetchone()
-    conn.close()
-    
-    if result:
-        return {
-            'balance': result[0],
-            'total_won': result[1],
-            'total_lost': result[2],
-            'games_played': result[3],
-            'last_daily': result[4]
-        }
-    return None
-
-def claim_daily_bonus(user_id: int) -> tuple[bool, int]:
-    """Claim daily bonus. Returns (success, time_remaining)."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    get_user_balance(user_id)
-    
-    cursor.execute('SELECT last_daily FROM casino WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    
-    current_time = time.time()
-    last_daily = result[0] if result else 0
-    time_since_last = current_time - last_daily
-    
-    if time_since_last < var.DAILY_BONUS_COOLDOWN:
-        conn.close()
-        return False, int(var.DAILY_BONUS_COOLDOWN - time_since_last)
-    
-    cursor.execute('''
-        UPDATE casino 
-        SET balance = balance + ?,
-            last_daily = ?
-        WHERE user_id = ?
-    ''', (var.DAILY_BONUS_AMOUNT, current_time, user_id))
-    
-    conn.commit()
-    conn.close()
-    return True, 0
-
-def get_leaderboard(limit: int = 10) -> list:
-    """Get top users by balance."""
-    conn = sqlite3.connect(var.DATABASE_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT user_id, balance, games_played
-        FROM casino
-        ORDER BY balance DESC
-        LIMIT ?
-    ''', (limit,))
-    
-    results = cursor.fetchall()
-    conn.close()
-    return results
+# Initialize the DatabaseManager
+db_manager = DatabaseManager()
 
 # ============================================================================
 # CASINO COG CLASS
@@ -203,8 +67,8 @@ class GambleCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         
-        balance = get_user_balance(user_id)
-        
+        balance = db_manager.get_user_balance(user_id)  # Use DatabaseManager
+
         if balance < amount:
             embed = discord.Embed(
                 title="❌ Insufficient Funds",
@@ -225,7 +89,7 @@ class GambleCog(commands.Cog):
         if won:
             winnings = int(amount * var.WIN_MULTIPLIER)
             profit = winnings - amount
-            update_balance(user_id, profit, won=True)
+            db_manager.update_balance(user_id, profit, won=True)  # Use DatabaseManager
             new_balance = balance + profit
             
             embed = discord.Embed(
@@ -245,7 +109,7 @@ class GambleCog(commands.Cog):
                 inline=False
             )
         else:
-            update_balance(user_id, amount, won=False)
+            db_manager.update_balance(user_id, amount, won=False)  # Use DatabaseManager
             new_balance = balance - amount
             
             embed = discord.Embed(
@@ -278,11 +142,11 @@ class GambleCog(commands.Cog):
         """Check user balance and statistics."""
         
         user_id = interaction.user.id
-        stats = get_user_stats(user_id)
+        stats = db_manager.get_user_stats(user_id)  # Use DatabaseManager
         
         if not stats:
-            balance = get_user_balance(user_id)
-            stats = get_user_stats(user_id)
+            balance = db_manager.get_user_balance(user_id)  # Ensure the user is created
+            stats = db_manager.get_user_stats(user_id)  # Retrieve stats again
         
         net_profit = stats['total_won'] - stats['total_lost']
         
@@ -323,10 +187,10 @@ class GambleCog(commands.Cog):
         """Claim daily bonus."""
         
         user_id = interaction.user.id
-        success, time_remaining = claim_daily_bonus(user_id)
+        success, time_remaining = db_manager.claim_daily_bonus(user_id)  # Use DatabaseManager
         
         if success:
-            new_balance = get_user_balance(user_id)
+            new_balance = db_manager.get_user_balance(user_id)
             embed = discord.Embed(
                 title="🎁 Daily Bonus Claimed!",
                 description=f"You received **{var.CURRENCY_SYMBOL} {var.DAILY_BONUS_AMOUNT:,} {var.CURRENCY_NAME}**!",
@@ -357,7 +221,7 @@ class GambleCog(commands.Cog):
     async def leaderboard(self, interaction: discord.Interaction):
         """Display leaderboard."""
         
-        top_users = get_leaderboard(var.LEADERBOARD_TOP_COUNT)
+        top_users = db_manager.get_leaderboard(var.LEADERBOARD_TOP_COUNT)  # Use DatabaseManager
         
         embed = discord.Embed(
             title=f"🏆 {var.CURRENCY_NAME} Leaderboard",
@@ -393,9 +257,6 @@ async def setup(bot: commands.Bot):
     Setup function to load this cog.
     Required for the launcher to load this module.
     """
-    # Initialize database
-    init_database()
-    
     # Add the cog to the bot
     await bot.add_cog(GambleCog(bot))
     

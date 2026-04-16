@@ -1,6 +1,6 @@
 # variables.py
 
-from utils.config_loader import get_bot_token, load_config
+from utils.config_loader import get_bot_token, load_config #will work when is imported into workspace
 from pathlib import Path
 
 # ============================================================================
