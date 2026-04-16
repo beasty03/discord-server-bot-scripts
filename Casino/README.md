@@ -47,9 +47,3 @@ A Discord bot that allows users to gamble virtual currency with customizable set
 ## important: Install discord.py if missing
 pip install discord.py
  
-# Ensure utils folder exists with config_loader.py
-gamble/
-├── bot.py              # Main bot script
-├── variables.py        # Configuration file
-├── gamble.db          # SQLite database (auto-created)
-└── README.md          # This file
