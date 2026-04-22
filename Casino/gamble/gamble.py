@@ -6,10 +6,10 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-# Add Casino folder to path to import variables.py
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent))          # for variables.py
+sys.path.insert(0, str(Path(__file__).parent.parent))   # for database_management package
 import variables as var
-from database_management.database_manager import DatabaseManager  # Import your DatabaseManager
+from database_management.database_manager import DatabaseManager
 
 # Initialize the DatabaseManager
 db_manager = DatabaseManager()
