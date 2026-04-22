@@ -6,13 +6,11 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))          # for variables.py
-sys.path.insert(0, str(Path(__file__).parent.parent))   # for database_management package
+sys.path.insert(0, str(Path(__file__).parent))  # for local variables.py
 import variables as var
-from database_management.database_manager import DatabaseManager
+from cogs.Database_management.database_manager import DatabaseManager
 
-# Initialize the DatabaseManager
-db_manager = DatabaseManager()
+db_manager = DatabaseManager(starting_balance=var.STARTING_BALANCE)
 
 # ============================================================================
 # CARD / DECK HELPERS
@@ -403,7 +401,7 @@ class BlackjackCog(commands.Cog):
         """Claim daily bonus."""
 
         user_id = interaction.user.id
-        success, time_remaining = db_manager.claim_daily_bonus(user_id)
+        success, time_remaining = db_manager.claim_daily_bonus(user_id, bonus=var.DAILY_BONUS_AMOUNT, cooldown=var.DAILY_BONUS_COOLDOWN)
 
         if success:
             new_balance = db_manager.get_user_balance(user_id)
