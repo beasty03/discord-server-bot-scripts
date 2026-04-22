@@ -9,7 +9,7 @@ from pathlib import Path
 # Add Casino folder to path to import variables.py
 sys.path.insert(0, str(Path(__file__).parent))
 import variables as var
-from database_management.db_manager import DatabaseManager  # Import your DatabaseManager
+from database_management.database_manager import DatabaseManager  # Import your DatabaseManager
 
 # Initialize the DatabaseManager
 db_manager = DatabaseManager()
