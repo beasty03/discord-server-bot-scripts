@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))  # makes local variables.py importable
-import General.Welcome.variables as var
+import variables as var
 from cogs.Database_management.database_manager import DatabaseManager
 
 db_manager = DatabaseManager(starting_balance=var.STARTING_BALANCE)
