@@ -7,8 +7,10 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))  # for local variables.py
-import variables as var
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location('blackjack_variables', Path(__file__).parent / 'variables.py')
+var = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(var)
 from cogs.Database_management.database_manager import DatabaseManager
 
 db_manager = DatabaseManager(starting_balance=var.STARTING_BALANCE)
@@ -75,8 +77,6 @@ class BlackjackView(discord.ui.View):
             )
             embed.timestamp = datetime.utcnow()
             try:
-                user_id = self.original_interaction.user.id
-                db_manager.update_balance(user_id, self.bet, won=False)
                 await self.original_interaction.edit_original_response(embed=embed, view=self)
             except Exception:
                 pass
@@ -95,7 +95,6 @@ class BlackjackView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             user_id = interaction.user.id
-            db_manager.update_balance(user_id, self.bet, won=False)
             new_balance = db_manager.get_user_balance(user_id)
 
             embed = self._build_embed(
@@ -140,29 +139,29 @@ class BlackjackView(discord.ui.View):
         user_id = interaction.user.id
 
         if dealer_total > 21:
-            profit = self.bet
-            db_manager.update_balance(user_id, profit, won=True)
+            payout = int(self.bet * var.WIN_MULTIPLIER)
+            db_manager.update_balance(user_id, payout, won=True)
             new_balance = db_manager.get_user_balance(user_id)
             embed = self._build_embed(
                 title="💥 Dealer Busted!",
-                description=var.MESSAGE_DEALER_BUST.format(amount=f"{profit:,}", currency=var.CURRENCY_NAME),
+                description=var.MESSAGE_DEALER_BUST.format(amount=f"{self.bet:,}", currency=var.CURRENCY_NAME),
                 color=var.COLOR_WIN,
                 reveal_dealer=True,
                 new_balance=new_balance,
             )
         elif player_total > dealer_total:
-            profit = self.bet
-            db_manager.update_balance(user_id, profit, won=True)
+            payout = int(self.bet * var.WIN_MULTIPLIER)
+            db_manager.update_balance(user_id, payout, won=True)
             new_balance = db_manager.get_user_balance(user_id)
             embed = self._build_embed(
                 title="🎉 You Win!",
-                description=var.MESSAGE_WIN.format(amount=f"{profit:,}", currency=var.CURRENCY_NAME),
+                description=var.MESSAGE_WIN.format(amount=f"{self.bet:,}", currency=var.CURRENCY_NAME),
                 color=var.COLOR_WIN,
                 reveal_dealer=True,
                 new_balance=new_balance,
             )
         elif player_total < dealer_total:
-            db_manager.update_balance(user_id, self.bet, won=False)
+            # Bet already deducted at game start — just show updated balance
             new_balance = db_manager.get_user_balance(user_id)
             embed = self._build_embed(
                 title="💸 Dealer Wins!",
@@ -172,7 +171,11 @@ class BlackjackView(discord.ui.View):
                 new_balance=new_balance,
             )
         else:
-            # Push — refund bet (no change to balance needed)
+            # Push — refund the original bet back
+            db_manager.execute(
+                "UPDATE casino SET balance = balance + ? WHERE user_id = ?",
+                (self.bet, user_id)
+            )
             new_balance = db_manager.get_user_balance(user_id)
             embed = self._build_embed(
                 title="🤝 Push — Tie!",
