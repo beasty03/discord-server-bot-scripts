@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import random
+import logging
 from datetime import datetime
 import sys
 from pathlib import Path
@@ -229,6 +230,16 @@ class BlackjackCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"❌ An error occurred: {error}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ An error occurred: {error}", ephemeral=True)
+        except Exception:
+            pass
+        raise error
 
     @app_commands.command(
         name="blackjack",
@@ -473,4 +484,4 @@ async def setup(bot: commands.Bot):
     """
     await bot.add_cog(BlackjackCog(bot))
 
-    print("✅ Casino/Blackjack cog loaded successfully")
+    logging.getLogger("launcher").info("✅ Casino/Blackjack cog loaded")
