@@ -8,8 +8,10 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))  # makes local variables.py importable
-import variables as var
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location('welcome_variables', Path(__file__).parent / 'variables.py')
+var = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(var)
 from cogs.Database_management.database_manager import DatabaseManager
 
 db_manager = DatabaseManager(starting_balance=var.STARTING_BALANCE)
@@ -114,6 +116,12 @@ class WelcomeSystem(commands.Cog):
     def _terms(self) -> str:
         t = self._get_cfg("terms_text")
         return t if t else var.DEFAULT_TERMS
+
+    def _welcome_message(self, member: discord.Member) -> str:
+        tmpl = self._get_cfg("welcome_message")
+        if not tmpl:
+            tmpl = "Hi {mention}, welcome to **{server}**! Have fun 🎉"
+        return tmpl.format(mention=member.mention, server=member.guild.name, name=member.display_name)
 
     # ── Startup checks ───────────────────────────────────────────────────────
 
@@ -312,11 +320,7 @@ class WelcomeSystem(commands.Cog):
         welcome_ch = self._welcome_channel(guild)
         if welcome_ch:
             shoutout = discord.Embed(
-                title="👋 New Member!",
-                description=(
-                    f"Everyone welcome {member.mention} to **{guild.name}**! 🎉\n"
-                    f"They've accepted the Terms & Conditions and are ready to chat."
-                ),
+                description=self._welcome_message(member),
                 color=var.COLOR_WIN,
                 timestamp=datetime.utcnow(),
             )
@@ -394,9 +398,15 @@ class WelcomeSystem(commands.Cog):
             await ch.send(embed=e)
 
     # ── Control panel commands ───────────────────────────────────────────────
+    # All commands require administrator and must be used in #control-panel.
+
+    _CP = app_commands.check(
+        lambda i: 'control-panel' in i.channel.name.lower().replace('_', '-').replace(' ', '-')
+    )
 
     @app_commands.command(name="set_welcome_channel", description="Set the channel where new members are welcomed")
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def set_welcome_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         self._set_cfg("welcome_channel_id", str(channel.id))
         await interaction.response.send_message(embed=discord.Embed(
@@ -407,6 +417,7 @@ class WelcomeSystem(commands.Cog):
 
     @app_commands.command(name="set_welcome_role", description="Set the role given to members after accepting T&C")
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def set_welcome_role(self, interaction: discord.Interaction, role: discord.Role):
         self._set_cfg("welcome_role_id", str(role.id))
         await interaction.response.send_message(embed=discord.Embed(
@@ -415,8 +426,31 @@ class WelcomeSystem(commands.Cog):
             color=var.COLOR_WIN,
         ), ephemeral=True)
 
+    @app_commands.command(name="set_welcome_message", description="Set the message posted when a new member joins")
+    @app_commands.default_permissions(administrator=True)
+    @_CP
+    async def set_welcome_message(self, interaction: discord.Interaction, message: str):
+        self._set_cfg("welcome_message", message)
+        embed = discord.Embed(
+            title="✅ Welcome Message Updated",
+            description="New members will trigger this message when they join.",
+            color=var.COLOR_WIN,
+        )
+        embed.add_field(name="Preview", value=message.format(
+            mention=interaction.user.mention,
+            server=interaction.guild.name,
+            name=interaction.user.display_name,
+        )[:500], inline=False)
+        embed.add_field(
+            name="Available placeholders",
+            value="`{mention}` — tags the user\n`{name}` — display name\n`{server}` — server name",
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.command(name="set_terms", description="Update the Terms & Conditions shown to new members")
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def set_terms(self, interaction: discord.Interaction, text: str):
         self._set_cfg("terms_text", text)
         embed = discord.Embed(
@@ -432,6 +466,7 @@ class WelcomeSystem(commands.Cog):
         description="How often (in hours) the new-member activity log is posted to #bot-logs",
     )
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def set_monitoring_interval(
         self, interaction: discord.Interaction, hours: app_commands.Range[int, 1, 24]
     ):
@@ -448,6 +483,7 @@ class WelcomeSystem(commands.Cog):
         description="How many days after joining a member's messages are monitored",
     )
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def set_monitoring_period(
         self, interaction: discord.Interaction, days: app_commands.Range[int, 1, 30]
     ):
@@ -460,6 +496,7 @@ class WelcomeSystem(commands.Cog):
 
     @app_commands.command(name="resend_terms", description="Resend the T&C DM to a member who missed it")
     @app_commands.default_permissions(administrator=True)
+    @_CP
     async def resend_terms(self, interaction: discord.Interaction, member: discord.Member):
         embed = discord.Embed(
             title=f"Welcome to {member.guild.name}!",
@@ -488,11 +525,24 @@ class WelcomeSystem(commands.Cog):
     # ── Error handler ────────────────────────────────────────────────────────
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CheckFailure):
+            try:
+                cp = discord.utils.get(interaction.guild.text_channels, name='control-panel')
+                where = cp.mention if cp else '**#control-panel**'
+                msg = f"⛔ This command can only be used in {where}."
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(msg, ephemeral=True)
+                else:
+                    await interaction.followup.send(msg, ephemeral=True)
+            except Exception:
+                pass
+            return
         try:
+            msg = f"❌ An error occurred: {error}"
             if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ An error occurred: {error}", ephemeral=True)
+                await interaction.response.send_message(msg, ephemeral=True)
             else:
-                await interaction.followup.send(f"❌ An error occurred: {error}", ephemeral=True)
+                await interaction.followup.send(msg, ephemeral=True)
         except Exception:
             pass
         raise error
