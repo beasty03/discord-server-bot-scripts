@@ -11,45 +11,40 @@ import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('wordle_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
-from cogs.Database_management.database_manager import DatabaseManager
+from forge_db import ForgeDB
 
-db_manager = DatabaseManager(starting_balance=0)
+ForgeDB.declare_schema(
+    tables=[
+        """CREATE TABLE IF NOT EXISTS wordle_config (
+               key   TEXT PRIMARY KEY,
+               value TEXT NOT NULL
+           )""",
+    ],
+)
 
-log = logging.getLogger("launcher")
-
-NYT_WORDLE_API = "https://www.nytimes.com/svc/wordle/v2/{date}.json"
+log               = logging.getLogger("launcher")
+NYT_WORDLE_API    = "https://www.nytimes.com/svc/wordle/v2/{date}.json"
+_SORTED_TIMEZONES = sorted(available_timezones())
 
 
 class WordleRecap(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot = bot
+        self.bot         = bot
+        self.db          = ForgeDB.get()
         self.post_hour   = var.WORDLE_POST_HOUR
         self.post_minute = var.WORDLE_POST_MINUTE
         self._last_posted: date | None = None
-        self._register_tables()
         self._load_settings()
-
-    def cog_unload(self):
-        if self.wordle_timer.is_running():
-            self.wordle_timer.cancel()
 
     # ── Database ─────────────────────────────────────────────────────────────
 
-    def _register_tables(self):
-        db_manager.register_table("""
-            CREATE TABLE IF NOT EXISTS wordle_config (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
     def _get_cfg(self, key: str) -> str | None:
-        rows = db_manager.execute("SELECT value FROM wordle_config WHERE key = ?", (key,))
+        rows = self.db.execute("SELECT value FROM wordle_config WHERE key = ?", (key,))
         return rows[0][0] if rows else None
 
     def _set_cfg(self, key: str, value: str):
-        db_manager.execute(
+        self.db.execute(
             "INSERT OR REPLACE INTO wordle_config (key, value) VALUES (?, ?)",
             (key, str(value)),
         )
@@ -80,6 +75,10 @@ class WordleRecap(commands.Cog):
             "[WordleRecap] Ready — posting daily recap at %02d:%02d %s in #%s",
             self.post_hour, self.post_minute, tz.key, var.DEFAULT_CHANNEL_NAME,
         )
+
+    def cog_unload(self):
+        if self.wordle_timer.is_running():
+            self.wordle_timer.cancel()
 
     # ── Scheduled task ────────────────────────────────────────────────────────
 
@@ -148,33 +147,22 @@ class WordleRecap(commands.Cog):
 
     # ── Slash commands ────────────────────────────────────────────────────────
 
-    @app_commands.command(
-        name="set_wordle_channel",
-        description="Set the channel where the daily Wordle recap is posted.",
-    )
+    @app_commands.command(name="set_wordle_channel", description="Set the channel where the daily Wordle recap is posted.")
     @app_commands.describe(channel="Text channel to post the recap in")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def set_wordle_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         self._set_cfg("channel_id", str(channel.id))
         await interaction.response.send_message(
-            embed=discord.Embed(
-                description=f"Wordle recap will be posted in {channel.mention}.",
-                color=var.COLOR_INFO,
-            ),
+            embed=discord.Embed(description=f"Wordle recap will be posted in {channel.mention}.", color=var.COLOR_INFO),
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="set_wordle_time",
-        description="Set the time the daily Wordle recap is posted (uses your configured timezone).",
-    )
+    @app_commands.command(name="set_wordle_time", description="Set the time the daily Wordle recap is posted (uses your configured timezone).")
     @app_commands.describe(hour="Hour (0–23)", minute="Minute (0–59)")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def set_wordle_time(self, interaction: discord.Interaction, hour: int, minute: int):
         if not (0 <= hour <= 23) or not (0 <= minute <= 59):
-            await interaction.response.send_message(
-                "Invalid time — hour must be 0–23 and minute 0–59.", ephemeral=True
-            )
+            await interaction.response.send_message("Invalid time — hour must be 0–23 and minute 0–59.", ephemeral=True)
             return
         self.post_hour   = hour
         self.post_minute = minute
@@ -189,14 +177,10 @@ class WordleRecap(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(
-        name="set_wordle_timezone",
-        description="Set the timezone for the Wordle recap post time (e.g. Europe/Brussels).",
-    )
+    @app_commands.command(name="set_wordle_timezone", description="Set the timezone for the Wordle recap post time (e.g. Europe/Brussels).")
     @app_commands.describe(timezone="Start typing to search — e.g. Brussels, New_York, London")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def set_wordle_timezone(self, interaction: discord.Interaction, timezone: str):
-
         try:
             tz = ZoneInfo(timezone)
         except ZoneInfoNotFoundError:
@@ -215,26 +199,18 @@ class WordleRecap(commands.Cog):
         )
 
     @set_wordle_timezone.autocomplete("timezone")
-    async def timezone_autocomplete(
-        self, _interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        lower = current.lower()
+    async def timezone_autocomplete(self, _interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        lower   = current.lower()
         matches = [tz for tz in _SORTED_TIMEZONES if lower in tz.lower()]
         return [app_commands.Choice(name=tz, value=tz) for tz in matches[:25]]
 
-    @app_commands.command(
-        name="wordle_recap",
-        description="Manually post yesterday's Wordle answer right now.",
-    )
+    @app_commands.command(name="wordle_recap", description="Manually post yesterday's Wordle answer right now.")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def wordle_recap_manual(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         yesterday = datetime.now(self._get_tz()).date() - timedelta(days=1)
         await self._post_wordle_recap(yesterday)
         await interaction.followup.send("Wordle recap posted!", ephemeral=True)
-
-
-_SORTED_TIMEZONES = sorted(available_timezones())
 
 
 async def setup(bot: commands.Bot):

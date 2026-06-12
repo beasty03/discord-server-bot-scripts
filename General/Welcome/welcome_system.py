@@ -5,22 +5,40 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime
-import sys
 from pathlib import Path
 
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('welcome_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
-from cogs.Database_management.database_manager import DatabaseManager
+from forge_db import ForgeDB
 
-db_manager = DatabaseManager(starting_balance=var.STARTING_BALANCE)
+ForgeDB.declare_schema(
+    tables=[
+        """CREATE TABLE IF NOT EXISTS pending_users (
+               user_id   TEXT PRIMARY KEY,
+               guild_id  TEXT NOT NULL,
+               join_ts   REAL NOT NULL
+           )""",
+        """CREATE TABLE IF NOT EXISTS new_member_messages (
+               id              INTEGER PRIMARY KEY AUTOINCREMENT,
+               user_id         TEXT    NOT NULL,
+               channel_id      TEXT    NOT NULL,
+               channel_name    TEXT    NOT NULL,
+               message_content TEXT    NOT NULL,
+               timestamp       REAL    NOT NULL
+           )""",
+        """CREATE TABLE IF NOT EXISTS welcome_config (
+               key   TEXT PRIMARY KEY,
+               value TEXT NOT NULL
+           )""",
+    ],
+)
 
 log = logging.getLogger("launcher")
 
 
 class TermsAcceptView(discord.ui.View):
-    """Persistent view — survives bot restarts via bot.add_view() in on_ready."""
     cog_ref = None  # set to the live WelcomeSystem instance
 
     def __init__(self):
@@ -44,48 +62,21 @@ class WelcomeSystem(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self.db  = ForgeDB.get()
         TermsAcceptView.cog_ref = self
-        self._register_tables()
 
     def cog_unload(self):
         if self.message_log_task.is_running():
             self.message_log_task.cancel()
 
-    # ── Database setup ───────────────────────────────────────────────────────
-
-    def _register_tables(self):
-        db_manager.register_table("""
-            CREATE TABLE IF NOT EXISTS pending_users (
-                user_id   INTEGER PRIMARY KEY,
-                guild_id  INTEGER NOT NULL,
-                join_ts   REAL    NOT NULL
-            )
-        """)
-        db_manager.register_table("""
-            CREATE TABLE IF NOT EXISTS new_member_messages (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id         INTEGER NOT NULL,
-                channel_id      INTEGER NOT NULL,
-                channel_name    TEXT    NOT NULL,
-                message_content TEXT    NOT NULL,
-                timestamp       REAL    NOT NULL
-            )
-        """)
-        db_manager.register_table("""
-            CREATE TABLE IF NOT EXISTS welcome_config (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-
     # ── Config helpers ───────────────────────────────────────────────────────
 
     def _get_cfg(self, key: str) -> str | None:
-        rows = db_manager.execute("SELECT value FROM welcome_config WHERE key = ?", (key,))
+        rows = self.db.execute("SELECT value FROM welcome_config WHERE key = ?", (key,))
         return rows[0][0] if rows else None
 
     def _set_cfg(self, key: str, value: str):
-        db_manager.execute(
+        self.db.execute(
             "INSERT OR REPLACE INTO welcome_config (key, value) VALUES (?, ?)",
             (key, str(value)),
         )
@@ -153,7 +144,6 @@ class WelcomeSystem(commands.Cog):
                 color=var.COLOR_ERROR,
             ))
 
-        # Deny Send Messages on @everyone to enforce the T&C gate
         everyone = guild.default_role
         if everyone.permissions.send_messages:
             perms = everyone.permissions
@@ -181,7 +171,6 @@ class WelcomeSystem(commands.Cog):
                     color=var.COLOR_ERROR,
                 ))
 
-        # Allow Send Messages on the Member role so accepted users can chat
         role = self._member_role(guild)
         if role and not role.permissions.send_messages:
             perms = role.permissions
@@ -211,7 +200,7 @@ class WelcomeSystem(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        self.bot.add_view(TermsAcceptView())  # re-register persistent view after restarts
+        self.bot.add_view(TermsAcceptView())
         for guild in self.bot.guilds:
             await self._startup_checks(guild)
         self.message_log_task.change_interval(hours=self._interval())
@@ -227,9 +216,9 @@ class WelcomeSystem(commands.Cog):
         if member.bot:
             return
 
-        db_manager.execute(
+        self.db.execute(
             "INSERT OR REPLACE INTO pending_users (user_id, guild_id, join_ts) VALUES (?, ?, ?)",
-            (member.id, member.guild.id, time.time()),
+            (str(member.id), str(member.guild.id), time.time()),
         )
 
         embed = discord.Embed(
@@ -267,24 +256,23 @@ class WelcomeSystem(commands.Cog):
         if not member or not member.joined_at:
             return
 
-        # Only track members within the monitoring window
         if member.joined_at.timestamp() < time.time() - self._period() * 86400:
             return
 
         # Skip users who haven't accepted T&C yet
-        if db_manager.execute("SELECT 1 FROM pending_users WHERE user_id = ?", (member.id,)):
+        if self.db.execute("SELECT 1 FROM pending_users WHERE user_id = ?", (str(member.id),)):
             return
 
-        db_manager.execute(
+        self.db.execute(
             "INSERT INTO new_member_messages "
             "(user_id, channel_id, channel_name, message_content, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (member.id, message.channel.id, message.channel.name, message.content[:500], time.time()),
+            (str(member.id), str(message.channel.id), message.channel.name, message.content[:500], time.time()),
         )
 
     # ── T&C acceptance flow ──────────────────────────────────────────────────
 
     async def handle_acceptance(self, interaction: discord.Interaction):
-        user = interaction.user
+        user  = interaction.user
         guild = self.bot.get_guild(var.GUILD_ID)
         if not guild:
             await interaction.response.send_message("Server not found — contact an admin.", ephemeral=True)
@@ -295,7 +283,7 @@ class WelcomeSystem(commands.Cog):
             await interaction.response.send_message("You're no longer in the server.", ephemeral=True)
             return
 
-        if not db_manager.execute("SELECT 1 FROM pending_users WHERE user_id = ?", (user.id,)):
+        if not self.db.execute("SELECT 1 FROM pending_users WHERE user_id = ?", (str(user.id),)):
             await interaction.response.send_message("You've already accepted the terms!", ephemeral=True)
             return
 
@@ -314,8 +302,8 @@ class WelcomeSystem(commands.Cog):
             )
             return
 
-        db_manager.execute("DELETE FROM pending_users WHERE user_id = ?", (user.id,))
-        db_manager.get_user_balance(user.id)  # creates casino record with starting balance
+        self.db.execute("DELETE FROM pending_users WHERE user_id = ?", (str(user.id),))
+        self.db.ensure_user(str(user.id), str(guild.id), user.display_name)
 
         welcome_ch = self._welcome_channel(guild)
         if welcome_ch:
@@ -349,22 +337,19 @@ class WelcomeSystem(commands.Cog):
         if not ch:
             return
 
-        rows = db_manager.execute(
+        rows = self.db.execute(
             "SELECT user_id, channel_name, message_content, timestamp "
             "FROM new_member_messages ORDER BY user_id, timestamp",
-            (),
         )
         if not rows:
             return
 
-        # Snapshot and clear before building embeds so a mid-send crash doesn't double-log
-        db_manager.execute("DELETE FROM new_member_messages", ())
+        self.db.execute("DELETE FROM new_member_messages")
 
-        grouped: dict[int, list] = defaultdict(list)
+        grouped: dict[str, list] = defaultdict(list)
         for uid, cname, content, ts in rows:
             grouped[uid].append((cname, content, ts))
 
-        # Split into multiple embeds if needed (Discord limit: 25 fields per embed)
         embeds: list[discord.Embed] = []
         embed = discord.Embed(
             title="📋 New Member Activity Log",
@@ -380,10 +365,10 @@ class WelcomeSystem(commands.Cog):
                 embed = discord.Embed(color=var.COLOR_INFO, timestamp=datetime.utcnow())
                 fields = 0
 
-            m = guild.get_member(uid)
+            m     = guild.get_member(int(uid))
             label = m.display_name if m else f"User {uid}"
             if m and m.joined_at:
-                days = (datetime.utcnow() - m.joined_at.replace(tzinfo=None)).days
+                days   = (datetime.utcnow() - m.joined_at.replace(tzinfo=None)).days
                 label += f" (joined {days}d ago)"
 
             body = "\n".join(
@@ -398,7 +383,6 @@ class WelcomeSystem(commands.Cog):
             await ch.send(embed=e)
 
     # ── Control panel commands ───────────────────────────────────────────────
-    # All commands require administrator and must be used in #control-panel.
 
     _CP = app_commands.check(
         lambda i: 'control-panel' in i.channel.name.lower().replace('_', '-').replace(' ', '-')
@@ -527,9 +511,9 @@ class WelcomeSystem(commands.Cog):
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
             try:
-                cp = discord.utils.get(interaction.guild.text_channels, name='control-panel')
+                cp    = discord.utils.get(interaction.guild.text_channels, name='control-panel')
                 where = cp.mention if cp else '**#control-panel**'
-                msg = f"⛔ This command can only be used in {where}."
+                msg   = f"⛔ This command can only be used in {where}."
                 if not interaction.response.is_done():
                     await interaction.response.send_message(msg, ephemeral=True)
                 else:
