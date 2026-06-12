@@ -5,15 +5,17 @@ Posts yesterday's Wordle answer every day at a configurable time (default **00:0
 ## Commands
 
 - `/set_wordle_channel #channel` — set the channel where the recap is posted
-- `/set_wordle_time <hour> <minute>` — set the UTC time of the daily post (0–23 / 0–59)
+- `/set_wordle_time <hour> <minute>` — set the time of the daily post in your configured timezone
+- `/set_wordle_timezone <timezone>` — set the timezone for the post time (e.g. `Europe/Brussels`)
 - `/wordle_recap` — manually post yesterday's answer right now (useful for testing)
 
 All commands require the **Manage Server** permission.
 
 ## Settings (variables.py)
 
-- `WORDLE_POST_HOUR` — UTC hour of the daily post, default `0`
-- `WORDLE_POST_MINUTE` — UTC minute of the daily post, default `5`
+- `WORDLE_POST_HOUR` — hour of the daily post (in `WORDLE_TIMEZONE`), default `0`
+- `WORDLE_POST_MINUTE` — minute of the daily post, default `5`
+- `WORDLE_TIMEZONE` — fallback IANA timezone when none is set via slash command, default `"UTC"`
 - `DEFAULT_CHANNEL_NAME` — fallback channel name when none is set via slash command, default `"general"`
 
 ## Setup
