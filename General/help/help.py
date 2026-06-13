@@ -74,6 +74,7 @@ CATEGORIES = [
         "description": "Admin-only configuration — Welcome System",
         "color":       var.COLOR_ADMIN,
         "sections": [
+            ("⚙️ Config",        "ConfigCog"),
             ("👋 Welcome System", "WelcomeSystem"),
         ],
     },
