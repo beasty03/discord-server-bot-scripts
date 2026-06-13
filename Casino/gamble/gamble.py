@@ -16,13 +16,15 @@ from forge_db import ForgeDB
 
 def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
     db.execute(
-        """INSERT INTO casino_stats (user_id, guild_id, games_played, total_won, total_lost)
-           VALUES (?, ?, 1, ?, ?)
+        """INSERT INTO casino_stats (user_id, guild_id, games_played, games_won, games_lost, total_won, total_lost)
+           VALUES (?, ?, 1, ?, ?, ?, ?)
            ON CONFLICT(user_id, guild_id) DO UPDATE SET
                games_played = games_played + 1,
+               games_won    = games_won    + excluded.games_won,
+               games_lost   = games_lost   + excluded.games_lost,
                total_won    = total_won    + excluded.total_won,
                total_lost   = total_lost   + excluded.total_lost""",
-        (uid, gid, won, lost),
+        (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
 # ============================================================================
@@ -34,6 +36,13 @@ class GambleCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
+
+    async def cog_load(self):
+        for col in ('games_won', 'games_lost'):
+            try:
+                self.db.execute(f"ALTER TABLE casino_stats ADD COLUMN {col} INTEGER DEFAULT 0")
+            except Exception:
+                pass
 
     @app_commands.command(name="gamble", description=f"Gamble your {var.CURRENCY_NAME} for a chance to win!")
     @app_commands.describe(amount=f"Amount of {var.CURRENCY_NAME} to gamble")

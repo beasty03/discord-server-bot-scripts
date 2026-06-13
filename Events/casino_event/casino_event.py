@@ -231,8 +231,8 @@ class CasinoEventCog(commands.Cog):
 
         channel = self._get_event_channel()
         if channel is None:
-            log.warning("CasinoEvent: event channel not configured — use /set_event_channel")
-            return "No event channel configured. Use `/set_event_channel` first."
+            log.warning("CasinoEvent: event channel not configured — use /set_eventannouncement_channel")
+            return "No event channel configured. Use `/set_eventannouncement_channel` first."
 
         cfg         = _load_settings()
         join_window = cfg.get("join_window", var.JOIN_WINDOW)
@@ -419,20 +419,6 @@ class CasinoEventCog(commands.Cog):
                 )
                 return
             await cog.start_from_startevent(interaction)
-
-    @app_commands.command(name="set_event_channel", description="Set the channel where casino events are announced.")
-    @app_commands.describe(channel="The channel to post events in")
-    async def set_event_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        data = _load_settings()
-        data["channel_id"] = channel.id
-        _save_settings(data)
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                description=f"✅ Casino events will be posted in {channel.mention}.",
-                color=var.COLOR_WIN,
-            ),
-            ephemeral=True,
-        )
 
     @app_commands.command(name="set_join_window_timer", description="Set how long players have to join a casino event.")
     @app_commands.describe(seconds="Seconds the join window stays open (minimum 10)")
