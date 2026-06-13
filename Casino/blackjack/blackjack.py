@@ -59,6 +59,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 # ============================================================================
 # HIT / STAND VIEW
 # ============================================================================
@@ -157,6 +161,7 @@ class BlackjackView(discord.ui.View):
         player_total = hand_value(self.player_hand)
         dealer_total = hand_value(self.dealer_hand)
         uid, gid     = self._uid_gid(interaction)
+        bot_uid      = str(self.original_interaction.client.user.id)
         dm_mult      = getattr(self.original_interaction.client, 'multiplier_event_mult', None) or 1.0
 
         if dealer_total > 21 or player_total > dealer_total:
@@ -166,6 +171,7 @@ class BlackjackView(discord.ui.View):
                 profit     = int(profit * dm_mult)
                 raw_payout = self.bet + profit
             self.cog.db.update_balance(uid, gid, raw_payout, 'win')
+            _house_tx(self.cog.db, bot_uid, gid, -raw_payout, 'house_payout')
             _record_stats(self.cog.db, uid, gid, profit, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
             title = "💥 Dealer Busted!" if dealer_total > 21 else "🎉 You Win!"
@@ -188,6 +194,7 @@ class BlackjackView(discord.ui.View):
             )
         else:
             self.cog.db.update_balance(uid, gid, self.bet, 'refund')
+            _house_tx(self.cog.db, bot_uid, gid, -self.bet, 'house_refund')
             _record_stats(self.cog.db, uid, gid, 0, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
             embed = self._build_embed(
@@ -326,7 +333,9 @@ class BlackjackCog(commands.Cog):
             return
 
         # Deduct bet upfront; refund/pay out after hand is resolved
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         deck = build_deck()
         random.shuffle(deck)
@@ -341,6 +350,7 @@ class BlackjackCog(commands.Cog):
                 profit   = int(profit * dm_mult)
                 winnings = amount + profit
             self.db.update_balance(uid, gid, winnings, 'win')
+            _house_tx(self.db, bot_uid, gid, -winnings, 'house_payout')
             _record_stats(self.db, uid, gid, profit, 0)
             new_balance = self.db.get_balance(uid, gid)
 

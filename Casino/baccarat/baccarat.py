@@ -87,6 +87,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 def determine_outcome(player: list, banker: list) -> str:
     pt = hand_total(player)
     bt = hand_total(banker)
@@ -132,6 +136,7 @@ class BaccaratView(discord.ui.View):
         won     = chosen_bet == outcome
         is_tie  = outcome == "tie"
         pushed  = is_tie and chosen_bet != "tie" and var.TIE_PUSHES_SIDE_BETS
+        bot_uid = str(interaction.client.user.id)
         dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
 
         if won:
@@ -142,9 +147,11 @@ class BaccaratView(discord.ui.View):
             if dm_mult > 1.0:
                 payout = self.bet + int((payout - self.bet) * dm_mult)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _house_tx(self.db, bot_uid, self.guild_id, -payout, 'house_payout')
             _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         elif pushed:
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            _house_tx(self.db, bot_uid, self.guild_id, -self.bet, 'house_refund')
             _record_stats(self.db, self.user_id, self.guild_id, 0, 0)
             payout = self.bet
         else:
@@ -215,7 +222,9 @@ class BaccaratView(discord.ui.View):
     async def on_timeout(self):
         if not self.resolved:
             self.resolved = True
+            bot_uid = str(self.original_interaction.client.user.id)
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            _house_tx(self.db, bot_uid, self.guild_id, -self.bet, 'house_refund')
             for item in self.children:
                 item.disabled = True
             embed = discord.Embed(
@@ -328,7 +337,9 @@ class BaccaratCog(commands.Cog):
             return
 
         # Deduct bet upfront; refunded on timeout or tie-push
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         embed = discord.Embed(
             title="🃏 Baccarat — Place Your Bet",

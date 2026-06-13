@@ -28,6 +28,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 
 class CrossyRoadView(discord.ui.View):
 
@@ -106,10 +110,11 @@ class CrossyRoadView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
-        uid  = str(self.user_id)
-        gid  = self.guild_id
-        sym  = var.CURRENCY_SYMBOL
-        name = interaction.user.display_name
+        uid     = str(self.user_id)
+        gid     = self.guild_id
+        bot_uid = str(interaction.client.user.id)
+        sym     = var.CURRENCY_SYMBOL
+        name    = interaction.user.display_name
 
         if hit_lane is not None:
             _record_stats(self.cog.db, uid, gid, 0, self.bet)
@@ -129,6 +134,7 @@ class CrossyRoadView(discord.ui.View):
                 raw_payout = self.bet + profit
 
             self.cog.db.update_balance(uid, gid, raw_payout, 'win')
+            _house_tx(self.cog.db, bot_uid, gid, -raw_payout, 'house_payout')
             _record_stats(self.cog.db, uid, gid, profit, 0)
 
             embed = self._build_embed(completed=completed)
@@ -196,15 +202,18 @@ class CrossyRoadView(discord.ui.View):
         self.finished = True
         for item in self.children:
             item.disabled = True
-        uid = str(self.user_id)
-        gid = self.guild_id
+        uid     = str(self.user_id)
+        gid     = self.guild_id
+        bot_uid = str(self.cog.bot.user.id)
         if self.lanes_crossed > 0:
             raw_payout = self._current_payout()
             profit     = raw_payout - self.bet
             self.cog.db.update_balance(uid, gid, raw_payout, 'win')
+            _house_tx(self.cog.db, bot_uid, gid, -raw_payout, 'house_payout')
             _record_stats(self.cog.db, uid, gid, profit, 0)
         else:
             self.cog.db.update_balance(uid, gid, self.bet, 'refund')
+            _house_tx(self.cog.db, bot_uid, gid, -self.bet, 'house_refund')
         try:
             embed = discord.Embed(
                 description="⏰ Game timed out." + (
@@ -282,7 +291,9 @@ class CrossyRoadCog(commands.Cog):
             )
             return
 
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         view  = CrossyRoadView(self, interaction, amount, interaction.user.id, gid)
         embed = view._build_embed()

@@ -69,6 +69,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 def bet_label(bet_type: str, bet_number: int | None) -> str:
     labels = {
         "red": "🔴 Red", "black": "⚫ Black",
@@ -143,12 +147,14 @@ class RouletteView(discord.ui.View):
         result = spin_wheel()
         won, multiplier = check_win(result, bet_type, bet_number)
 
+        bot_uid = str(interaction.client.user.id)
         dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         if won:
             payout = int(self.bet * multiplier)
             if dm_mult > 1.0:
                 payout = self.bet + int((payout - self.bet) * dm_mult)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _house_tx(self.db, bot_uid, self.guild_id, -payout, 'house_payout')
             _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         else:
             _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
@@ -162,16 +168,17 @@ class RouletteView(discord.ui.View):
         else:
             await interaction.response.edit_message(embed=embed, view=self)
         if interaction.channel:
-            pub = discord.Embed(
-                description=(
-                    f"🎡 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{payout - self.bet:,}** playing Roulette!"
-                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else "")
-                    if won else
-                    f"🎡 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Roulette"
-                ),
+            name = interaction.user.display_name
+            if won:
+                desc = f"🎡 **{name}** won {var.CURRENCY_SYMBOL} **{payout - self.bet:,}** playing Roulette!"
+                if dm_mult > 1.0:
+                    desc += f" *(💰 {dm_mult}x event!)*"
+            else:
+                desc = f"🎡 **{name}** lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Roulette."
+            await interaction.channel.send(embed=discord.Embed(
+                description=desc,
                 color=var.COLOR_WIN if won else var.COLOR_LOSE,
-            )
-            await interaction.channel.send(embed=pub)
+            ))
 
     def _build_result_embed(
         self,
@@ -211,7 +218,9 @@ class RouletteView(discord.ui.View):
     async def on_timeout(self):
         if not self.resolved:
             self.resolved = True
+            bot_uid = str(self.original_interaction.client.user.id)
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            _house_tx(self.db, bot_uid, self.guild_id, -self.bet, 'house_refund')
             for item in self.children:
                 item.disabled = True
             embed = discord.Embed(
@@ -369,7 +378,9 @@ class RouletteCog(commands.Cog):
             return
 
         # Deduct bet upfront; refunded on timeout, paid out on win
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         embed = discord.Embed(
             title="🎡 Roulette — Place Your Bet",

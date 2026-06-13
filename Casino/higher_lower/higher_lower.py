@@ -47,6 +47,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 # ============================================================================
 # VIEW
 # ============================================================================
@@ -144,10 +148,12 @@ class HigherLowerView(discord.ui.View):
 
         multiplier  = get_multiplier(self.correct_rounds)
         payout      = int(self.bet * multiplier)
+        bot_uid     = str(interaction.client.user.id)
         dm_mult     = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         if dm_mult > 1.0:
             payout = self.bet + int((payout - self.bet) * dm_mult)
         self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+        _house_tx(self.db, bot_uid, self.guild_id, -payout, 'house_payout')
         _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
         embed       = self._cashout_embed(payout, new_balance, auto=auto, dm_mult=dm_mult)
@@ -269,10 +275,12 @@ class HigherLowerView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+        bot_uid = str(self.original_interaction.client.user.id)
         if self.correct_rounds > 0:
             multiplier  = get_multiplier(self.correct_rounds)
             payout      = int(self.bet * multiplier)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _house_tx(self.db, bot_uid, self.guild_id, -payout, 'house_payout')
             _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
             new_balance = self.db.get_balance(self.user_id, self.guild_id)
             embed = discord.Embed(
@@ -284,6 +292,7 @@ class HigherLowerView(discord.ui.View):
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
         else:
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            _house_tx(self.db, bot_uid, self.guild_id, -self.bet, 'house_refund')
             embed = discord.Embed(
                 title="⏰ Timed Out",
                 description=f"You didn't make a guess. Your {var.CURRENCY_SYMBOL} {self.bet:,} {var.CURRENCY_NAME} has been refunded.",
@@ -395,7 +404,9 @@ class HigherLowerCog(commands.Cog):
             return
 
         # Deduct bet upfront; refunded on round-0 timeout, paid out on cash-out/win
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         starting_card, starting_number = draw_card()
         view  = HigherLowerView(interaction, amount, interaction.user.id, starting_card, starting_number)

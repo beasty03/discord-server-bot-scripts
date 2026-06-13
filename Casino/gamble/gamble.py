@@ -27,6 +27,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 # ============================================================================
 # CASINO COG CLASS
 # ============================================================================
@@ -91,6 +95,7 @@ class GambleCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        bot_uid = str(interaction.client.user.id)
         dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         roll = random.randint(1, 100)
         won  = roll <= var.WIN_CHANCE
@@ -101,6 +106,7 @@ class GambleCog(commands.Cog):
             if dm_mult > 1.0:
                 profit = int(profit * dm_mult)
             self.db.update_balance(uid, gid, profit, 'win')
+            _house_tx(self.db, bot_uid, gid, -profit, 'house_payout')
             _record_stats(self.db, uid, gid, profit, 0)
             new_balance = self.db.get_balance(uid, gid)
             embed = discord.Embed(
@@ -116,6 +122,7 @@ class GambleCog(commands.Cog):
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
         else:
             self.db.update_balance(uid, gid, -amount, 'loss')
+            _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
             _record_stats(self.db, uid, gid, 0, amount)
             new_balance = self.db.get_balance(uid, gid)
             embed = discord.Embed(
@@ -132,16 +139,17 @@ class GambleCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
         if interaction.channel:
-            pub = discord.Embed(
-                description=(
-                    f"🎲 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{profit:,}** playing Gamble!"
-                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else "")
-                    if won else
-                    f"🎲 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{amount:,}** playing Gamble"
-                ),
+            name = interaction.user.display_name
+            if won:
+                desc = f"🎲 **{name}** won {var.CURRENCY_SYMBOL} **{profit:,}** playing Gamble!"
+                if dm_mult > 1.0:
+                    desc += f" *(💰 {dm_mult}x event!)*"
+            else:
+                desc = f"🎲 **{name}** lost {var.CURRENCY_SYMBOL} **{amount:,}** playing Gamble."
+            await interaction.channel.send(embed=discord.Embed(
+                description=desc,
                 color=var.COLOR_WIN if won else var.COLOR_LOSE,
-            )
-            await interaction.channel.send(embed=pub)
+            ))
 
 
 

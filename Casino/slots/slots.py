@@ -41,6 +41,10 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
         (uid, gid, 1 if won > 0 else 0, 1 if lost > 0 else 0, won, lost),
     )
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 
 def _spin() -> list:
     return random.choices(_SYMBOLS, weights=_WEIGHTS, k=3)
@@ -78,6 +82,7 @@ class SlotsCog(commands.Cog):
         sym  = var.CURRENCY_SYMBOL
 
         self.db.ensure_user(uid, gid, name)
+        bot_uid = str(interaction.client.user.id)
 
         if amount < var.MIN_BET:
             await interaction.response.send_message(
@@ -111,6 +116,7 @@ class SlotsCog(commands.Cog):
             return
 
         self.db.update_balance(uid, gid, -amount, 'bet')
+        _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
 
         reels       = _spin()
         label, mult = _evaluate(reels)
@@ -125,6 +131,7 @@ class SlotsCog(commands.Cog):
                 profit     = int(profit * dm_mult)
                 raw_payout = amount + profit
             self.db.update_balance(uid, gid, raw_payout, 'win')
+            _house_tx(self.db, bot_uid, gid, -raw_payout, 'house_payout')
             _record_stats(self.db, uid, gid, profit, 0)
 
             color      = var.COLOR_WIN

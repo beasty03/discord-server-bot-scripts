@@ -30,6 +30,10 @@ def _load_settings() -> dict:
 def _save_settings(data: dict):
     _SETTINGS_FILE.write_text(json.dumps(data, indent=2), "utf-8")
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
+
 
 class BankCog(commands.Cog):
 
@@ -144,12 +148,16 @@ class BankCog(commands.Cog):
 
         total_amount = base_amount + streak_bonus + event_bonus
 
-        # Credit balance
+        # Credit balance; house pays the daily reward
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, base_amount, 'daily')
+        _house_tx(self.db, bot_uid, gid, -base_amount, 'house_payout')
         if streak_bonus > 0:
             self.db.update_balance(uid, gid, streak_bonus, 'daily_streak')
+            _house_tx(self.db, bot_uid, gid, -streak_bonus, 'house_payout')
         if event_bonus > 0:
             self.db.update_balance(uid, gid, event_bonus, 'daily_event_bonus')
+            _house_tx(self.db, bot_uid, gid, -event_bonus, 'house_payout')
 
         # Persist streak
         self.db.execute(
@@ -336,6 +344,26 @@ class BankCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+    # ── /house_balance ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="house_balance", description="Show the house (bot) bank balance for this server.")
+    async def house_balance(self, interaction: discord.Interaction):
+        bot_uid = str(interaction.client.user.id)
+        gid     = str(interaction.guild_id)
+        self.db.ensure_user(bot_uid, gid, "House")
+        balance = self.db.get_balance(bot_uid, gid)
+        color   = var.COLOR_WIN if balance >= 0 else var.COLOR_ERROR
+        embed   = discord.Embed(
+            title="🏦 House Balance",
+            description=(
+                f"The casino house currently holds **{var.CURRENCY_SYMBOL} {balance:,} {var.CURRENCY_NAME}**."
+            ),
+            color=color,
+        )
+        embed.set_footer(text=var.SERVER_NAME)
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /set_daily ────────────────────────────────────────────────────────────
 

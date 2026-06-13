@@ -33,6 +33,9 @@ def _load_settings() -> dict:
 def _save_settings(data: dict):
     _SETTINGS_FILE.write_text(json.dumps(data, indent=2), "utf-8")
 
+def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
+    db.ensure_user(bot_uid, gid, "House")
+    db.update_balance(bot_uid, gid, amount, tx_type)
 
 # ============================================================================
 # INLINE GAME RESOLVERS
@@ -55,7 +58,7 @@ def _roulette_check(result: int, bet: str) -> tuple[bool, float]:
         case "even":  return result != 0 and result % 2 == 0,  2.0
     return False, 0.0
 
-def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0):
+def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = ""):
     result = random.randint(0, 36)
     emoji  = {"green": "🟢", "red": "🔴", "black": "⚫"}[_roulette_color(result)]
     rows   = []
@@ -68,13 +71,15 @@ def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0):
             if dm_mult > 1.0:
                 payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         else:
             rows.append((uid, f"-{amount:,}", "❌", bet))
     return f"{emoji} Ball landed on **{result}**", rows
 
 
-def resolve_gamble(participants: dict, db, gid: str, dm_mult: float = 1.0):
+def resolve_gamble(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = ""):
     rows = []
     for uid, data in participants.items():
         amount = data["amount"]
@@ -83,6 +88,8 @@ def resolve_gamble(participants: dict, db, gid: str, dm_mult: float = 1.0):
             if dm_mult > 1.0:
                 payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
             rows.append((uid, f"+{payout:,}", "✅", ""))
         else:
             rows.append((uid, f"-{amount:,}", "❌", ""))
@@ -93,7 +100,7 @@ _BRANK = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
 def _bval(r): return 1 if r == "A" else 0 if r in ("10","J","Q","K") else int(r)
 def _bhand(): return sum(_bval(random.choice(_BRANK)) for _ in range(2)) % 10
 
-def resolve_baccarat(participants: dict, db, gid: str, dm_mult: float = 1.0):
+def resolve_baccarat(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = ""):
     pt = _bhand()
     bt = _bhand()
     outcome = "player" if pt > bt else ("banker" if bt > pt else "tie")
@@ -107,9 +114,13 @@ def resolve_baccarat(participants: dict, db, gid: str, dm_mult: float = 1.0):
             if dm_mult > 1.0:
                 payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         elif outcome == "tie" and bet != "tie":
             db.update_balance(uid, gid, amount, 'refund')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -amount, 'house_refund')
             rows.append((uid, "refund", "↩️", bet))
         else:
             rows.append((uid, f"-{amount:,}", "❌", bet))
@@ -281,7 +292,8 @@ class CasinoEventCog(commands.Cog):
             return None
 
         dm_mult          = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
-        summary, results = resolver(participants, self.db, gid, dm_mult)
+        bot_uid          = str(self.bot.user.id) if self.bot.user else ""
+        summary, results = resolver(participants, self.db, gid, dm_mult, bot_uid)
 
         lines = []
         for uid, delta_str, emoji, bet in results:
@@ -360,7 +372,9 @@ class CasinoEventCog(commands.Cog):
             )
             return
 
+        bot_uid = str(interaction.client.user.id)
         self.db.update_balance(uid, gid, -wage, 'event_bet')
+        _house_tx(self.db, bot_uid, gid, wage, 'house_gain')
         game_id     = self._current_game["id"]
         default_bet = _DEFAULT_BETS.get(game_id, lambda: True)()
         self._participants[uid] = {"amount": wage, "bet": default_bet}
