@@ -7,55 +7,47 @@ from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from pathlib import Path
 
+import json
+
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('wordle_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
-from forge_db import ForgeDB
-
-ForgeDB.declare_schema(
-    tables=[
-        """CREATE TABLE IF NOT EXISTS wordle_config (
-               key   TEXT PRIMARY KEY,
-               value TEXT NOT NULL
-           )""",
-    ],
-)
 
 log               = logging.getLogger("launcher")
 NYT_WORDLE_API    = "https://www.nytimes.com/svc/wordle/v2/{date}.json"
 _SORTED_TIMEZONES = sorted(available_timezones())
+_CONFIG_FILE      = Path(__file__).parent / "wordle_config.json"
 
 
 class WordleRecap(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot         = bot
-        self.db          = ForgeDB.get()
-        self.post_hour   = var.WORDLE_POST_HOUR
-        self.post_minute = var.WORDLE_POST_MINUTE
+        self._cfg        = self._load_cfg()
+        self.post_hour   = self._cfg.get("post_hour",   var.WORDLE_POST_HOUR)
+        self.post_minute = self._cfg.get("post_minute", var.WORDLE_POST_MINUTE)
         self._last_posted: date | None = None
-        self._load_settings()
 
-    # ── Database ─────────────────────────────────────────────────────────────
+    # ── JSON config ───────────────────────────────────────────────────────────
 
-    def _get_cfg(self, key: str) -> str | None:
-        rows = self.db.execute("SELECT value FROM wordle_config WHERE key = ?", (key,))
-        return rows[0][0] if rows else None
+    def _load_cfg(self) -> dict:
+        if _CONFIG_FILE.exists():
+            try:
+                return json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
 
-    def _set_cfg(self, key: str, value: str):
-        self.db.execute(
-            "INSERT OR REPLACE INTO wordle_config (key, value) VALUES (?, ?)",
-            (key, str(value)),
-        )
+    def _save_cfg(self):
+        _CONFIG_FILE.write_text(json.dumps(self._cfg, indent=2), encoding="utf-8")
 
-    def _load_settings(self):
-        h = self._get_cfg("post_hour")
-        m = self._get_cfg("post_minute")
-        if h is not None:
-            self.post_hour = int(h)
-        if m is not None:
-            self.post_minute = int(m)
+    def _get_cfg(self, key: str):
+        return self._cfg.get(key)
+
+    def _set_cfg(self, key: str, value):
+        self._cfg[key] = value
+        self._save_cfg()
 
     def _get_tz(self) -> ZoneInfo:
         name = self._get_cfg("timezone") or var.WORDLE_TIMEZONE
