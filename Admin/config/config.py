@@ -22,11 +22,14 @@ class ConfigCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        bot.tree.add_check(global_interaction_check)
+        bot.tree.interaction_check = global_interaction_check
         log.info("✅ Global channel/role guard active")
 
     def cog_unload(self):
-        self.bot.tree.remove_check(global_interaction_check)
+        try:
+            del self.bot.tree.interaction_check
+        except AttributeError:
+            pass
 
     # ── Allowed channels ──────────────────────────────────────────────────────
 
