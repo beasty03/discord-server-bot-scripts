@@ -450,12 +450,24 @@ class CasinoEventCog(commands.Cog):
         data["interval_min"] = min_minutes
         data["interval_max"] = max_minutes
         _save_settings(data)
+
+        # Restart the loop so the new interval takes effect immediately
+        # (only if no event is currently running — restarting mid-event would cut it short)
+        restarted = False
+        if not self.event_active:
+            if self._loop_task and not self._loop_task.done():
+                self._loop_task.cancel()
+            self._loop_task = asyncio.create_task(self._event_loop())
+            restarted = True
+
+        note = (
+            f"Next event will fire in **{min_minutes}–{max_minutes} minutes**."
+            if restarted else
+            f"Takes effect after the current event ends."
+        )
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=(
-                    f"✅ Casino event interval set to **{min_minutes}–{max_minutes} minutes**.\n"
-                    f"A random delay in that range is picked after each event."
-                ),
+                description=f"✅ Event interval set to **{min_minutes}–{max_minutes} minutes**. {note}",
                 color=var.COLOR_WIN,
             ),
             ephemeral=True,
