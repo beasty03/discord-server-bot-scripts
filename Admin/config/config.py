@@ -9,7 +9,11 @@ _spec = _ilu.spec_from_file_location('cfg_variables', Path(__file__).parent / 'v
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 
-from Admin.config.channel_guard import BotConfig, global_interaction_check
+_cg_spec = _ilu.spec_from_file_location('channel_guard', Path(__file__).parent / 'channel_guard.py')
+_cg = _ilu.module_from_spec(_cg_spec)
+_cg_spec.loader.exec_module(_cg)
+BotConfig = _cg.BotConfig
+global_interaction_check = _cg.global_interaction_check
 
 log = logging.getLogger("launcher")
 
