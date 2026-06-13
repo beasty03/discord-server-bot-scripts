@@ -16,13 +16,13 @@ log = logging.getLogger("launcher")
 
 class LeaderboardCog(commands.Cog):
 
-    leaderboard = app_commands.Group(name="leaderboard", description="Server leaderboards")
+    bal = app_commands.Group(name="bal", description="Server leaderboards")
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
 
-    @leaderboard.command(name="top", description="View the richest players on the server.")
+    @bal.command(name="top", description="View the richest players on the server.")
     async def bal_top(self, interaction: discord.Interaction):
         gid  = str(interaction.guild_id)
         rows = self.db.execute(

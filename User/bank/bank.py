@@ -22,7 +22,7 @@ class BankCog(commands.Cog):
 
     # ── /balance ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="balance", description="Show your full casino stats and balance.")
+    @app_commands.command(name="bal", description="Show your full casino stats and balance.")
     @app_commands.describe(member="Another user to look up (leave empty for yourself)")
     async def balance(self, interaction: discord.Interaction, member: discord.Member | None = None):
         target = member or interaction.user
