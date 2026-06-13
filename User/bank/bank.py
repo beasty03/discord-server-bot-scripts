@@ -58,24 +58,6 @@ class BankCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed)
 
-    # ── /bal ──────────────────────────────────────────────────────────────────
-
-    @app_commands.command(name="bal", description="Quick balance check.")
-    @app_commands.describe(member="Another user to look up (leave empty for yourself)")
-    async def bal(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        target = member or interaction.user
-        uid    = str(target.id)
-        gid    = str(interaction.guild_id)
-        self.db.ensure_user(uid, gid, target.display_name)
-
-        balance = self.db.get_balance(uid, gid)
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                description=f"{target.mention} has **{var.CURRENCY_SYMBOL} {balance:,} {var.CURRENCY_NAME}**",
-                color=var.COLOR_INFO,
-            )
-        )
-
     # ── /daily ────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="daily", description=f"Claim your daily {var.CURRENCY_NAME} bonus.")
@@ -110,43 +92,6 @@ class BankCog(commands.Cog):
                 color=var.COLOR_ERROR,
             )
 
-        embed.timestamp = datetime.utcnow()
-        await interaction.response.send_message(embed=embed)
-
-    # ── /top ──────────────────────────────────────────────────────────────────
-
-    @app_commands.command(name="top", description="View the richest players on the server.")
-    async def top(self, interaction: discord.Interaction):
-        gid  = str(interaction.guild_id)
-        rows = self.db.execute(
-            """SELECT u.user_id, u.balance, COALESCE(c.games_played, 0)
-               FROM users u
-               LEFT JOIN casino_stats c ON u.user_id = c.user_id AND u.guild_id = c.guild_id
-               WHERE u.guild_id = ?
-               ORDER BY u.balance DESC LIMIT ?""",
-            (gid, var.LEADERBOARD_TOP_COUNT),
-        )
-        embed = discord.Embed(
-            title=f"🏆 {var.CURRENCY_NAME.capitalize()} Leaderboard",
-            color=var.COLOR_INFO,
-        )
-        if not rows:
-            embed.description = "No players yet — start gambling to appear here!"
-        else:
-            lines = []
-            for i, (uid, balance, games) in enumerate(rows, 1):
-                try:
-                    user = await self.bot.fetch_user(int(uid))
-                    name = user.display_name
-                except Exception:
-                    name = f"User {uid}"
-                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
-                lines.append(
-                    f"{medal} {name} — {var.CURRENCY_SYMBOL} **{balance:,}** "
-                    f"*({games:,} game{'s' if games != 1 else ''})*"
-                )
-            embed.description = "\n".join(lines)
-        embed.set_footer(text=f"{var.SERVER_NAME} Casino")
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed)
 

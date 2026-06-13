@@ -18,12 +18,13 @@ log = logging.getLogger("launcher")
 
 CATEGORIES = [
     {
-        "label":       "🏦 Bank",
-        "value":       "bank",
-        "description": "Currency management — balance, daily, leaderboard, give",
-        "color":       var.COLOR_BANK,
+        "label":       "👤 User",
+        "value":       "user",
+        "description": "Currency management — balance, daily, give, leaderboard",
+        "color":       var.COLOR_USER,
         "sections": [
-            ("🏦 Bank", "BankCog"),
+            ("🏦 Bank",        "BankCog"),
+            ("🏆 Leaderboard", "LeaderboardCog"),
         ],
     },
     {
