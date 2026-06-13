@@ -16,17 +16,23 @@ from forge_db import ForgeDB
 # HELPERS
 # ============================================================================
 
-def draw() -> int:
-    return random.randint(*var.NUMBER_RANGE)
+CARD_RANKS  = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+CARD_VALUES = {r: i + 1 for i, r in enumerate(CARD_RANKS)}
+CARD_NAMES  = {"A": "Ace", "J": "Jack", "Q": "Queen", "K": "King",
+               **{str(n): str(n) for n in range(2, 11)}}
+
+def draw_card() -> tuple[str, int]:
+    rank = random.choice(CARD_RANKS)
+    return rank, CARD_VALUES[rank]
+
+def card_box(rank: str) -> str:
+    return f"` {CARD_NAMES.get(rank, rank)} `"
 
 def get_multiplier(correct_rounds: int) -> float:
     if correct_rounds <= 0:
         return 1.0
     idx = min(correct_rounds - 1, len(var.ROUND_MULTIPLIERS) - 1)
     return var.ROUND_MULTIPLIERS[idx]
-
-def num_box(n: int) -> str:
-    return f"` {n} `"
 
 def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
     db.execute(
@@ -50,6 +56,7 @@ class HigherLowerView(discord.ui.View):
         original_interaction: discord.Interaction,
         bet: int,
         user_id: int,
+        current_card: str,
         current_number: int,
         correct_rounds: int = 0,
     ):
@@ -59,6 +66,7 @@ class HigherLowerView(discord.ui.View):
         self.bet                  = bet
         self.user_id              = str(user_id)
         self.guild_id             = str(original_interaction.guild_id)
+        self.current_card         = current_card
         self.current_number       = current_number
         self.correct_rounds       = correct_rounds
         self.resolved             = False
@@ -81,19 +89,17 @@ class HigherLowerView(discord.ui.View):
         if self.resolved:
             return
 
+        prev_card   = self.current_card
         prev_number = self.current_number
-        next_number = draw()
+        next_card, next_number = draw_card()
+
         tied = next_number == prev_number
         won  = (guess == "higher" and next_number > prev_number) or \
                (guess == "lower"  and next_number < prev_number)
 
         if tied:
-            self.resolved = True
-            for item in self.children:
-                item.disabled = True
-            self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
-            new_balance = self.db.get_balance(self.user_id, self.guild_id)
-            embed = self._tie_embed(prev_number, new_balance)
+            # Streak intact, game continues — no balance change
+            embed = self._tie_embed(prev_card, next_card)
             await interaction.response.edit_message(embed=embed, view=self)
             return
 
@@ -103,10 +109,11 @@ class HigherLowerView(discord.ui.View):
                 item.disabled = True
             _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
             new_balance = self.db.get_balance(self.user_id, self.guild_id)
-            embed = self._loss_embed(prev_number, next_number, guess, new_balance)
+            embed = self._loss_embed(prev_card, next_card, guess, new_balance)
             await interaction.response.edit_message(embed=embed, view=self)
             return
 
+        self.current_card    = next_card
         self.current_number  = next_number
         self.correct_rounds += 1
 
@@ -118,7 +125,7 @@ class HigherLowerView(discord.ui.View):
             await self._finish_cashout(interaction, auto=True)
             return
 
-        embed = self._in_progress_embed(prev_number, next_number, guess)
+        embed = self._in_progress_embed(prev_card, next_card, guess)
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _finish_cashout(self, interaction: discord.Interaction, auto: bool = False):
@@ -139,13 +146,12 @@ class HigherLowerView(discord.ui.View):
     # ── Embeds ────────────────────────────────────────────────────────────────
 
     def _start_embed(self) -> discord.Embed:
-        lo, hi = var.NUMBER_RANGE
         embed = discord.Embed(
             title="🎴 Higher or Lower",
             description=(
-                f"**Current number: {num_box(self.current_number)}**\n\n"
-                f"Will the next number be **higher** or **lower**?\n"
-                f"Numbers range from **{lo}** to **{hi}**."
+                f"**Current card: {card_box(self.current_card)}**\n\n"
+                f"Will the next card be **higher** or **lower**?\n"
+                f"Cards run Ace (low) → 2–10 → Jack → Queen → King (high)."
             ),
             color=var.COLOR_PLAYING,
         )
@@ -154,13 +160,14 @@ class HigherLowerView(discord.ui.View):
         embed.timestamp = datetime.utcnow()
         return embed
 
-    def _in_progress_embed(self, prev: int, revealed: int, guess: str) -> discord.Embed:
-        direction = "higher" if revealed > prev else "lower"
+    def _in_progress_embed(self, prev_card: str, revealed_card: str, guess: str) -> discord.Embed:
+        direction = "higher" if CARD_VALUES[revealed_card] > CARD_VALUES[prev_card] else "lower"
         embed = discord.Embed(
             title="🎴 Higher or Lower",
             description=(
-                f"✅ **Correct!** You guessed **{guess}** — the number was **{revealed}** ({direction} than {prev}).\n\n"
-                f"**New number: {num_box(self.current_number)}**\n"
+                f"✅ **Correct!** You guessed **{guess}** — it was {card_box(revealed_card)} "
+                f"({direction} than {CARD_NAMES[prev_card]}).\n\n"
+                f"**New card: {card_box(self.current_card)}**\n"
                 f"Will the next be **higher** or **lower**? Or cash out?"
             ),
             color=var.COLOR_PLAYING,
@@ -170,33 +177,33 @@ class HigherLowerView(discord.ui.View):
         embed.timestamp = datetime.utcnow()
         return embed
 
-    def _tie_embed(self, number: int, new_balance: int) -> discord.Embed:
+    def _tie_embed(self, prev_card: str, tied_card: str) -> discord.Embed:
         embed = discord.Embed(
             title="🤝 Tie!",
             description=(
-                f"The next number was also **{number}** — it's a tie!\n"
-                f"Your {var.CURRENCY_SYMBOL} {self.bet:,} {var.CURRENCY_NAME} has been refunded."
+                f"You drew {card_box(tied_card)} — same value as {CARD_NAMES[prev_card]}!\n"
+                f"Your streak is safe. Guess again on **{CARD_NAMES[self.current_card]}**."
             ),
             color=0xF1C40F,
         )
-        embed.add_field(name="Correct Guesses", value=str(self.correct_rounds), inline=True)
-        embed.add_field(name="Balance",         value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=True)
+        self._add_round_fields(embed)
         embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()
         return embed
 
-    def _loss_embed(self, current: int, revealed: int, guess: str, new_balance: int) -> discord.Embed:
-        direction = "higher" if revealed > current else ("lower" if revealed < current else "equal")
+    def _loss_embed(self, prev_card: str, revealed_card: str, guess: str, new_balance: int) -> discord.Embed:
+        direction = "higher" if CARD_VALUES[revealed_card] > CARD_VALUES[prev_card] else "lower"
         embed = discord.Embed(
             title="❌ Wrong!",
             description=(
-                f"You guessed **{guess}** but the number was **{revealed}** ({direction} than {current}).\n\n"
+                f"You guessed **{guess}** but it was {card_box(revealed_card)} "
+                f"({direction} than {CARD_NAMES[prev_card]}).\n\n"
                 f"You lost {var.CURRENCY_SYMBOL} **{self.bet:,}** {var.CURRENCY_NAME}."
             ),
             color=var.COLOR_LOSE,
         )
         embed.add_field(name="Correct Guesses", value=str(self.correct_rounds), inline=True)
-        embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
+        embed.add_field(name="New Balance",     value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
         embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()
         return embed
@@ -364,8 +371,8 @@ class HigherLowerCog(commands.Cog):
         # Deduct bet upfront; refunded on round-0 timeout, paid out on cash-out/win
         self.db.update_balance(uid, gid, -amount, 'bet')
 
-        starting_number = draw()
-        view  = HigherLowerView(interaction, amount, interaction.user.id, starting_number)
+        starting_card, starting_number = draw_card()
+        view  = HigherLowerView(interaction, amount, interaction.user.id, starting_card, starting_number)
         embed = view._start_embed()
         await interaction.response.send_message(embed=embed, view=view)
 
