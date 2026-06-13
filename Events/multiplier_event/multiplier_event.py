@@ -14,6 +14,7 @@ import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('me_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
+from utils.config_loader import load_config
 
 log = logging.getLogger("launcher")
 SETTINGS_FILE = Path(__file__).parent / 'multiplier_event_settings.json'
@@ -41,6 +42,11 @@ class MultiplierEventCog(commands.Cog):
             json.dump(self._settings, f, indent=2)
 
     def _get_channel(self) -> discord.TextChannel | None:
+        shared = load_config().get('multiplier_announcement_channel_id')
+        if shared:
+            ch = self.bot.get_channel(int(shared))
+            if ch:
+                return ch
         cid = self._settings.get('event_channel_id') or var.EVENT_CHANNEL_ID
         return self.bot.get_channel(int(cid)) if cid else None
 

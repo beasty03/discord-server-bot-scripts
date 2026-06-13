@@ -14,6 +14,7 @@ _spec = _ilu.spec_from_file_location('ce_variables', Path(__file__).parent / 'va
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
+from utils.config_loader import load_config, save_config
 
 log = logging.getLogger("launcher")
 
@@ -200,8 +201,12 @@ class CasinoEventCog(commands.Cog):
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _get_event_channel(self):
-        cfg = _load_settings()
-        cid = cfg.get("channel_id") or var.EVENT_CHANNEL_ID
+        shared = load_config().get('casino_announcement_channel_id')
+        if shared:
+            ch = self.bot.get_channel(int(shared))
+            if ch:
+                return ch
+        cid = _load_settings().get("channel_id") or var.EVENT_CHANNEL_ID
         return self.bot.get_channel(int(cid)) if cid else None
 
     # ── Background loop (random interval) ────────────────────────────────────
@@ -444,6 +449,26 @@ class CasinoEventCog(commands.Cog):
         await interaction.response.send_message(
             embed=discord.Embed(
                 description=f"✅ Join window set to **{seconds} seconds**.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="set_eventannouncement_channel", description="Set the announcement channel for a specific event type.")
+    @app_commands.describe(event="Which event to configure", channel="Channel to post announcements in")
+    @app_commands.choices(event=[
+        app_commands.Choice(name="Casino", value="casino"),
+        app_commands.Choice(name="Multiplier", value="multiplier"),
+    ])
+    async def set_eventannouncement_channel(self, interaction: discord.Interaction, event: str, channel: discord.TextChannel):
+        cfg = load_config()
+        key  = 'casino_announcement_channel_id' if event == 'casino' else 'multiplier_announcement_channel_id'
+        name = "Casino Event" if event == 'casino' else "Multiplier Event"
+        cfg[key] = channel.id
+        save_config(cfg)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ {name} announcements will be posted in {channel.mention}.",
                 color=var.COLOR_WIN,
             ),
             ephemeral=True,
