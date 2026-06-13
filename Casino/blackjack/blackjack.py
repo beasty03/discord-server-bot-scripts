@@ -46,6 +46,17 @@ def format_hand(hand: list[tuple[str, str]], hide_second: bool = False) -> str:
 def is_blackjack(hand: list[tuple[str, str]]) -> bool:
     return len(hand) == 2 and hand_value(hand) == 21
 
+def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
+    db.execute(
+        """INSERT INTO casino_stats (user_id, guild_id, games_played, total_won, total_lost)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, guild_id) DO UPDATE SET
+               games_played = games_played + 1,
+               total_won    = total_won    + excluded.total_won,
+               total_lost   = total_lost   + excluded.total_lost""",
+        (uid, gid, won, lost),
+    )
+
 # ============================================================================
 # HIT / STAND VIEW
 # ============================================================================
@@ -61,6 +72,8 @@ class BlackjackView(discord.ui.View):
         self.player_hand = player_hand
         self.dealer_hand = dealer_hand
         self.game_over   = False
+        self.uid         = str(interaction.user.id)
+        self.gid         = str(interaction.guild_id)
 
     def _uid_gid(self, interaction: discord.Interaction) -> tuple[str, str]:
         return str(interaction.user.id), str(self.original_interaction.guild_id)
@@ -95,6 +108,7 @@ class BlackjackView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             uid, gid = self._uid_gid(interaction)
+            _record_stats(self.cog.db, uid, gid, 0, self.bet)
             new_balance = self.cog.db.get_balance(uid, gid)
 
             embed = self._build_embed(
@@ -140,6 +154,7 @@ class BlackjackView(discord.ui.View):
         if dealer_total > 21:
             payout = int(self.bet * var.WIN_MULTIPLIER)
             self.cog.db.update_balance(uid, gid, payout, 'win')
+            _record_stats(self.cog.db, uid, gid, payout - self.bet, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
             embed = self._build_embed(
                 title="💥 Dealer Busted!",
@@ -151,6 +166,7 @@ class BlackjackView(discord.ui.View):
         elif player_total > dealer_total:
             payout = int(self.bet * var.WIN_MULTIPLIER)
             self.cog.db.update_balance(uid, gid, payout, 'win')
+            _record_stats(self.cog.db, uid, gid, payout - self.bet, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
             embed = self._build_embed(
                 title="🎉 You Win!",
@@ -160,6 +176,7 @@ class BlackjackView(discord.ui.View):
                 new_balance=new_balance,
             )
         elif player_total < dealer_total:
+            _record_stats(self.cog.db, uid, gid, 0, self.bet)
             new_balance = self.cog.db.get_balance(uid, gid)
             embed = self._build_embed(
                 title="💸 Dealer Wins!",
@@ -170,6 +187,7 @@ class BlackjackView(discord.ui.View):
             )
         else:
             self.cog.db.update_balance(uid, gid, self.bet, 'refund')
+            _record_stats(self.cog.db, uid, gid, 0, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
             embed = self._build_embed(
                 title="🤝 Push — Tie!",
@@ -296,6 +314,7 @@ class BlackjackCog(commands.Cog):
         if is_blackjack(player_hand):
             winnings = int(amount * var.BLACKJACK_MULTIPLIER)
             self.db.update_balance(uid, gid, winnings, 'win')
+            _record_stats(self.db, uid, gid, winnings - amount, 0)
             new_balance = self.db.get_balance(uid, gid)
 
             embed = discord.Embed(title="🃏 BLACKJACK!", description=var.MESSAGE_BLACKJACK, color=var.COLOR_WIN)

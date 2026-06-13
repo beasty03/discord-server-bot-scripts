@@ -18,6 +18,15 @@ log = logging.getLogger("launcher")
 
 CATEGORIES = [
     {
+        "label":       "🏦 Bank",
+        "value":       "bank",
+        "description": "Currency management — balance, daily, leaderboard, give",
+        "color":       var.COLOR_BANK,
+        "sections": [
+            ("🏦 Bank", "BankCog"),
+        ],
+    },
+    {
         "label":       "🎰 Casino",
         "value":       "casino",
         "description": "Gambling games — Gamble, Blackjack, Roulette, Higher/Lower, Baccarat",

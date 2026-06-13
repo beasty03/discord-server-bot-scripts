@@ -56,6 +56,17 @@ def describe_result(n: int) -> str:
     ]
     return " · ".join(p for p in parts if p)
 
+def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
+    db.execute(
+        """INSERT INTO casino_stats (user_id, guild_id, games_played, total_won, total_lost)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, guild_id) DO UPDATE SET
+               games_played = games_played + 1,
+               total_won    = total_won    + excluded.total_won,
+               total_lost   = total_lost   + excluded.total_lost""",
+        (uid, gid, won, lost),
+    )
+
 def bet_label(bet_type: str, bet_number: int | None) -> str:
     labels = {
         "red": "🔴 Red", "black": "⚫ Black",
@@ -133,6 +144,9 @@ class RouletteView(discord.ui.View):
         if won:
             payout = int(self.bet * multiplier)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
+        else:
+            _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
 
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
         embed = self._build_result_embed(result, bet_type, bet_number, won, new_balance)

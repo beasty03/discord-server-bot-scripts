@@ -74,6 +74,17 @@ def deal_baccarat(deck: list) -> tuple[list, list]:
 
     return player, banker
 
+def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
+    db.execute(
+        """INSERT INTO casino_stats (user_id, guild_id, games_played, total_won, total_lost)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, guild_id) DO UPDATE SET
+               games_played = games_played + 1,
+               total_won    = total_won    + excluded.total_won,
+               total_lost   = total_lost   + excluded.total_lost""",
+        (uid, gid, won, lost),
+    )
+
 def determine_outcome(player: list, banker: list) -> str:
     pt = hand_total(player)
     bt = hand_total(banker)
@@ -125,10 +136,13 @@ class BaccaratView(discord.ui.View):
                       "tie":    var.TIE_MULTIPLIER}[chosen_bet]
             payout = int(self.bet * mult)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         elif is_tie and chosen_bet != "tie" and var.TIE_PUSHES_SIDE_BETS:
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            _record_stats(self.db, self.user_id, self.guild_id, 0, 0)
             payout = self.bet
         else:
+            _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
             payout = 0
 
         new_balance = self.db.get_balance(self.user_id, self.guild_id)

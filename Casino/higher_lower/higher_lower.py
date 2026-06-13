@@ -28,6 +28,17 @@ def get_multiplier(correct_rounds: int) -> float:
 def num_box(n: int) -> str:
     return f"` {n} `"
 
+def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
+    db.execute(
+        """INSERT INTO casino_stats (user_id, guild_id, games_played, total_won, total_lost)
+           VALUES (?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, guild_id) DO UPDATE SET
+               games_played = games_played + 1,
+               total_won    = total_won    + excluded.total_won,
+               total_lost   = total_lost   + excluded.total_lost""",
+        (uid, gid, won, lost),
+    )
+
 # ============================================================================
 # VIEW
 # ============================================================================
@@ -79,6 +90,7 @@ class HigherLowerView(discord.ui.View):
             self.resolved = True
             for item in self.children:
                 item.disabled = True
+            _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
             new_balance = self.db.get_balance(self.user_id, self.guild_id)
             embed = self._loss_embed(prev_number, next_number, guess, new_balance)
             await interaction.response.edit_message(embed=embed, view=self)
@@ -108,6 +120,7 @@ class HigherLowerView(discord.ui.View):
         multiplier  = get_multiplier(self.correct_rounds)
         payout      = int(self.bet * multiplier)
         self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+        _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
         embed       = self._cashout_embed(payout, new_balance, auto=auto)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -208,6 +221,7 @@ class HigherLowerView(discord.ui.View):
             multiplier  = get_multiplier(self.correct_rounds)
             payout      = int(self.bet * multiplier)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
+            _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
             new_balance = self.db.get_balance(self.user_id, self.guild_id)
             embed = discord.Embed(
                 title="⏰ Timed Out — Auto Cash Out",
