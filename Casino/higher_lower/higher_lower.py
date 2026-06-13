@@ -83,8 +83,19 @@ class HigherLowerView(discord.ui.View):
 
         prev_number = self.current_number
         next_number = draw()
-        won = (guess == "higher" and next_number > prev_number) or \
-              (guess == "lower"  and next_number < prev_number)
+        tied = next_number == prev_number
+        won  = (guess == "higher" and next_number > prev_number) or \
+               (guess == "lower"  and next_number < prev_number)
+
+        if tied:
+            self.resolved = True
+            for item in self.children:
+                item.disabled = True
+            self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
+            new_balance = self.db.get_balance(self.user_id, self.guild_id)
+            embed = self._tie_embed(prev_number, new_balance)
+            await interaction.response.edit_message(embed=embed, view=self)
+            return
 
         if not won:
             self.resolved = True
@@ -155,6 +166,21 @@ class HigherLowerView(discord.ui.View):
             color=var.COLOR_PLAYING,
         )
         self._add_round_fields(embed)
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.timestamp = datetime.utcnow()
+        return embed
+
+    def _tie_embed(self, number: int, new_balance: int) -> discord.Embed:
+        embed = discord.Embed(
+            title="🤝 Tie!",
+            description=(
+                f"The next number was also **{number}** — it's a tie!\n"
+                f"Your {var.CURRENCY_SYMBOL} {self.bet:,} {var.CURRENCY_NAME} has been refunded."
+            ),
+            color=0xF1C40F,
+        )
+        embed.add_field(name="Correct Guesses", value=str(self.correct_rounds), inline=True)
+        embed.add_field(name="Balance",         value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=True)
         embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()
         return embed
