@@ -245,14 +245,20 @@ class CasinoEventCog(commands.Cog):
 
     # ── Core event runner ─────────────────────────────────────────────────────
 
-    async def _run_event(self):
-        if self.event_active:
-            return
+    def _get_event_channel(self):
+        cfg = _load_settings()
+        cid = cfg.get("channel_id") or var.EVENT_CHANNEL_ID
+        return self.bot.get_channel(int(cid)) if cid else None
 
-        channel = self.bot.get_channel(var.EVENT_CHANNEL_ID)
+    async def _run_event(self) -> str | None:
+        """Run an event. Returns an error string on failure, None on success."""
+        if self.event_active:
+            return "An event is already running."
+
+        channel = self._get_event_channel()
         if channel is None:
-            log.warning("CasinoEvent: EVENT_CHANNEL_ID (%s) not found — set it in variables.py", var.EVENT_CHANNEL_ID)
-            return
+            log.warning("CasinoEvent: event channel not configured — use /set_event_channel")
+            return "No event channel configured. Use `/set_event_channel` first."
 
         gid          = str(channel.guild.id)
         game         = random.choice(var.CASINO_GAMES)
@@ -285,13 +291,13 @@ class CasinoEventCog(commands.Cog):
             join_embed.description = "*No one joined — event cancelled.*"
             await msg.edit(embed=join_embed, view=view)
             self.event_active = False
-            return
+            return None
 
         resolver = RESOLVERS.get(game["id"])
         if resolver is None:
             log.error("CasinoEvent: no resolver for game id '%s'", game["id"])
             self.event_active = False
-            return
+            return None
 
         summary, results = resolver(participants, var.EVENT_BET, self.db, gid)
 
@@ -320,17 +326,36 @@ class CasinoEventCog(commands.Cog):
         await channel.send(embed=result_embed)
 
         self.event_active = False
+        return None
 
     # ── Admin commands ────────────────────────────────────────────────────────
 
     @app_commands.command(name="startevent", description="Manually trigger a casino event.")
     @app_commands.checks.has_permissions(administrator=True)
     async def startevent(self, interaction: discord.Interaction):
-        if self.event_active:
-            await interaction.response.send_message("An event is already running!", ephemeral=True)
-            return
-        await interaction.response.send_message("Starting casino event…", ephemeral=True)
-        await self._run_event()
+        await interaction.response.defer(ephemeral=True)
+        err = await self._run_event()
+        if err:
+            await interaction.followup.send(
+                embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send("✅ Casino event started!", ephemeral=True)
+
+    @app_commands.command(name="set_event_channel", description="Set the channel where casino events are announced.")
+    @app_commands.describe(channel="The channel to post events in")
+    async def set_event_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        data = _load_settings()
+        data["channel_id"] = channel.id
+        _save_settings(data)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Casino events will be posted in {channel.mention}.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="set_casino_event_downtime", description="Set the random interval between casino events.")
     @app_commands.describe(
