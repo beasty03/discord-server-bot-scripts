@@ -65,7 +65,7 @@ class WordleRecap(commands.Cog):
         tz = self._get_tz()
         log.info(
             "[WordleRecap] Ready — posting daily recap at %02d:%02d %s in #%s",
-            self.post_hour, self.post_minute, tz.key, var.DEFAULT_CHANNEL_NAME,
+            int(self.post_hour), int(self.post_minute), tz.key, var.DEFAULT_CHANNEL_NAME,
         )
 
     def cog_unload(self):
