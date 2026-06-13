@@ -119,6 +119,11 @@ class BlackjackView(discord.ui.View):
                 new_balance=new_balance,
             )
             await interaction.response.edit_message(embed=embed, view=self)
+            if interaction.channel:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{interaction.user.display_name}** busted and lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Blackjack",
+                    color=var.COLOR_LOSE,
+                ))
             return
 
         if player_total == 21:
@@ -198,6 +203,20 @@ class BlackjackView(discord.ui.View):
             )
 
         await interaction.response.edit_message(embed=embed, view=self)
+        if interaction.channel:
+            name = interaction.user.display_name
+            sym  = var.CURRENCY_SYMBOL
+            if dealer_total > 21 or player_total > dealer_total:
+                profit = int(self.bet * var.WIN_MULTIPLIER) - self.bet
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Blackjack!",
+                    color=var.COLOR_WIN,
+                ))
+            elif player_total < dealer_total:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{name}** lost {sym} **{self.bet:,}** playing Blackjack",
+                    color=var.COLOR_LOSE,
+                ))
 
     def _build_embed(self, title: str, description: str, color: int,
                      reveal_dealer: bool = False, new_balance: int | None = None) -> discord.Embed:
@@ -325,7 +344,12 @@ class BlackjackCog(commands.Cog):
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
             embed.set_footer(text=f"Played by {interaction.user.display_name}")
             embed.timestamp = datetime.utcnow()
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            if interaction.channel:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{interaction.user.display_name}** hit BLACKJACK and won {var.CURRENCY_SYMBOL} **{winnings - amount:,}** playing Blackjack!",
+                    color=var.COLOR_WIN,
+                ))
             return
 
         player_total = hand_value(player_hand)
@@ -342,7 +366,7 @@ class BlackjackCog(commands.Cog):
         embed.add_field(name="Bet", value=f"{var.CURRENCY_SYMBOL} {amount:,}", inline=True)
         embed.set_footer(text=f"Played by {interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BlackjackCog(bot))

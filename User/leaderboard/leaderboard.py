@@ -32,15 +32,23 @@ class LeaderboardCog(commands.Cog):
             embed.description = "No data yet!"
         else:
             lines = []
-            for i, (uid, value) in enumerate(rows, 1):
+            for i, row in enumerate(rows, 1):
+                uid, value, *extras = row
                 try:
                     user = await self.bot.fetch_user(int(uid))
                     name = user.display_name
                 except Exception:
                     name = f"User {uid}"
                 medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"**{i}.**"
-                fmt = value_fmt.format(v=value, sym=var.CURRENCY_SYMBOL, cur=var.CURRENCY_NAME)
-                lines.append(f"{medal} {name} — {fmt}")
+                kwargs = {
+                    "v":   value,
+                    "v_s": "" if value == 1 else "s",
+                    "sym": var.CURRENCY_SYMBOL,
+                    "cur": var.CURRENCY_NAME,
+                    **{f"e{j}": v for j, v in enumerate(extras)},
+                    **{f"e{j}_s": ("" if v == 1 else "s") for j, v in enumerate(extras) if isinstance(v, int)},
+                }
+                lines.append(f"{medal} {name} — {value_fmt.format(**kwargs)}")
             embed.description = "\n".join(lines)
         embed.set_footer(text=var.SERVER_NAME)
         embed.timestamp = datetime.utcnow()
@@ -60,32 +68,32 @@ class LeaderboardCog(commands.Cog):
             "{sym} **{v:,}** {cur}",
         )
 
-    @app_commands.command(name="top_wins", description="Top players by total casino winnings.")
+    @app_commands.command(name="top_wins", description="Top players by games played, with total winnings.")
     async def top_wins(self, interaction: discord.Interaction):
         gid  = str(interaction.guild_id)
         rows = self.db.execute(
-            "SELECT user_id, total_won FROM casino_stats WHERE guild_id = ? ORDER BY total_won DESC LIMIT ?",
+            "SELECT user_id, games_played, total_won FROM casino_stats WHERE guild_id = ? ORDER BY games_played DESC LIMIT ?",
             (gid, var.LEADERBOARD_TOP_COUNT),
         )
         await self._build_board(
             interaction,
-            "🎰 Top Casino Winners",
-            [(r[0], r[1]) for r in rows],
-            "{sym} **{v:,}** won",
+            "🎰 Most Active Players",
+            [(r[0], r[1], r[2]) for r in rows],
+            "**{v:,}** game{v_s} · {sym} {e0:,} won",
         )
 
-    @app_commands.command(name="top_losses", description="Top players by total casino losses.")
+    @app_commands.command(name="top_losses", description="Top players by games played, with total losses.")
     async def top_losses(self, interaction: discord.Interaction):
         gid  = str(interaction.guild_id)
         rows = self.db.execute(
-            "SELECT user_id, total_lost FROM casino_stats WHERE guild_id = ? ORDER BY total_lost DESC LIMIT ?",
+            "SELECT user_id, games_played, total_lost FROM casino_stats WHERE guild_id = ? ORDER BY games_played DESC LIMIT ?",
             (gid, var.LEADERBOARD_TOP_COUNT),
         )
         await self._build_board(
             interaction,
-            "📉 Biggest Losers",
-            [(r[0], r[1]) for r in rows],
-            "{sym} **{v:,}** lost",
+            "📉 Most Games Lost",
+            [(r[0], r[1], r[2]) for r in rows],
+            "**{v:,}** game{v_s} · {sym} {e0:,} lost",
         )
 
     @app_commands.command(name="top_give", description="Top players by total coins given to others.")

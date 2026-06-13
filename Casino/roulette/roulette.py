@@ -156,6 +156,16 @@ class RouletteView(discord.ui.View):
             await self.original_interaction.edit_original_response(embed=embed, view=self)
         else:
             await interaction.response.edit_message(embed=embed, view=self)
+        if interaction.channel:
+            pub = discord.Embed(
+                description=(
+                    f"🎡 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{payout - self.bet:,}** playing Roulette!"
+                    if won else
+                    f"🎡 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Roulette"
+                ),
+                color=var.COLOR_WIN if won else var.COLOR_LOSE,
+            )
+            await interaction.channel.send(embed=pub)
 
     def _build_result_embed(
         self,
@@ -361,7 +371,7 @@ class RouletteCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
 
         view = RouletteView(self, interaction, amount, interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(RouletteCog(bot))

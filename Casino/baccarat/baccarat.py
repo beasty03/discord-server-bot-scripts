@@ -148,6 +148,20 @@ class BaccaratView(discord.ui.View):
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
         embed       = self._build_result_embed(player, banker, outcome, chosen_bet, payout, new_balance, is_tie)
         await interaction.response.edit_message(embed=embed, view=self)
+        if interaction.channel:
+            name = interaction.user.display_name
+            sym  = var.CURRENCY_SYMBOL
+            if won:
+                profit = payout - self.bet
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Baccarat!",
+                    color=var.COLOR_PLAYER if outcome == "player" else var.COLOR_BANKER if outcome == "banker" else var.COLOR_TIE,
+                ))
+            elif not pushed:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🃏 **{name}** lost {sym} **{self.bet:,}** playing Baccarat",
+                    color=var.COLOR_ERROR,
+                ))
 
     def _build_result_embed(
         self,
@@ -323,7 +337,7 @@ class BaccaratCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
 
         view = BaccaratView(interaction, amount, interaction.user.id)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(BaccaratCog(bot))

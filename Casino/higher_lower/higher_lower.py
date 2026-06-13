@@ -111,6 +111,11 @@ class HigherLowerView(discord.ui.View):
             new_balance = self.db.get_balance(self.user_id, self.guild_id)
             embed = self._loss_embed(prev_card, next_card, guess, new_balance)
             await interaction.response.edit_message(embed=embed, view=self)
+            if interaction.channel:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=f"🎴 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Higher or Lower",
+                    color=var.COLOR_LOSE,
+                ))
             return
 
         self.current_card    = next_card
@@ -142,6 +147,12 @@ class HigherLowerView(discord.ui.View):
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
         embed       = self._cashout_embed(payout, new_balance, auto=auto)
         await interaction.response.edit_message(embed=embed, view=self)
+        if interaction.channel:
+            profit = payout - self.bet
+            await interaction.channel.send(embed=discord.Embed(
+                description=f"🎴 **{interaction.user.display_name}** cashed out {var.CURRENCY_SYMBOL} **{profit:,}** profit playing Higher or Lower!",
+                color=var.COLOR_WIN,
+            ))
 
     # ── Embeds ────────────────────────────────────────────────────────────────
 
@@ -374,7 +385,7 @@ class HigherLowerCog(commands.Cog):
         starting_card, starting_number = draw_card()
         view  = HigherLowerView(interaction, amount, interaction.user.id, starting_card, starting_number)
         embed = view._start_embed()
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HigherLowerCog(bot))

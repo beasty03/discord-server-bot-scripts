@@ -35,7 +35,7 @@ NUMBER_RANGE = (1, 10)
 
 # Payout multipliers per correct round (round 1 = index 0, round 2 = index 1, …)
 # Players can cash out after any correct guess to lock in that multiplier
-ROUND_MULTIPLIERS = [1.8, 3.0, 5.0, 8.0, 12.0]
+ROUND_MULTIPLIERS = [1.1, 1.25, 1.5, 1.8, 2.2]
 
 # Embed colors
 COLOR_WIN     = 0x57F287  # green

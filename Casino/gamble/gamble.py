@@ -116,7 +116,17 @@ class GambleCog(commands.Cog):
 
         embed.set_footer(text=f"Requested by {interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if interaction.channel:
+            pub = discord.Embed(
+                description=(
+                    f"🎲 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{profit:,}** playing Gamble!"
+                    if won else
+                    f"🎲 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{amount:,}** playing Gamble"
+                ),
+                color=var.COLOR_WIN if won else var.COLOR_LOSE,
+            )
+            await interaction.channel.send(embed=pub)
 
 
 
