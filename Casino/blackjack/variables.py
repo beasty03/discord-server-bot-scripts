@@ -48,8 +48,8 @@ MIN_BET = 10    # Minimum bet amount
 MAX_BET = -1  # Maximum bet amount (set to -1 for no limit)
 
 # Blackjack Payout Multipliers
-BLACKJACK_MULTIPLIER = 2.5  # Payout on natural blackjack (21 on first 2 cards) — 1.5x profit
-WIN_MULTIPLIER = 2.0         # Payout on regular win — doubles your bet
+BLACKJACK_MULTIPLIER = 2.0  # Payout on natural blackjack (21 on first 2 cards) — 1.5x profit
+WIN_MULTIPLIER = 1.5         # Payout on regular win — doubles your bet
 PUSH_REFUND = 1.0            # Refund on tie (push) — returns original bet
 
 # Dealer Settings
