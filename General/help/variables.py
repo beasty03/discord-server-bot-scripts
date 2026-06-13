@@ -10,6 +10,7 @@ BOT_NAME = config.get('server_name', 'Server Bot')
 # Embed colors per category
 COLOR_HOME     = 0x5865F2  # blurple
 COLOR_USER     = 0xF1C40F  # gold
+COLOR_EVENTS   = 0x1ABC9C  # teal
 COLOR_CASINO   = 0xE67E22  # orange
 COLOR_GENERAL  = 0x3498DB  # blue
 COLOR_WEBHOOKS = 0x9B59B6  # purple

@@ -60,6 +60,15 @@ CATEGORIES = [
         ],
     },
     {
+        "label":       "🎪 Events",
+        "value":       "events",
+        "description": "Multiplayer events — Casino events and more",
+        "color":       var.COLOR_EVENTS,
+        "sections": [
+            ("🎰 Casino Events", "CasinoEventCog"),
+        ],
+    },
+    {
         "label":       "🛡️ Admin",
         "value":       "admin",
         "description": "Admin-only configuration — Welcome System",
