@@ -10,8 +10,9 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 EVENT_CHANNEL_ID = 0  # ← set this to your event channel ID
 
 # ── Timing ────────────────────────────────────────────────────────────────────
-# How often a new event fires (minutes). Change freely.
-EVENT_INTERVAL_MINUTES = 60
+# Random interval between events. A value is picked uniformly in [MIN, MAX] each time.
+EVENT_INTERVAL_MIN = 30   # minimum minutes between events
+EVENT_INTERVAL_MAX = 90   # maximum minutes between events
 
 # How long the join window stays open (seconds).
 JOIN_WINDOW = 60

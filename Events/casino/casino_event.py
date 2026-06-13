@@ -1,8 +1,9 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
 import random
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,21 @@ _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
 log = logging.getLogger("launcher")
+
+_SETTINGS_FILE = Path(__file__).parent / "casino_settings.json"
+
+
+def _load_settings() -> dict:
+    if _SETTINGS_FILE.exists():
+        try:
+            return json.loads(_SETTINGS_FILE.read_text("utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_settings(data: dict):
+    _SETTINGS_FILE.write_text(json.dumps(data, indent=2), "utf-8")
 
 # ============================================================================
 # INLINE GAME RESOLVERS
@@ -200,23 +216,32 @@ class EventJoinView(discord.ui.View):
 class CasinoEventCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot          = bot
-        self.db           = ForgeDB.get()
-        self.event_active = False
-        self.event_task.start()
+        self.bot            = bot
+        self.db             = ForgeDB.get()
+        self.event_active   = False
+        self._loop_task: asyncio.Task | None = None
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._event_loop())
 
     def cog_unload(self):
-        self.event_task.cancel()
+        if self._loop_task:
+            self._loop_task.cancel()
 
-    # ── Background task ───────────────────────────────────────────────────────
+    # ── Background loop (random interval) ────────────────────────────────────
 
-    @tasks.loop(minutes=var.EVENT_INTERVAL_MINUTES)
-    async def event_task(self):
-        await self._run_event()
-
-    @event_task.before_loop
-    async def _before(self):
+    async def _event_loop(self):
         await self.bot.wait_until_ready()
+        while True:
+            cfg   = _load_settings()
+            min_m = cfg.get("interval_min", var.EVENT_INTERVAL_MIN)
+            max_m = cfg.get("interval_max", var.EVENT_INTERVAL_MAX)
+            wait  = random.randint(min_m, max_m)
+            log.info("CasinoEvent: next event in %d minutes", wait)
+            await asyncio.sleep(wait * 60)
+            await self._run_event()
 
     # ── Core event runner ─────────────────────────────────────────────────────
 
@@ -296,7 +321,7 @@ class CasinoEventCog(commands.Cog):
 
         self.event_active = False
 
-    # ── Admin command ─────────────────────────────────────────────────────────
+    # ── Admin commands ────────────────────────────────────────────────────────
 
     @app_commands.command(name="startevent", description="Manually trigger a casino event.")
     @app_commands.checks.has_permissions(administrator=True)
@@ -306,6 +331,44 @@ class CasinoEventCog(commands.Cog):
             return
         await interaction.response.send_message("Starting casino event…", ephemeral=True)
         await self._run_event()
+
+    @app_commands.command(name="set_casino_event_downtime", description="Set the random interval between casino events.")
+    @app_commands.describe(
+        min_minutes="Minimum minutes between events",
+        max_minutes="Maximum minutes between events",
+    )
+    async def set_casino_event_downtime(
+        self,
+        interaction: discord.Interaction,
+        min_minutes: int,
+        max_minutes: int,
+    ):
+        if min_minutes < 1:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Minimum must be at least 1 minute.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+        if max_minutes < min_minutes:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Maximum must be ≥ minimum.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+        data = _load_settings()
+        data["interval_min"] = min_minutes
+        data["interval_max"] = max_minutes
+        _save_settings(data)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"✅ Casino event interval set to **{min_minutes}–{max_minutes} minutes**.\n"
+                    f"A random delay in that range is picked after each event."
+                ),
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
