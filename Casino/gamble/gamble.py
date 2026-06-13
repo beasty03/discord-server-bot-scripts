@@ -82,12 +82,15 @@ class GambleCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
         roll = random.randint(1, 100)
         won  = roll <= var.WIN_CHANCE
 
         if won:
             winnings = int(amount * var.WIN_MULTIPLIER)
             profit   = winnings - amount
+            if dm_mult > 1.0:
+                profit = int(profit * dm_mult)
             self.db.update_balance(uid, gid, profit, 'win')
             _record_stats(self.db, uid, gid, profit, 0)
             new_balance = self.db.get_balance(uid, gid)
@@ -96,9 +99,11 @@ class GambleCog(commands.Cog):
                 description=var.MESSAGE_WIN.format(amount=f"{profit:,}", currency=var.CURRENCY_NAME),
                 color=var.COLOR_WIN,
             )
-            embed.add_field(name="Roll",        value=f"{roll}/100",                           inline=True)
-            embed.add_field(name="Bet",         value=f"{var.CURRENCY_SYMBOL} {amount:,}",     inline=True)
-            embed.add_field(name="Winnings",    value=f"{var.CURRENCY_SYMBOL} {winnings:,}",   inline=True)
+            embed.add_field(name="Roll",     value=f"{roll}/100",                       inline=True)
+            embed.add_field(name="Bet",      value=f"{var.CURRENCY_SYMBOL} {amount:,}", inline=True)
+            embed.add_field(name="Winnings", value=f"{var.CURRENCY_SYMBOL} {profit:,}", inline=True)
+            if dm_mult > 1.0:
+                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
         else:
             self.db.update_balance(uid, gid, -amount, 'loss')
@@ -121,6 +126,7 @@ class GambleCog(commands.Cog):
             pub = discord.Embed(
                 description=(
                     f"🎲 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{profit:,}** playing Gamble!"
+                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else "")
                     if won else
                     f"🎲 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{amount:,}** playing Gamble"
                 ),

@@ -98,11 +98,22 @@ class BankCog(commands.Cog):
                 new_balance  = self.db.get_balance(uid, gid)
                 bonus_amount = custom
 
+            # Apply Double Money event multiplier
+            dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+            if dm_mult > 1.0:
+                extra = int(bonus_amount * (dm_mult - 1))
+                if extra > 0:
+                    self.db.update_balance(uid, gid, extra, 'daily_event_bonus')
+                    new_balance  = self.db.get_balance(uid, gid)
+                    bonus_amount += extra
+
             embed = discord.Embed(
                 title="🎁 Daily Bonus Claimed!",
                 description=f"You received **{var.CURRENCY_SYMBOL} {bonus_amount:,} {var.CURRENCY_NAME}**!",
                 color=var.COLOR_WIN,
             )
+            if dm_mult > 1.0:
+                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             embed.add_field(
                 name="New Balance",
                 value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}",

@@ -54,7 +54,7 @@ def _roulette_check(result: int, bet: str) -> tuple[bool, float]:
         case "even":  return result != 0 and result % 2 == 0,  2.0
     return False, 0.0
 
-def resolve_roulette(participants: dict, db, gid: str):
+def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0):
     result = random.randint(0, 36)
     emoji  = {"green": "🟢", "red": "🔴", "black": "⚫"}[_roulette_color(result)]
     rows   = []
@@ -64,6 +64,8 @@ def resolve_roulette(participants: dict, db, gid: str):
         won, mult = _roulette_check(result, bet)
         if won:
             payout = int(amount * mult)
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         else:
@@ -71,12 +73,14 @@ def resolve_roulette(participants: dict, db, gid: str):
     return f"{emoji} Ball landed on **{result}**", rows
 
 
-def resolve_gamble(participants: dict, db, gid: str):
+def resolve_gamble(participants: dict, db, gid: str, dm_mult: float = 1.0):
     rows = []
     for uid, data in participants.items():
         amount = data["amount"]
         if random.random() < var.GAMBLE_WIN_CHANCE / 100:
             payout = int(amount * var.GAMBLE_WIN_MULTIPLIER)
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", ""))
         else:
@@ -88,7 +92,7 @@ _BRANK = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
 def _bval(r): return 1 if r == "A" else 0 if r in ("10","J","Q","K") else int(r)
 def _bhand(): return sum(_bval(random.choice(_BRANK)) for _ in range(2)) % 10
 
-def resolve_baccarat(participants: dict, db, gid: str):
+def resolve_baccarat(participants: dict, db, gid: str, dm_mult: float = 1.0):
     pt = _bhand()
     bt = _bhand()
     outcome = "player" if pt > bt else ("banker" if bt > pt else "tie")
@@ -99,6 +103,8 @@ def resolve_baccarat(participants: dict, db, gid: str):
         bet    = data["bet"]
         if bet == outcome:
             payout = int(amount * mult[bet])
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         elif outcome == "tie" and bet != "tie":
@@ -269,7 +275,8 @@ class CasinoEventCog(commands.Cog):
             self.event_active = False
             return None
 
-        summary, results = resolver(participants, self.db, gid)
+        dm_mult          = getattr(self.bot, 'double_money_multiplier', None) or 1.0
+        summary, results = resolver(participants, self.db, gid, dm_mult)
 
         lines = []
         for uid, delta_str, emoji, bet in results:
@@ -281,9 +288,10 @@ class CasinoEventCog(commands.Cog):
             bet_tag = f" `{bet}`" if isinstance(bet, str) and bet else ""
             lines.append(f"{emoji} **{name}**{bet_tag} → {delta_str}")
 
+        dm_note      = f"\n💰 **{dm_mult}x** Double Money Event — all payouts boosted!" if dm_mult > 1.0 else ""
         result_embed = discord.Embed(
             title=f"🏆 Event Results: {game['label']}",
-            description=f"**{summary}**\n\n" + "\n".join(lines),
+            description=f"**{summary}**\n\n" + "\n".join(lines) + dm_note,
             color=game["color"],
         )
         result_embed.set_footer(

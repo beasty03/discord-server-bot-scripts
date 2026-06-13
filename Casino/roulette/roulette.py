@@ -141,15 +141,18 @@ class RouletteView(discord.ui.View):
         result = spin_wheel()
         won, multiplier = check_win(result, bet_type, bet_number)
 
+        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
         if won:
             payout = int(self.bet * multiplier)
+            if dm_mult > 1.0:
+                payout = self.bet + int((payout - self.bet) * dm_mult)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
             _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         else:
             _record_stats(self.db, self.user_id, self.guild_id, 0, self.bet)
 
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
-        embed = self._build_result_embed(result, bet_type, bet_number, won, new_balance)
+        embed = self._build_result_embed(result, bet_type, bet_number, won, new_balance, dm_mult)
 
         if from_modal:
             await interaction.response.defer()
@@ -160,6 +163,7 @@ class RouletteView(discord.ui.View):
             pub = discord.Embed(
                 description=(
                     f"🎡 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{payout - self.bet:,}** playing Roulette!"
+                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else "")
                     if won else
                     f"🎡 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{self.bet:,}** playing Roulette"
                 ),
@@ -174,10 +178,13 @@ class RouletteView(discord.ui.View):
         bet_number: int | None,
         won: bool,
         new_balance: int,
+        dm_mult: float = 1.0,
     ) -> discord.Embed:
         emoji  = color_emoji(result)
         title  = f"🎡 {emoji} The ball landed on **{result}**!"
         payout = int(self.bet * (check_win(result, bet_type, bet_number)[1])) if won else 0
+        if won and dm_mult > 1.0:
+            payout = self.bet + int((payout - self.bet) * dm_mult)
         profit = payout - self.bet
 
         embed = discord.Embed(
@@ -189,7 +196,8 @@ class RouletteView(discord.ui.View):
         embed.add_field(name="Wagered",  value=f"{var.CURRENCY_SYMBOL} {self.bet:,}", inline=True)
 
         if won:
-            embed.add_field(name="Profit", value=f"{var.CURRENCY_SYMBOL} +{profit:,} {var.CURRENCY_NAME}", inline=False)
+            profit_label = "Profit 💰 (boosted)" if dm_mult > 1.0 else "Profit"
+            embed.add_field(name=profit_label, value=f"{var.CURRENCY_SYMBOL} +{profit:,} {var.CURRENCY_NAME}", inline=False)
         else:
             embed.add_field(name="Lost",   value=f"{var.CURRENCY_SYMBOL} -{self.bet:,} {var.CURRENCY_NAME}", inline=False)
 

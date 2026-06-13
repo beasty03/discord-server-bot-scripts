@@ -155,31 +155,25 @@ class BlackjackView(discord.ui.View):
         player_total = hand_value(self.player_hand)
         dealer_total = hand_value(self.dealer_hand)
         uid, gid     = self._uid_gid(interaction)
+        dm_mult      = getattr(self.original_interaction.client, 'double_money_multiplier', None) or 1.0
 
-        if dealer_total > 21:
-            payout = int(self.bet * var.WIN_MULTIPLIER)
-            self.cog.db.update_balance(uid, gid, payout, 'win')
-            _record_stats(self.cog.db, uid, gid, payout - self.bet, 0)
+        if dealer_total > 21 or player_total > dealer_total:
+            raw_payout = int(self.bet * var.WIN_MULTIPLIER)
+            profit     = raw_payout - self.bet
+            if dm_mult > 1.0:
+                profit     = int(profit * dm_mult)
+                raw_payout = self.bet + profit
+            self.cog.db.update_balance(uid, gid, raw_payout, 'win')
+            _record_stats(self.cog.db, uid, gid, profit, 0)
             new_balance = self.cog.db.get_balance(uid, gid)
-            embed = self._build_embed(
-                title="💥 Dealer Busted!",
-                description=var.MESSAGE_DEALER_BUST.format(amount=f"{self.bet:,}", currency=var.CURRENCY_NAME),
-                color=var.COLOR_WIN,
-                reveal_dealer=True,
-                new_balance=new_balance,
+            title = "💥 Dealer Busted!" if dealer_total > 21 else "🎉 You Win!"
+            desc  = (var.MESSAGE_DEALER_BUST if dealer_total > 21 else var.MESSAGE_WIN).format(
+                amount=f"{self.bet:,}", currency=var.CURRENCY_NAME
             )
-        elif player_total > dealer_total:
-            payout = int(self.bet * var.WIN_MULTIPLIER)
-            self.cog.db.update_balance(uid, gid, payout, 'win')
-            _record_stats(self.cog.db, uid, gid, payout - self.bet, 0)
-            new_balance = self.cog.db.get_balance(uid, gid)
-            embed = self._build_embed(
-                title="🎉 You Win!",
-                description=var.MESSAGE_WIN.format(amount=f"{self.bet:,}", currency=var.CURRENCY_NAME),
-                color=var.COLOR_WIN,
-                reveal_dealer=True,
-                new_balance=new_balance,
-            )
+            embed = self._build_embed(title=title, description=desc, color=var.COLOR_WIN,
+                                      reveal_dealer=True, new_balance=new_balance)
+            if dm_mult > 1.0:
+                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
         elif player_total < dealer_total:
             _record_stats(self.cog.db, uid, gid, 0, self.bet)
             new_balance = self.cog.db.get_balance(uid, gid)
@@ -207,9 +201,9 @@ class BlackjackView(discord.ui.View):
             name = interaction.user.display_name
             sym  = var.CURRENCY_SYMBOL
             if dealer_total > 21 or player_total > dealer_total:
-                profit = int(self.bet * var.WIN_MULTIPLIER) - self.bet
                 await interaction.channel.send(embed=discord.Embed(
-                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Blackjack!",
+                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Blackjack!"
+                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else ""),
                     color=var.COLOR_WIN,
                 ))
             elif player_total < dealer_total:
@@ -331,9 +325,14 @@ class BlackjackCog(commands.Cog):
         dealer_hand = [draw_card(deck), draw_card(deck)]
 
         if is_blackjack(player_hand):
+            dm_mult  = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
             winnings = int(amount * var.BLACKJACK_MULTIPLIER)
+            profit   = winnings - amount
+            if dm_mult > 1.0:
+                profit   = int(profit * dm_mult)
+                winnings = amount + profit
             self.db.update_balance(uid, gid, winnings, 'win')
-            _record_stats(self.db, uid, gid, winnings - amount, 0)
+            _record_stats(self.db, uid, gid, profit, 0)
             new_balance = self.db.get_balance(uid, gid)
 
             embed = discord.Embed(title="🃏 BLACKJACK!", description=var.MESSAGE_BLACKJACK, color=var.COLOR_WIN)
@@ -341,13 +340,16 @@ class BlackjackCog(commands.Cog):
             embed.add_field(name=f"Dealer's Hand ({hand_value(dealer_hand)})", value=format_hand(dealer_hand), inline=False)
             embed.add_field(name="Bet",      value=f"{var.CURRENCY_SYMBOL} {amount:,}",   inline=True)
             embed.add_field(name="Winnings", value=f"{var.CURRENCY_SYMBOL} {winnings:,}", inline=True)
+            if dm_mult > 1.0:
+                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
             embed.set_footer(text=f"Played by {interaction.user.display_name}")
             embed.timestamp = datetime.utcnow()
             await interaction.response.send_message(embed=embed, ephemeral=True)
             if interaction.channel:
                 await interaction.channel.send(embed=discord.Embed(
-                    description=f"🃏 **{interaction.user.display_name}** hit BLACKJACK and won {var.CURRENCY_SYMBOL} **{winnings - amount:,}** playing Blackjack!",
+                    description=f"🃏 **{interaction.user.display_name}** hit BLACKJACK and won {var.CURRENCY_SYMBOL} **{profit:,}** playing Blackjack!"
+                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else ""),
                     color=var.COLOR_WIN,
                 ))
             return

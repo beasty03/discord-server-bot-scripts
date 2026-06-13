@@ -127,17 +127,21 @@ class BaccaratView(discord.ui.View):
         player, banker = deal_baccarat(deck)
         outcome        = determine_outcome(player, banker)
 
-        won    = chosen_bet == outcome
-        is_tie = outcome == "tie"
+        won     = chosen_bet == outcome
+        is_tie  = outcome == "tie"
+        pushed  = is_tie and chosen_bet != "tie" and var.TIE_PUSHES_SIDE_BETS
+        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
 
         if won:
             mult   = {"player": var.PLAYER_MULTIPLIER,
                       "banker": var.BANKER_MULTIPLIER,
                       "tie":    var.TIE_MULTIPLIER}[chosen_bet]
             payout = int(self.bet * mult)
+            if dm_mult > 1.0:
+                payout = self.bet + int((payout - self.bet) * dm_mult)
             self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
             _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
-        elif is_tie and chosen_bet != "tie" and var.TIE_PUSHES_SIDE_BETS:
+        elif pushed:
             self.db.update_balance(self.user_id, self.guild_id, self.bet, 'refund')
             _record_stats(self.db, self.user_id, self.guild_id, 0, 0)
             payout = self.bet
@@ -146,7 +150,7 @@ class BaccaratView(discord.ui.View):
             payout = 0
 
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
-        embed       = self._build_result_embed(player, banker, outcome, chosen_bet, payout, new_balance, is_tie)
+        embed       = self._build_result_embed(player, banker, outcome, chosen_bet, payout, new_balance, is_tie, dm_mult)
         await interaction.response.edit_message(embed=embed, view=self)
         if interaction.channel:
             name = interaction.user.display_name
@@ -154,7 +158,8 @@ class BaccaratView(discord.ui.View):
             if won:
                 profit = payout - self.bet
                 await interaction.channel.send(embed=discord.Embed(
-                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Baccarat!",
+                    description=f"🃏 **{name}** won {sym} **{profit:,}** playing Baccarat!"
+                    + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else ""),
                     color=var.COLOR_PLAYER if outcome == "player" else var.COLOR_BANKER if outcome == "banker" else var.COLOR_TIE,
                 ))
             elif not pushed:
@@ -169,6 +174,7 @@ class BaccaratView(discord.ui.View):
         outcome: str, chosen_bet: str,
         payout: int, new_balance: int,
         is_tie: bool,
+        dm_mult: float = 1.0,
     ) -> discord.Embed:
         pt = hand_total(player)
         bt = hand_total(banker)
@@ -182,6 +188,8 @@ class BaccaratView(discord.ui.View):
         if won:
             profit      = payout - self.bet
             result_line = f"✅ **You won!** Payout: {var.CURRENCY_SYMBOL} **{payout:,}** (+{profit:,} profit)"
+            if dm_mult > 1.0:
+                result_line += f" 💰 (**{dm_mult}x** event bonus!)"
         elif pushed:
             result_line = f"↩️ **Push!** Your bet of {var.CURRENCY_SYMBOL} **{self.bet:,}** was refunded."
         else:

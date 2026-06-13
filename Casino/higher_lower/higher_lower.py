@@ -142,15 +142,19 @@ class HigherLowerView(discord.ui.View):
 
         multiplier  = get_multiplier(self.correct_rounds)
         payout      = int(self.bet * multiplier)
+        dm_mult     = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+        if dm_mult > 1.0:
+            payout = self.bet + int((payout - self.bet) * dm_mult)
         self.db.update_balance(self.user_id, self.guild_id, payout, 'win')
         _record_stats(self.db, self.user_id, self.guild_id, payout - self.bet, 0)
         new_balance = self.db.get_balance(self.user_id, self.guild_id)
-        embed       = self._cashout_embed(payout, new_balance, auto=auto)
+        embed       = self._cashout_embed(payout, new_balance, auto=auto, dm_mult=dm_mult)
         await interaction.response.edit_message(embed=embed, view=self)
         if interaction.channel:
             profit = payout - self.bet
             await interaction.channel.send(embed=discord.Embed(
-                description=f"🎴 **{interaction.user.display_name}** cashed out {var.CURRENCY_SYMBOL} **{profit:,}** profit playing Higher or Lower!",
+                description=f"🎴 **{interaction.user.display_name}** cashed out {var.CURRENCY_SYMBOL} **{profit:,}** profit playing Higher or Lower!"
+                + (f" 💰 **{dm_mult}x** event!" if dm_mult > 1.0 else ""),
                 color=var.COLOR_WIN,
             ))
 
@@ -219,7 +223,7 @@ class HigherLowerView(discord.ui.View):
         embed.timestamp = datetime.utcnow()
         return embed
 
-    def _cashout_embed(self, payout: int, new_balance: int, auto: bool = False) -> discord.Embed:
+    def _cashout_embed(self, payout: int, new_balance: int, auto: bool = False, dm_mult: float = 1.0) -> discord.Embed:
         multiplier = get_multiplier(self.correct_rounds)
         profit     = payout - self.bet
         title      = "🏆 Max Rounds — Auto Cash Out!" if auto else "💰 Cashed Out!"
@@ -232,6 +236,8 @@ class HigherLowerView(discord.ui.View):
         embed.add_field(name="Original Bet", value=f"{var.CURRENCY_SYMBOL} {self.bet:,}",    inline=True)
         embed.add_field(name="Payout",       value=f"{var.CURRENCY_SYMBOL} {payout:,}",      inline=True)
         embed.add_field(name="Profit",       value=f"{var.CURRENCY_SYMBOL} +{profit:,}",      inline=True)
+        if dm_mult > 1.0:
+            embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
         embed.add_field(name="New Balance",  value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
         embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
         embed.timestamp = datetime.utcnow()

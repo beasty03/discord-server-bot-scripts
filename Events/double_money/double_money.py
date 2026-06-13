@@ -1,0 +1,182 @@
+import asyncio
+import json
+import logging
+import random
+import time
+from datetime import datetime
+from pathlib import Path
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location('dm_variables', Path(__file__).parent / 'variables.py')
+var = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(var)
+
+log = logging.getLogger("launcher")
+SETTINGS_FILE = Path(__file__).parent / 'double_money_settings.json'
+
+
+class DoubleMoneyCog(commands.Cog):
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._settings: dict = self._load_settings()
+        self._event_task: asyncio.Task | None = None
+        if not hasattr(self.bot, 'double_money_multiplier'):
+            self.bot.double_money_multiplier = None
+
+    # ── Settings ──────────────────────────────────────────────────────────────
+
+    def _load_settings(self) -> dict:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+
+    def _save_settings(self):
+        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self._settings, f, indent=2)
+
+    def _get_channel(self) -> discord.TextChannel | None:
+        cid = self._settings.get('event_channel_id') or var.EVENT_CHANNEL_ID
+        return self.bot.get_channel(int(cid)) if cid else None
+
+    # ── Background event task ─────────────────────────────────────────────────
+
+    async def _run_event(self, multiplier: float):
+        duration = self._settings.get('event_duration', var.EVENT_DURATION)
+        end_ts   = int(time.time()) + duration
+        channel  = self._get_channel()
+
+        if channel:
+            embed = discord.Embed(
+                title="💰 Double Money Event!",
+                description=(
+                    f"Casino winnings are boosted by **{multiplier}x** for the next "
+                    f"**{duration // 60}m {duration % 60:02d}s**!\n\n"
+                    f"Event ends <t:{end_ts}:R>"
+                ),
+                color=var.COLOR_ACTIVE,
+            )
+            embed.timestamp = datetime.utcnow()
+            await channel.send(embed=embed)
+
+        try:
+            await asyncio.sleep(duration)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self.bot.double_money_multiplier = None
+            ch = self._get_channel()
+            if ch:
+                try:
+                    embed = discord.Embed(
+                        title="💰 Double Money Event Ended",
+                        description="The bonus multiplier has expired. Regular payouts resume.",
+                        color=var.COLOR_END,
+                    )
+                    embed.timestamp = datetime.utcnow()
+                    await ch.send(embed=embed)
+                except Exception:
+                    pass
+
+    # ── Commands ──────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="start_double_money_event", description="Start a Double Money event — all casino wins are multiplied.")
+    async def start_event(self, interaction: discord.Interaction):
+        if self.bot.double_money_multiplier is not None:
+            await interaction.response.send_message(
+                f"❌ A Double Money event is already active! (multiplier: **{self.bot.double_money_multiplier}x**)",
+                ephemeral=True,
+            )
+            return
+
+        mult_min   = self._settings.get('multiplier_min', var.MULTIPLIER_MIN)
+        mult_max   = self._settings.get('multiplier_max', var.MULTIPLIER_MAX)
+        duration   = self._settings.get('event_duration', var.EVENT_DURATION)
+        multiplier = round(random.uniform(mult_min, mult_max), 2)
+
+        self.bot.double_money_multiplier = multiplier
+
+        if self._event_task and not self._event_task.done():
+            self._event_task.cancel()
+        self._event_task = asyncio.create_task(self._run_event(multiplier))
+
+        end_ts = int(time.time()) + duration
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"✅ Double Money event started!\n"
+                    f"Multiplier: **{multiplier}x** · Duration: **{duration // 60}m {duration % 60:02d}s**\n"
+                    f"Ends <t:{end_ts}:R>"
+                ),
+                color=var.COLOR_ACTIVE,
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="stop_double_money_event", description="Stop the active Double Money event early.")
+    async def stop_event(self, interaction: discord.Interaction):
+        if self.bot.double_money_multiplier is None:
+            await interaction.response.send_message("❌ No Double Money event is currently active.", ephemeral=True)
+            return
+        if self._event_task and not self._event_task.done():
+            self._event_task.cancel()
+        self.bot.double_money_multiplier = None
+        channel = self._get_channel()
+        if channel:
+            await channel.send(embed=discord.Embed(
+                title="💰 Double Money Event Ended",
+                description="The event was stopped early by an admin.",
+                color=var.COLOR_END,
+            ))
+        await interaction.response.send_message("✅ Double Money event stopped.", ephemeral=True)
+
+    @app_commands.command(name="set_double_money_channel", description="Set the channel for Double Money event announcements.")
+    @app_commands.describe(channel="Channel to post announcements in")
+    async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        self._settings['event_channel_id'] = channel.id
+        self._save_settings()
+        await interaction.response.send_message(
+            f"✅ Double Money announcement channel set to {channel.mention}.", ephemeral=True
+        )
+
+    @app_commands.command(name="set_double_money_duration", description="Set how long a Double Money event lasts.")
+    @app_commands.describe(seconds="Duration in seconds (e.g. 300 = 5 minutes)")
+    async def set_duration(self, interaction: discord.Interaction, seconds: int):
+        if seconds < 30:
+            await interaction.response.send_message("❌ Duration must be at least 30 seconds.", ephemeral=True)
+            return
+        self._settings['event_duration'] = seconds
+        self._save_settings()
+        mins, secs = divmod(seconds, 60)
+        label = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        await interaction.response.send_message(f"✅ Event duration set to **{label}**.", ephemeral=True)
+
+    @app_commands.command(name="set_double_money_min", description="Set the minimum bonus multiplier for Double Money events.")
+    @app_commands.describe(value="Minimum multiplier (e.g. 1.1 = +10% profit)")
+    async def set_min(self, interaction: discord.Interaction, value: float):
+        if value < 1.0:
+            await interaction.response.send_message("❌ Minimum must be ≥ 1.0.", ephemeral=True)
+            return
+        self._settings['multiplier_min'] = value
+        self._save_settings()
+        await interaction.response.send_message(f"✅ Minimum multiplier set to **{value}x**.", ephemeral=True)
+
+    @app_commands.command(name="set_double_money_max", description="Set the maximum bonus multiplier for Double Money events.")
+    @app_commands.describe(value="Maximum multiplier (e.g. 2.0 = double profits)")
+    async def set_max(self, interaction: discord.Interaction, value: float):
+        if value < 1.0:
+            await interaction.response.send_message("❌ Maximum must be ≥ 1.0.", ephemeral=True)
+            return
+        self._settings['multiplier_max'] = value
+        self._save_settings()
+        await interaction.response.send_message(f"✅ Maximum multiplier set to **{value}x**.", ephemeral=True)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(DoubleMoneyCog(bot))
+    log.info("✅ Events/DoubleMoney cog loaded")
