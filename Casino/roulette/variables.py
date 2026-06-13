@@ -23,8 +23,8 @@ else:
 
 # Required by DatabaseManager
 STARTING_BALANCE = 1000
-CURRENCY_NAME    = "coins"
-CURRENCY_SYMBOL  = "🪙"
+CURRENCY_NAME    = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL  = config.get("currency_symbol", "🪙")
 
 # Betting limits
 MIN_BET = 10

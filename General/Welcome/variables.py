@@ -23,8 +23,8 @@ else:
 
 # Required by DatabaseManager
 STARTING_BALANCE = 0
-CURRENCY_NAME    = "coins"
-CURRENCY_SYMBOL  = "🪙"
+CURRENCY_NAME    = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL  = config.get("currency_symbol", "🪙")
 
 # Embed colors
 COLOR_WIN   = 0x57F287  # green

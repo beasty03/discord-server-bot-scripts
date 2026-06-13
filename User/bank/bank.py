@@ -11,6 +11,7 @@ _spec = _ilu.spec_from_file_location('bank_variables', Path(__file__).parent / '
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
+from utils.config_loader import load_config, save_config
 
 log = logging.getLogger("launcher")
 
@@ -202,6 +203,36 @@ class BankCog(commands.Cog):
         )
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed)
+
+    # ── /set_currency_name / /set_currency_icon ───────────────────────────────
+
+    @app_commands.command(name="set_currency_name", description="Set the currency name shown across all bot commands.")
+    @app_commands.describe(name="New currency name (e.g. coins, credits, gold)")
+    async def set_currency_name(self, interaction: discord.Interaction, name: str):
+        cfg = load_config()
+        cfg["currency_name"] = name
+        save_config(cfg)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Currency name set to **{name}**. Restart the bot to apply across all cogs.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="set_currency_icon", description="Set the currency emoji shown across all bot commands.")
+    @app_commands.describe(icon="Emoji to use as the currency symbol (e.g. 💎 🪙 ⭐)")
+    async def set_currency_icon(self, interaction: discord.Interaction, icon: str):
+        cfg = load_config()
+        cfg["currency_symbol"] = icon
+        save_config(cfg)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Currency icon set to **{icon}**. Restart the bot to apply across all cogs.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
 
     # ── /set_bal_amount ───────────────────────────────────────────────────────
 

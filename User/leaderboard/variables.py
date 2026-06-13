@@ -5,8 +5,8 @@ config      = load_config()
 GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
-CURRENCY_NAME   = "coins"
-CURRENCY_SYMBOL = "🪙"
+CURRENCY_NAME   = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # How many players to show on /top
 LEADERBOARD_TOP_COUNT = 10

@@ -59,8 +59,8 @@ DEALER_STAND_VALUE = 17  # Dealer must stand at this value or higher
 COOLDOWN_SECONDS = 5  # Cooldown between blackjack commands per user
 
 # Currency Settings
-CURRENCY_NAME = "coins"  # Name of the currency (e.g., "coins", "credits", "gold")
-CURRENCY_SYMBOL = "🪙"   # Emoji symbol for currency
+CURRENCY_NAME   = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # Embed Colors (in hex)
 COLOR_WIN = 0x00FF00      # Green

@@ -21,8 +21,8 @@ JOIN_WINDOW = 60
 # Coins deducted from each player who joins an event.
 EVENT_BET = 100
 
-CURRENCY_NAME   = "coins"
-CURRENCY_SYMBOL = "🪙"
+CURRENCY_NAME   = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # ── Gamble resolver settings ──────────────────────────────────────────────────
 GAMBLE_WIN_CHANCE     = 45   # percent chance to win

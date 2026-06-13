@@ -9,8 +9,8 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 # CURRENCY
 # ============================================================================
 
-CURRENCY_NAME   = "coins"
-CURRENCY_SYMBOL = "🪙"
+CURRENCY_NAME   = config.get("currency_name",   "coins")
+CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # ============================================================================
 # BANK SETTINGS
