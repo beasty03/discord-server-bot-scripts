@@ -275,7 +275,7 @@ class CasinoEventCog(commands.Cog):
             self.event_active = False
             return None
 
-        dm_mult          = getattr(self.bot, 'double_money_multiplier', None) or 1.0
+        dm_mult          = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
         summary, results = resolver(participants, self.db, gid, dm_mult)
 
         lines = []
@@ -384,18 +384,36 @@ class CasinoEventCog(commands.Cog):
 
     # ── Admin commands ────────────────────────────────────────────────────────
 
-    @app_commands.command(name="startevent", description="Manually trigger a casino event.")
+    @app_commands.command(name="startevent", description="Manually start a server event.")
+    @app_commands.describe(event="Which type of event to start")
+    @app_commands.choices(event=[
+        app_commands.Choice(name="Casino", value="casino"),
+        app_commands.Choice(name="Multiplier", value="multiplier"),
+    ])
     @app_commands.checks.has_permissions(administrator=True)
-    async def startevent(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        err = await self._run_event()
-        if err:
-            await interaction.followup.send(
-                embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_ERROR),
-                ephemeral=True,
-            )
+    async def startevent(self, interaction: discord.Interaction, event: str):
+        if event == "casino":
+            await interaction.response.defer(ephemeral=True)
+            err = await self._run_event()
+            if err:
+                await interaction.followup.send(
+                    embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_ERROR),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send("✅ Casino event started!", ephemeral=True)
         else:
-            await interaction.followup.send("✅ Casino event started!", ephemeral=True)
+            cog = self.bot.get_cog("MultiplierEventCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        description="❌ Multiplier Event cog is not loaded.",
+                        color=var.COLOR_ERROR,
+                    ),
+                    ephemeral=True,
+                )
+                return
+            await cog.start_from_startevent(interaction)
 
     @app_commands.command(name="set_event_channel", description="Set the channel where casino events are announced.")
     @app_commands.describe(channel="The channel to post events in")

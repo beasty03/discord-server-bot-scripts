@@ -6,7 +6,7 @@ GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
 # ── Channel ───────────────────────────────────────────────────────────────────
-EVENT_CHANNEL_ID = 0  # ← set via /set_double_money_channel
+EVENT_CHANNEL_ID = 0  # ← set via /set_multiplier_channel
 
 # ── Multiplier range ──────────────────────────────────────────────────────────
 # A random multiplier is picked uniformly in [MIN, MAX] each time the event fires.

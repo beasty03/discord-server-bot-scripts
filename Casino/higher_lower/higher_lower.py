@@ -142,7 +142,7 @@ class HigherLowerView(discord.ui.View):
 
         multiplier  = get_multiplier(self.correct_rounds)
         payout      = int(self.bet * multiplier)
-        dm_mult     = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+        dm_mult     = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         if dm_mult > 1.0:
             payout = self.bet + int((payout - self.bet) * dm_mult)
         self.db.update_balance(self.user_id, self.guild_id, payout, 'win')

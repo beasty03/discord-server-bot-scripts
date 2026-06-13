@@ -155,7 +155,7 @@ class BlackjackView(discord.ui.View):
         player_total = hand_value(self.player_hand)
         dealer_total = hand_value(self.dealer_hand)
         uid, gid     = self._uid_gid(interaction)
-        dm_mult      = getattr(self.original_interaction.client, 'double_money_multiplier', None) or 1.0
+        dm_mult      = getattr(self.original_interaction.client, 'multiplier_event_mult', None) or 1.0
 
         if dealer_total > 21 or player_total > dealer_total:
             raw_payout = int(self.bet * var.WIN_MULTIPLIER)
@@ -325,7 +325,7 @@ class BlackjackCog(commands.Cog):
         dealer_hand = [draw_card(deck), draw_card(deck)]
 
         if is_blackjack(player_hand):
-            dm_mult  = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+            dm_mult  = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
             winnings = int(amount * var.BLACKJACK_MULTIPLIER)
             profit   = winnings - amount
             if dm_mult > 1.0:

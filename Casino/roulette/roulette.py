@@ -141,7 +141,7 @@ class RouletteView(discord.ui.View):
         result = spin_wheel()
         won, multiplier = check_win(result, bet_type, bet_number)
 
-        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+        dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         if won:
             payout = int(self.bet * multiplier)
             if dm_mult > 1.0:

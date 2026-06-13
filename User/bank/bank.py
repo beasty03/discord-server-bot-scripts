@@ -99,7 +99,7 @@ class BankCog(commands.Cog):
                 bonus_amount = custom
 
             # Apply Double Money event multiplier
-            dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+            dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
             if dm_mult > 1.0:
                 extra = int(bonus_amount * (dm_mult - 1))
                 if extra > 0:

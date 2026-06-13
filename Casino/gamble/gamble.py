@@ -82,7 +82,7 @@ class GambleCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+        dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
         roll = random.randint(1, 100)
         won  = roll <= var.WIN_CHANCE
 

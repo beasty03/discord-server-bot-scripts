@@ -130,7 +130,7 @@ class BaccaratView(discord.ui.View):
         won     = chosen_bet == outcome
         is_tie  = outcome == "tie"
         pushed  = is_tie and chosen_bet != "tie" and var.TIE_PUSHES_SIDE_BETS
-        dm_mult = getattr(interaction.client, 'double_money_multiplier', None) or 1.0
+        dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
 
         if won:
             mult   = {"player": var.PLAYER_MULTIPLIER,
