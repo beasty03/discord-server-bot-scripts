@@ -205,9 +205,38 @@ class BankCog(commands.Cog):
 
     # ── /set_bal_amount ───────────────────────────────────────────────────────
 
-    @app_commands.command(name="set_bal_amount", description="Set the daily bonus amount players receive.")
+    @app_commands.command(name="set_bal_amount", description="Set a user's balance to a specific amount.")
+    @app_commands.describe(member="The user whose balance to set", amount="New balance amount")
+    async def set_bal_amount(self, interaction: discord.Interaction, member: discord.Member, amount: int):
+        if amount < 0:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Amount must be 0 or higher.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+        uid = str(member.id)
+        gid = str(interaction.guild_id)
+        self.db.ensure_user(uid, gid, member.display_name)
+        current = self.db.get_balance(uid, gid)
+        delta   = amount - current
+        if delta != 0:
+            self.db.update_balance(uid, gid, delta, 'admin_set')
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"✅ {member.mention}'s balance set to "
+                    f"**{var.CURRENCY_SYMBOL} {amount:,} {var.CURRENCY_NAME}**."
+                ),
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    # ── /set_daily ────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="set_daily", description="Set the daily bonus amount all players receive.")
     @app_commands.describe(amount="Coins awarded each day (0 = use server default)")
-    async def set_bal_amount(self, interaction: discord.Interaction, amount: int):
+    async def set_daily(self, interaction: discord.Interaction, amount: int):
         if amount < 0:
             await interaction.response.send_message(
                 embed=discord.Embed(description="Amount must be 0 or higher.", color=var.COLOR_ERROR),
