@@ -4,6 +4,7 @@ from discord import app_commands
 import random
 import asyncio
 import json
+import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -31,11 +32,11 @@ def _load_settings() -> dict:
 def _save_settings(data: dict):
     _SETTINGS_FILE.write_text(json.dumps(data, indent=2), "utf-8")
 
+
 # ============================================================================
 # INLINE GAME RESOLVERS
-# Each resolver signature: (participants, event_bet, db, gid) -> (summary_str, results)
-# participants: dict[uid_str -> bet_choice]  (gamble uses True as placeholder)
-# results:      list of (uid_str, delta_str, emoji_str)
+# participants: dict[uid -> {"amount": int, "bet": any}]
+# Resolvers return (summary_str, [(uid, delta_str, emoji, bet_label), ...])
 # Balance was already deducted at join time; resolvers only ADD winnings.
 # ============================================================================
 
@@ -53,30 +54,33 @@ def _roulette_check(result: int, bet: str) -> tuple[bool, float]:
         case "even":  return result != 0 and result % 2 == 0,  2.0
     return False, 0.0
 
-def resolve_roulette(participants: dict, event_bet: int, db, gid: str):
+def resolve_roulette(participants: dict, db, gid: str):
     result = random.randint(0, 36)
     emoji  = {"green": "🟢", "red": "🔴", "black": "⚫"}[_roulette_color(result)]
     rows   = []
-    for uid, bet in participants.items():
+    for uid, data in participants.items():
+        amount = data["amount"]
+        bet    = data["bet"]
         won, mult = _roulette_check(result, bet)
         if won:
-            payout = int(event_bet * mult)
+            payout = int(amount * mult)
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         else:
-            rows.append((uid, f"-{event_bet:,}", "❌", bet))
+            rows.append((uid, f"-{amount:,}", "❌", bet))
     return f"{emoji} Ball landed on **{result}**", rows
 
 
-def resolve_gamble(participants: dict, event_bet: int, db, gid: str):
+def resolve_gamble(participants: dict, db, gid: str):
     rows = []
-    for uid in participants:
+    for uid, data in participants.items():
+        amount = data["amount"]
         if random.random() < var.GAMBLE_WIN_CHANCE / 100:
-            payout = int(event_bet * var.GAMBLE_WIN_MULTIPLIER)
+            payout = int(amount * var.GAMBLE_WIN_MULTIPLIER)
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", ""))
         else:
-            rows.append((uid, f"-{event_bet:,}", "❌", ""))
+            rows.append((uid, f"-{amount:,}", "❌", ""))
     return "🎲 Dice rolled!", rows
 
 
@@ -84,22 +88,24 @@ _BRANK = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
 def _bval(r): return 1 if r == "A" else 0 if r in ("10","J","Q","K") else int(r)
 def _bhand(): return sum(_bval(random.choice(_BRANK)) for _ in range(2)) % 10
 
-def resolve_baccarat(participants: dict, event_bet: int, db, gid: str):
+def resolve_baccarat(participants: dict, db, gid: str):
     pt = _bhand()
     bt = _bhand()
     outcome = "player" if pt > bt else ("banker" if bt > pt else "tie")
     mult    = {"player": 2.0, "banker": 1.95, "tie": 9.0}
     rows    = []
-    for uid, bet in participants.items():
+    for uid, data in participants.items():
+        amount = data["amount"]
+        bet    = data["bet"]
         if bet == outcome:
-            payout = int(event_bet * mult[bet])
+            payout = int(amount * mult[bet])
             db.update_balance(uid, gid, payout, 'event_win')
             rows.append((uid, f"+{payout:,}", "✅", bet))
         elif outcome == "tie" and bet != "tie":
-            db.update_balance(uid, gid, event_bet, 'refund')
+            db.update_balance(uid, gid, amount, 'refund')
             rows.append((uid, "refund", "↩️", bet))
         else:
-            rows.append((uid, f"-{event_bet:,}", "❌", bet))
+            rows.append((uid, f"-{amount:,}", "❌", bet))
     summary = f"👤 Player **{pt}** vs 🏦 Banker **{bt}** → {outcome.capitalize()} wins!"
     return summary, rows
 
@@ -111,17 +117,17 @@ RESOLVERS = {
 }
 
 # ============================================================================
-# BET-SELECTION VIEWS  (ephemeral, shown after clicking Join)
+# BET-SELECTION VIEWS  (ephemeral, shown after /join for games with choices)
 # ============================================================================
 
 class _BetView(discord.ui.View):
-    def __init__(self, participants: dict, uid: str):
-        super().__init__(timeout=var.JOIN_WINDOW)
+    def __init__(self, participants: dict, uid: str, timeout: float):
+        super().__init__(timeout=timeout)
         self.participants = participants
         self.uid          = uid
 
     async def _pick(self, interaction: discord.Interaction, bet: str):
-        self.participants[self.uid] = bet
+        self.participants[self.uid]["bet"] = bet
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(
@@ -162,63 +168,18 @@ _DEFAULT_BETS: dict[str, callable] = {
 }
 
 # ============================================================================
-# JOIN VIEW
-# ============================================================================
-
-class EventJoinView(discord.ui.View):
-    def __init__(self, game: dict, participants: dict, db, gid: str):
-        super().__init__(timeout=var.JOIN_WINDOW)
-        self.game         = game
-        self.participants = participants
-        self.db           = db
-        self.gid          = gid
-
-    @discord.ui.button(label="🎮 Join Event", style=discord.ButtonStyle.success)
-    async def join(self, interaction: discord.Interaction, _button: discord.ui.Button):
-        uid = str(interaction.user.id)
-
-        if uid in self.participants:
-            await interaction.response.send_message("You've already joined!", ephemeral=True)
-            return
-
-        self.db.ensure_user(uid, self.gid, interaction.user.display_name)
-        if self.db.get_balance(uid, self.gid) < var.EVENT_BET:
-            await interaction.response.send_message(
-                f"You need at least {var.CURRENCY_SYMBOL} **{var.EVENT_BET:,}** to join.",
-                ephemeral=True,
-            )
-            return
-
-        # Deduct bet and assign a random default so they're always in even if they ignore the bet view
-        self.db.update_balance(uid, self.gid, -var.EVENT_BET, 'event_bet')
-        game_id = self.game["id"]
-        default = _DEFAULT_BETS.get(game_id, lambda: True)()
-        self.participants[uid] = default
-
-        if game_id in _BET_VIEWS:
-            bet_label = default if isinstance(default, str) else ""
-            view      = _BET_VIEWS[game_id](self.participants, uid)
-            await interaction.response.send_message(
-                f"✅ You're in! Default bet: **{bet_label}** — change it below if you want:",
-                view=view,
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                f"✅ You're in! {var.CURRENCY_SYMBOL} **{var.EVENT_BET:,}** wagered.",
-                ephemeral=True,
-            )
-
-# ============================================================================
 # COG
 # ============================================================================
 
 class CasinoEventCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot            = bot
-        self.db             = ForgeDB.get()
-        self.event_active   = False
+        self.bot              = bot
+        self.db               = ForgeDB.get()
+        self.event_active     = False
+        self._current_game    = None
+        self._participants: dict[str, dict] = {}
+        self._event_gid: str | None = None
         self._loop_task: asyncio.Task | None = None
 
     @commands.Cog.listener()
@@ -229,6 +190,13 @@ class CasinoEventCog(commands.Cog):
     def cog_unload(self):
         if self._loop_task:
             self._loop_task.cancel()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _get_event_channel(self):
+        cfg = _load_settings()
+        cid = cfg.get("channel_id") or var.EVENT_CHANNEL_ID
+        return self.bot.get_channel(int(cid)) if cid else None
 
     # ── Background loop (random interval) ────────────────────────────────────
 
@@ -245,13 +213,8 @@ class CasinoEventCog(commands.Cog):
 
     # ── Core event runner ─────────────────────────────────────────────────────
 
-    def _get_event_channel(self):
-        cfg = _load_settings()
-        cid = cfg.get("channel_id") or var.EVENT_CHANNEL_ID
-        return self.bot.get_channel(int(cid)) if cid else None
-
     async def _run_event(self) -> str | None:
-        """Run an event. Returns an error string on failure, None on success."""
+        """Run a casino event. Returns an error string on failure, None on success."""
         if self.event_active:
             return "An event is already running."
 
@@ -260,36 +223,43 @@ class CasinoEventCog(commands.Cog):
             log.warning("CasinoEvent: event channel not configured — use /set_event_channel")
             return "No event channel configured. Use `/set_event_channel` first."
 
-        gid          = str(channel.guild.id)
-        game         = random.choice(var.CASINO_GAMES)
-        participants: dict[str, object] = {}
+        cfg         = _load_settings()
+        join_window = cfg.get("join_window", var.JOIN_WINDOW)
+        min_bet     = cfg.get("event_bet_min", var.EVENT_BET)
+
+        gid  = str(channel.guild.id)
+        game = random.choice(var.CASINO_GAMES)
+
+        self._current_game = game
+        self._participants  = {}
+        self._event_gid    = gid
+        self.event_active  = True
+
+        end_ts = int(time.time()) + join_window
 
         join_embed = discord.Embed(
             title=f"🎰 Casino Event: {game['label']}!",
             description=(
                 f"{game['description']}\n\n"
-                f"**Entry:** {var.CURRENCY_SYMBOL} {var.EVENT_BET:,} {var.CURRENCY_NAME}\n"
-                f"⏱️ Join window: **{var.JOIN_WINDOW}s**"
+                f"**Minimum wager:** {var.CURRENCY_SYMBOL} {min_bet:,} {var.CURRENCY_NAME}\n"
+                f"⏱️ Closes <t:{end_ts}:R> — type `/join wage:<amount>` to enter!"
             ),
             color=game["color"],
         )
-        join_embed.set_footer(text=f"{var.SERVER_NAME} · Click below to join!")
+        join_embed.set_footer(text=f"{var.SERVER_NAME} · Use /join to participate")
         join_embed.timestamp = datetime.utcnow()
 
-        view = EventJoinView(game, participants, self.db, gid)
-        self.event_active = True
-        msg  = await channel.send(embed=join_embed, view=view)
+        msg = await channel.send(embed=join_embed)
 
-        await asyncio.sleep(var.JOIN_WINDOW)
+        await asyncio.sleep(join_window)
 
-        # Close the join view
-        view.stop()
-        for item in view.children:
-            item.disabled = True
+        # Close the join window — /join checks self._current_game is not None
+        self._current_game = None
+        participants = dict(self._participants)
 
         if not participants:
             join_embed.description = "*No one joined — event cancelled.*"
-            await msg.edit(embed=join_embed, view=view)
+            await msg.edit(embed=join_embed)
             self.event_active = False
             return None
 
@@ -299,7 +269,7 @@ class CasinoEventCog(commands.Cog):
             self.event_active = False
             return None
 
-        summary, results = resolver(participants, var.EVENT_BET, self.db, gid)
+        summary, results = resolver(participants, self.db, gid)
 
         lines = []
         for uid, delta_str, emoji, bet in results:
@@ -321,12 +291,88 @@ class CasinoEventCog(commands.Cog):
         )
         result_embed.timestamp = datetime.utcnow()
 
-        join_embed.description = "Event ended! Results below."
-        await msg.edit(embed=join_embed, view=view)
+        join_embed.description = "Event ended! See results below."
+        await msg.edit(embed=join_embed)
         await channel.send(embed=result_embed)
 
         self.event_active = False
         return None
+
+    # ── /join ─────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="join", description="Join the active casino event with your chosen wager.")
+    @app_commands.describe(wage="How many coins to wager")
+    async def join(self, interaction: discord.Interaction, wage: int):
+        if not self.event_active or self._current_game is None:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="No event is currently active.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        if uid in self._participants:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="You've already joined this event!", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+
+        cfg     = _load_settings()
+        min_bet = cfg.get("event_bet_min", var.EVENT_BET)
+        if wage < min_bet:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"Minimum wager is {var.CURRENCY_SYMBOL} **{min_bet:,} {var.CURRENCY_NAME}**.",
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        self.db.ensure_user(uid, gid, interaction.user.display_name)
+        balance = self.db.get_balance(uid, gid)
+        if balance < wage:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=(
+                        f"Not enough {var.CURRENCY_NAME}.\n"
+                        f"Wager: **{var.CURRENCY_SYMBOL} {wage:,}** · Balance: **{var.CURRENCY_SYMBOL} {balance:,}**"
+                    ),
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        self.db.update_balance(uid, gid, -wage, 'event_bet')
+        game_id     = self._current_game["id"]
+        default_bet = _DEFAULT_BETS.get(game_id, lambda: True)()
+        self._participants[uid] = {"amount": wage, "bet": default_bet}
+
+        join_window = cfg.get("join_window", var.JOIN_WINDOW)
+
+        if game_id in _BET_VIEWS:
+            bet_label = default_bet if isinstance(default_bet, str) else ""
+            view      = _BET_VIEWS[game_id](self._participants, uid, timeout=join_window)
+            await interaction.response.send_message(
+                content=(
+                    f"✅ You're in with **{var.CURRENCY_SYMBOL} {wage:,}**!\n"
+                    f"Default bet: **{bet_label}** — change it below if you want:"
+                ),
+                view=view,
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"✅ You're in! **{var.CURRENCY_SYMBOL} {wage:,} {var.CURRENCY_NAME}** wagered.",
+                    color=var.COLOR_WIN,
+                ),
+                ephemeral=True,
+            )
 
     # ── Admin commands ────────────────────────────────────────────────────────
 
@@ -352,6 +398,26 @@ class CasinoEventCog(commands.Cog):
         await interaction.response.send_message(
             embed=discord.Embed(
                 description=f"✅ Casino events will be posted in {channel.mention}.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="set_join_window_timer", description="Set how long players have to join a casino event.")
+    @app_commands.describe(seconds="Seconds the join window stays open (minimum 10)")
+    async def set_join_window_timer(self, interaction: discord.Interaction, seconds: int):
+        if seconds < 10:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Join window must be at least 10 seconds.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+        data = _load_settings()
+        data["join_window"] = seconds
+        _save_settings(data)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Join window set to **{seconds} seconds**.",
                 color=var.COLOR_WIN,
             ),
             ephemeral=True,
@@ -398,4 +464,4 @@ class CasinoEventCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(CasinoEventCog(bot))
-    log.info("✅ Events/Casino cog loaded")
+    log.info("✅ Events/CasinoEvent cog loaded")
