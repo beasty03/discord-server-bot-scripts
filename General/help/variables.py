@@ -2,7 +2,7 @@ from utils.config_loader import get_bot_token, load_config
 
 BOT_TOKEN = get_bot_token()
 config    = load_config()
-GUILD_ID  = int(config['guild_id'])
+GUILD_ID  = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
 
 # Displayed in the help home embed footer
 BOT_NAME = config.get('server_name', 'Server Bot')

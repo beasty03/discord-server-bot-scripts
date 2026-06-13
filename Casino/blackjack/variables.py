@@ -10,8 +10,8 @@ from pathlib import Path
 # Load bot token and config from central config.json
 BOT_TOKEN = get_bot_token()  # or get_bot_token('SpecificBotName')
 config = load_config()
-GUILD_ID = int(config['guild_id'])
-SERVER_NAME = config['server_name']
+GUILD_ID = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
+SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
 # Database path from config (nested under 'paths')
 if 'paths' in config:
