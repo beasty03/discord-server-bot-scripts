@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,21 @@ _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
 log = logging.getLogger("launcher")
+
+_SETTINGS_FILE = Path(__file__).parent / "bank_settings.json"
+
+
+def _load_settings() -> dict:
+    if _SETTINGS_FILE.exists():
+        try:
+            return json.loads(_SETTINGS_FILE.read_text("utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_settings(data: dict):
+    _SETTINGS_FILE.write_text(json.dumps(data, indent=2), "utf-8")
 
 
 class BankCog(commands.Cog):
@@ -72,6 +88,15 @@ class BankCog(commands.Cog):
         if success:
             new_balance  = self.db.get_balance(uid, gid)
             bonus_amount = new_balance - balance_before
+
+            # Apply configured daily amount override
+            custom = _load_settings().get("daily_amount", 0)
+            if custom > 0 and custom != bonus_amount:
+                diff = custom - bonus_amount
+                self.db.update_balance(uid, gid, diff, 'daily_override')
+                new_balance  = self.db.get_balance(uid, gid)
+                bonus_amount = custom
+
             embed = discord.Embed(
                 title="🎁 Daily Bonus Claimed!",
                 description=f"You received **{var.CURRENCY_SYMBOL} {bonus_amount:,} {var.CURRENCY_NAME}**!",
@@ -177,6 +202,30 @@ class BankCog(commands.Cog):
         )
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed)
+
+    # ── /set_bal_amount ───────────────────────────────────────────────────────
+
+    @app_commands.command(name="set_bal_amount", description="Set the daily bonus amount players receive.")
+    @app_commands.describe(amount="Coins awarded each day (0 = use server default)")
+    async def set_bal_amount(self, interaction: discord.Interaction, amount: int):
+        if amount < 0:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Amount must be 0 or higher.", color=var.COLOR_ERROR),
+                ephemeral=True,
+            )
+            return
+        data = _load_settings()
+        data["daily_amount"] = amount
+        _save_settings(data)
+        msg = (
+            f"Daily bonus set to **{var.CURRENCY_SYMBOL} {amount:,} {var.CURRENCY_NAME}**."
+            if amount > 0
+            else "Daily bonus reset to server default."
+        )
+        await interaction.response.send_message(
+            embed=discord.Embed(description=f"✅ {msg}", color=var.COLOR_WIN),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):
