@@ -91,7 +91,7 @@ Hand total = sum of cards **mod 10** (only the last digit counts). A hand of `7 
 |---|---|---|
 | `STARTING_BALANCE` | `1000` | Balance for new users |
 | `MIN_BET` | `10` | Minimum bet |
-| `MAX_BET` | `5000` | Maximum bet (0 = no limit) |
+| `MAX_BET` | `-1` | Maximum bet (-1 = no limit) |
 | `PLAYER_MULTIPLIER` | `2.0` | Payout on Player win |
 | `BANKER_MULTIPLIER` | `1.95` | Payout on Banker win (after 5% commission) |
 | `TIE_MULTIPLIER` | `9.0` | Payout on Tie win |

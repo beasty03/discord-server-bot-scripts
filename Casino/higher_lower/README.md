@@ -69,7 +69,7 @@ Multipliers are configurable in `variables.py`.
 |---|---|---|
 | `STARTING_BALANCE` | `1000` | Balance for new users |
 | `MIN_BET` | `10` | Minimum bet |
-| `MAX_BET` | `5000` | Maximum bet (0 = no limit) |
+| `MAX_BET` | `-1` | Maximum bet (-1 = no limit) |
 | `NUMBER_RANGE` | `(1, 10)` | Min and max of drawn numbers |
 | `ROUND_MULTIPLIERS` | `[1.8, 3.0, 5.0, 8.0, 12.0]` | Payout per correct round |
 | `CURRENCY_NAME` | `"coins"` | Currency name |

@@ -28,7 +28,7 @@ CURRENCY_SYMBOL  = config.get("currency_symbol", "🪙")
 
 # Betting limits
 MIN_BET = 10
-MAX_BET = 5000  # set to 0 for no limit
+MAX_BET = -1  # set to -1 for no limit
 
 # Embed colors
 COLOR_WIN     = 0x57F287  # green

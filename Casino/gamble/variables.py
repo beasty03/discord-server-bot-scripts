@@ -45,7 +45,7 @@ STARTING_BALANCE = 1000  # Amount of currency new users start with
 
 # Gambling Settings
 MIN_BET = 10  # Minimum bet amount
-MAX_BET = 5000  # Maximum bet amount (set to 0 for no limit)
+MAX_BET = -1  # Maximum bet amount (set to -1 for no limit)
 
 # Win/Loss Settings
 WIN_MULTIPLIER = 2.0  # Multiplier for winning (2.0 = double your bet)

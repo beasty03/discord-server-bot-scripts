@@ -65,7 +65,7 @@ A Discord bot that lets users play Blackjack against the dealer using virtual cu
 
 **High-risk settings:**
 - `MIN_BET = 100`
-- `MAX_BET = 10000`
+- `MAX_BET = 10000`  # or -1 for no limit
 
 **Custom currency:**
 - `CURRENCY_NAME = "gold"`

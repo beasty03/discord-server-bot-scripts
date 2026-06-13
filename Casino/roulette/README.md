@@ -69,7 +69,7 @@ A Discord bot that lets users play European Roulette (0–36) using virtual curr
 |---|---|---|
 | `STARTING_BALANCE` | `1000` | Balance for new users |
 | `MIN_BET` | `10` | Minimum bet |
-| `MAX_BET` | `5000` | Maximum bet (0 = no limit) |
+| `MAX_BET` | `-1` | Maximum bet (-1 = no limit) |
 | `CURRENCY_NAME` | `"coins"` | Currency name |
 | `CURRENCY_SYMBOL` | `"🪙"` | Currency emoji |
 | `DAILY_BONUS_AMOUNT` | `500` | Daily bonus payout |

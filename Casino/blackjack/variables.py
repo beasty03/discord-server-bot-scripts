@@ -45,7 +45,7 @@ STARTING_BALANCE = 1000  # Amount of currency new users start with
 
 # Betting Settings
 MIN_BET = 10    # Minimum bet amount
-MAX_BET = 5000  # Maximum bet amount (set to 0 for no limit)
+MAX_BET = -1  # Maximum bet amount (set to -1 for no limit)
 
 # Blackjack Payout Multipliers
 BLACKJACK_MULTIPLIER = 2.5  # Payout on natural blackjack (21 on first 2 cards) — 1.5x profit
