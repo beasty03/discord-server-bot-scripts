@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import importlib.util as _ilu
@@ -36,6 +36,17 @@ class BankCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
+
+    async def cog_load(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_streaks (
+                user_id           TEXT NOT NULL,
+                guild_id          TEXT NOT NULL,
+                last_claimed_date TEXT,
+                streak            INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id)
+            )
+        """)
 
     # ── /balance ──────────────────────────────────────────────────────────────
 
@@ -83,53 +94,105 @@ class BankCog(commands.Cog):
         gid = str(interaction.guild_id)
         self.db.ensure_user(uid, gid, interaction.user.display_name)
 
-        balance_before          = self.db.get_balance(uid, gid)
-        success, time_remaining = self.db.claim_daily(uid, gid)
+        today     = datetime.utcnow().date()
+        today_str = today.isoformat()
 
-        if success:
-            new_balance  = self.db.get_balance(uid, gid)
-            bonus_amount = new_balance - balance_before
+        rows          = self.db.execute(
+            "SELECT last_claimed_date, streak FROM daily_streaks WHERE user_id = ? AND guild_id = ?",
+            (uid, gid),
+        )
+        last_date_str  = rows[0][0] if rows else None
+        current_streak = rows[0][1] if rows else 0
 
-            # Apply configured daily amount override
-            custom = _load_settings().get("daily_amount", 0)
-            if custom > 0 and custom != bonus_amount:
-                diff = custom - bonus_amount
-                self.db.update_balance(uid, gid, diff, 'daily_override')
-                new_balance  = self.db.get_balance(uid, gid)
-                bonus_amount = custom
+        # Seconds until next midnight UTC (used in both branches)
+        now      = datetime.utcnow()
+        midnight = datetime(today.year, today.month, today.day) + timedelta(days=1)
+        secs     = int((midnight - now).total_seconds())
+        hrs, mins = secs // 3600, (secs % 3600) // 60
 
-            # Apply Double Money event multiplier
-            dm_mult = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
-            if dm_mult > 1.0:
-                extra = int(bonus_amount * (dm_mult - 1))
-                if extra > 0:
-                    self.db.update_balance(uid, gid, extra, 'daily_event_bonus')
-                    new_balance  = self.db.get_balance(uid, gid)
-                    bonus_amount += extra
-
+        if last_date_str == today_str:
             embed = discord.Embed(
-                title="🎁 Daily Bonus Claimed!",
-                description=f"You received **{var.CURRENCY_SYMBOL} {bonus_amount:,} {var.CURRENCY_NAME}**!",
-                color=var.COLOR_WIN,
-            )
-            if dm_mult > 1.0:
-                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
-            embed.add_field(
-                name="New Balance",
-                value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}",
-                inline=False,
-            )
-            embed.set_footer(text="Come back tomorrow for another bonus!")
-        else:
-            hours   = time_remaining // 3600
-            minutes = (time_remaining % 3600) // 60
-            embed   = discord.Embed(
-                title="⏰ Daily Bonus Not Ready",
-                description=f"You can claim your next bonus in **{hours}h {minutes}m**.",
+                title="⏰ Already Claimed",
+                description=f"You already claimed your daily today!\nResets in **{hrs}h {mins}m**.",
                 color=var.COLOR_ERROR,
             )
+            embed.timestamp = now
+            await interaction.response.send_message(embed=embed)
+            return
 
-        embed.timestamp = datetime.utcnow()
+        # New streak
+        if last_date_str:
+            days_since = (today - date.fromisoformat(last_date_str)).days
+            new_streak = current_streak + 1 if days_since == 1 else 1
+        else:
+            new_streak = 1
+
+        # Base amount
+        custom      = _load_settings().get("daily_amount", 0)
+        base_amount = custom if custom > 0 else var.DAILY_BONUS_AMOUNT
+
+        # Streak bonus (kicks in at STREAK_BONUS_STARTS)
+        streak_bonus_pct = 0
+        if new_streak >= var.STREAK_BONUS_STARTS:
+            days_above       = new_streak - (var.STREAK_BONUS_STARTS - 1)
+            streak_bonus_pct = min(days_above * var.STREAK_BONUS_PER_DAY, var.STREAK_BONUS_MAX)
+        streak_bonus = int(base_amount * streak_bonus_pct / 100)
+
+        # Multiplier event bonus (applied on top of base + streak)
+        dm_mult     = getattr(interaction.client, 'multiplier_event_mult', None) or 1.0
+        event_bonus = int((base_amount + streak_bonus) * (dm_mult - 1)) if dm_mult > 1.0 else 0
+
+        total_amount = base_amount + streak_bonus + event_bonus
+
+        # Credit balance
+        self.db.update_balance(uid, gid, base_amount, 'daily')
+        if streak_bonus > 0:
+            self.db.update_balance(uid, gid, streak_bonus, 'daily_streak')
+        if event_bonus > 0:
+            self.db.update_balance(uid, gid, event_bonus, 'daily_event_bonus')
+
+        # Persist streak
+        self.db.execute(
+            """INSERT INTO daily_streaks (user_id, guild_id, last_claimed_date, streak)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, guild_id) DO UPDATE SET
+                   last_claimed_date = excluded.last_claimed_date,
+                   streak            = excluded.streak""",
+            (uid, gid, today_str, new_streak),
+        )
+
+        new_balance  = self.db.get_balance(uid, gid)
+        streak_emoji = "🔥" if new_streak >= var.STREAK_BONUS_STARTS else "📅"
+
+        embed = discord.Embed(
+            title="🎁 Daily Bonus Claimed!",
+            description=f"You received **{var.CURRENCY_SYMBOL} {total_amount:,} {var.CURRENCY_NAME}**!",
+            color=var.COLOR_WIN,
+        )
+        embed.add_field(name="Base Daily", value=f"{var.CURRENCY_SYMBOL} {base_amount:,}", inline=True)
+        if streak_bonus > 0:
+            embed.add_field(
+                name=f"🔥 Streak Bonus (+{streak_bonus_pct:.0f}%)",
+                value=f"{var.CURRENCY_SYMBOL} {streak_bonus:,}",
+                inline=True,
+            )
+        if event_bonus > 0:
+            embed.add_field(
+                name=f"💰 Event Bonus ({dm_mult}x)",
+                value=f"{var.CURRENCY_SYMBOL} {event_bonus:,}",
+                inline=True,
+            )
+        days_label = f"**{new_streak}** day{'s' if new_streak != 1 else ''}"
+        if new_streak == var.STREAK_BONUS_STARTS - 1:
+            days_label += " — bonus tomorrow!"
+        embed.add_field(name=f"{streak_emoji} Streak", value=days_label, inline=True)
+        embed.add_field(
+            name="New Balance",
+            value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}",
+            inline=False,
+        )
+        embed.set_footer(text=f"Resets in {hrs}h {mins}m · {var.SERVER_NAME}")
+        embed.timestamp = now
         await interaction.response.send_message(embed=embed)
 
     # ── /give ─────────────────────────────────────────────────────────────────
