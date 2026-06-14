@@ -20,10 +20,11 @@ CATEGORIES = [
     {
         "label":       "👤 User",
         "value":       "user",
-        "description": "Currency management — balance, daily, give, leaderboard",
+        "description": "Profile & currency — balance, stats, daily, give, leaderboard",
         "color":       var.COLOR_USER,
         "sections": [
             ("🏦 Bank",        "BankCog"),
+            ("📊 Stats",       "StatsCog"),
             ("🏆 Leaderboard", "LeaderboardCog"),
         ],
     },
@@ -74,6 +75,16 @@ CATEGORIES = [
         "sections": [
             ("🎰 Casino Events",    "CasinoEventCog"),
             ("💰 Multiplier Event", "MultiplierEventCog"),
+        ],
+    },
+    {
+        "label":       "⚔️ D&D",
+        "value":       "dnd",
+        "description": "D&D system — character creation, sheets, adventuring parties",
+        "color":       0x8E44AD,
+        "sections": [
+            ("📜 Character", "CharacterCog"),
+            ("🛡️ Parties",   "PartiesCog"),
         ],
     },
     {
