@@ -397,13 +397,13 @@ class BrokeBoy(commands.Cog):
                 "SELECT total_won, total_lost FROM casino_stats WHERE user_id=? AND guild_id=?",
                 (uid, gid),
             )
-            net_loss = (stats[0][1] - stats[0][0]) if stats else 0
+            net_pl = (stats[0][0] - stats[0][1]) if stats else 0   # total_won - total_lost
             await interaction.response.send_message(
                 embed=discord.Embed(
                     title="❌ Loan Too Large",
                     description=(
                         f"Your casino history allows up to **{var.CURRENCY_SYMBOL} {max_loan:,}**.\n"
-                        f"Net loss so far: **{var.CURRENCY_SYMBOL} {net_loss:,}**\n\n"
+                        f"Your net P&L: **{var.CURRENCY_SYMBOL} {net_pl:+,}**\n\n"
                         f"*Lose more to raise your credit limit. Classic.*"
                     ),
                     color=var.COLOR_ERROR,

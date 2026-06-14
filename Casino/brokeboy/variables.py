@@ -65,7 +65,7 @@ LOAN_NET_LOSS_DIVISOR = 2
 LOAN_REPAYMENT_RATE = 0.10
 
 # How often (seconds) the background task checks for repayments and deadlines.
-LOAN_CHECK_INTERVAL = 300   # 5 minutes
+LOAN_CHECK_INTERVAL = 30   # 30 seconds — keeps deductions feeling near-instant
 
 # Repayment deadline tiers: (max_loan_amount, days_to_repay)
 # Sorted ascending — first matching tier wins.
