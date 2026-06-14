@@ -16,7 +16,7 @@ Category/
 
 All three files are required. The `README.md` is displayed in the app to show users and contributors what the script does and how to configure it.
 
-Current categories: `Admin` · `Casino` · `Events` · `General` · `Quotes` · `User` · `Webhooks`
+Current categories: `Admin` · `Casino` · `DND` · `Events` · `General` · `Quotes` · `User` · `Webhooks`
 
 ---
 
