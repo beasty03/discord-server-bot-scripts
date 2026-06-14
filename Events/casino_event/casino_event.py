@@ -56,7 +56,16 @@ def _roulette_check(result: int, bet: str) -> tuple[bool, float]:
         case "black": return c == "black",                     2.0
         case "odd":   return result != 0 and result % 2 == 1,  2.0
         case "even":  return result != 0 and result % 2 == 0,  2.0
+    if isinstance(bet, str) and bet.startswith("number:"):
+        return result == int(bet.split(":")[1]), 36.0
     return False, 0.0
+
+def _display_bet(bet) -> str:
+    if not isinstance(bet, str) or not bet:
+        return ""
+    if bet.startswith("number:"):
+        return f"🎯 {bet.split(':')[1]}"
+    return bet
 
 def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = ""):
     result = random.randint(0, 36)
@@ -154,15 +163,50 @@ class _BetView(discord.ui.View):
         self.stop()
 
 
+class _RouletteNumberModal(discord.ui.Modal, title="Straight Up Number Bet"):
+    number_input = discord.ui.TextInput(
+        label="Pick a number (0–36)",
+        placeholder="e.g. 17",
+        min_length=1,
+        max_length=2,
+    )
+
+    def __init__(self, view: "_BetView"):
+        super().__init__()
+        self._view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.number_input.value.strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "Please enter a whole number between 0 and 36.", ephemeral=True
+            )
+            return
+        n = int(raw)
+        if not 0 <= n <= 36:
+            await interaction.response.send_message(
+                "Number must be between 0 and 36.", ephemeral=True
+            )
+            return
+        self._view.participants[self._view.uid]["bet"] = f"number:{n}"
+        self._view.stop()
+        await interaction.response.send_message(
+            f"✅ Straight Up bet set to **🎯 {n}** (35:1 payout)!", ephemeral=True
+        )
+
+
 class RouletteBetView(_BetView):
-    @discord.ui.button(label="🔴 Red",   style=discord.ButtonStyle.danger,    row=0)
-    async def red(self,   i: discord.Interaction, _b): await self._pick(i, "red")
-    @discord.ui.button(label="⚫ Black", style=discord.ButtonStyle.secondary, row=0)
-    async def black(self, i: discord.Interaction, _b): await self._pick(i, "black")
-    @discord.ui.button(label="Odd",      style=discord.ButtonStyle.primary,   row=1)
-    async def odd(self,   i: discord.Interaction, _b): await self._pick(i, "odd")
-    @discord.ui.button(label="Even",     style=discord.ButtonStyle.primary,   row=1)
-    async def even(self,  i: discord.Interaction, _b): await self._pick(i, "even")
+    @discord.ui.button(label="🔴 Red",             style=discord.ButtonStyle.danger,    row=0)
+    async def red(self,         i: discord.Interaction, _b): await self._pick(i, "red")
+    @discord.ui.button(label="⚫ Black",            style=discord.ButtonStyle.secondary, row=0)
+    async def black(self,       i: discord.Interaction, _b): await self._pick(i, "black")
+    @discord.ui.button(label="Odd",                 style=discord.ButtonStyle.primary,   row=1)
+    async def odd(self,         i: discord.Interaction, _b): await self._pick(i, "odd")
+    @discord.ui.button(label="Even",                style=discord.ButtonStyle.primary,   row=1)
+    async def even(self,        i: discord.Interaction, _b): await self._pick(i, "even")
+    @discord.ui.button(label="🎯 Straight Up (35:1)", style=discord.ButtonStyle.success, row=2)
+    async def straight_up(self, i: discord.Interaction, _b):
+        await i.response.send_modal(_RouletteNumberModal(self))
 
 
 class BaccaratBetView(_BetView):
@@ -302,7 +346,7 @@ class CasinoEventCog(commands.Cog):
                 name = user.display_name
             except Exception:
                 name = f"<@{uid}>"
-            bet_tag = f" `{bet}`" if isinstance(bet, str) and bet else ""
+            bet_tag = f" `{_display_bet(bet)}`" if _display_bet(bet) else ""
             lines.append(f"{emoji} **{name}**{bet_tag} → {delta_str}")
 
         dm_note      = f"\n💰 **{dm_mult}x** Double Money Event — all payouts boosted!" if dm_mult > 1.0 else ""
@@ -378,6 +422,19 @@ class CasinoEventCog(commands.Cog):
         game_id     = self._current_game["id"]
         default_bet = _DEFAULT_BETS.get(game_id, lambda: True)()
         self._participants[uid] = {"amount": wage, "bet": default_bet}
+
+        # Public announcement in the event channel
+        event_channel = self._get_event_channel()
+        if event_channel:
+            await event_channel.send(
+                embed=discord.Embed(
+                    description=(
+                        f"🎰 **{interaction.user.display_name}** joined the event "
+                        f"with {var.CURRENCY_SYMBOL} **{wage:,}** {var.CURRENCY_NAME}!"
+                    ),
+                    color=var.COLOR_WIN,
+                )
+            )
 
         join_window = cfg.get("join_window", var.JOIN_WINDOW)
 
