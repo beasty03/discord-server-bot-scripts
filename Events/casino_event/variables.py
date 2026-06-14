@@ -35,20 +35,27 @@ CASINO_GAMES = [
     {
         "id":          "roulette",
         "label":       "🎡 Roulette",
-        "description": "Bet on Red, Black, Odd, or Even — win **2×** your bet!",
+        "description": "Bet on Red, Black, Odd, or Even — winners split the pot!",
         "color":       0xE74C3C,
     },
     {
         "id":          "gamble",
         "label":       "🎲 Gamble",
-        "description": f"45% chance to double your coins!",
+        "description": "45% chance to win — winners split the house-doubled pot!",
         "color":       0xF1C40F,
+        "pot_mode":    True,
     },
     {
         "id":          "baccarat",
         "label":       "🃏 Baccarat",
-        "description": "Bet on Player, Banker, or Tie — closest to 9 wins!",
+        "description": "Bet on Player, Banker, or Tie — winners split the pot!",
         "color":       0x3498DB,
+    },
+    {
+        "id":          "horseracing",
+        "label":       "🏇 Horse Racing",
+        "description": "Pick a horse and hope it wins — winners split the pot!",
+        "color":       0xF1C40F,
     },
 ]
 

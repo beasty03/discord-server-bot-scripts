@@ -13,6 +13,11 @@ import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('ce_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
+
+_hr_spec = _ilu.spec_from_file_location('hr_variables', Path(__file__).parent.parent.parent / 'Casino' / 'horseracing' / 'variables.py')
+_hr_var = _ilu.module_from_spec(_hr_spec)
+_hr_spec.loader.exec_module(_hr_var)
+
 from forge_db import ForgeDB
 from utils.config_loader import load_config, save_config
 
@@ -57,6 +62,19 @@ def _record_event_stats(db, uid: str, gid: str, game_type: str, won: bool | None
 # Balance was already deducted at join time; resolvers only ADD winnings.
 # ============================================================================
 
+# ── Horse racing data (mirrors Casino/horseracing/horseracing.py) ─────────────
+_HORSES = _hr_var.HORSES
+
+def _hr_winner() -> int:
+    roll = random.randint(1, 100)
+    cumul = 0
+    for h in _HORSES:
+        cumul += h["chance"]
+        if roll <= cumul:
+            return h["id"]
+    return _HORSES[-1]["id"]
+
+# ── Roulette data ─────────────────────────────────────────────────────────────
 _RED = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 
 def _roulette_color(n: int) -> str:
@@ -74,6 +92,9 @@ def _roulette_check(result: int, bet: str) -> tuple[bool, float]:
     return False, 0.0
 
 def _display_bet(bet) -> str:
+    if isinstance(bet, int) and 1 <= bet <= 6:
+        h = _HORSES[bet - 1]
+        return f"{h['emoji']} {h['name']}"
     if not isinstance(bet, str) or not bet:
         return ""
     if bet.startswith("number:"):
@@ -81,24 +102,23 @@ def _display_bet(bet) -> str:
     return bet
 
 def resolve_roulette(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = "", prize_pool: int = 0):
-    result       = random.randint(0, 36)
-    emoji        = {"green": "🟢", "red": "🔴", "black": "⚫"}[_roulette_color(result)]
-    winner_uids  = [uid for uid, d in participants.items() if _roulette_check(result, d["bet"])[0]]
-    n_winners    = len(winner_uids)
-    rows         = []
+    result = random.randint(0, 36)
+    emoji  = {"green": "🟢", "red": "🔴", "black": "⚫"}[_roulette_color(result)]
+    rows   = []
     for uid, data in participants.items():
-        bet = data["bet"]
-        won, _ = _roulette_check(result, bet)
-        if won and n_winners:
-            share = int(prize_pool / n_winners)
+        amount = data["amount"]
+        bet    = data["bet"]
+        won, mult = _roulette_check(result, bet)
+        if won:
+            payout = int(amount * mult)
             if dm_mult > 1.0:
-                share = int(share * dm_mult)
-            db.update_balance(uid, gid, share, 'event_win')
+                payout = amount + int((payout - amount) * dm_mult)
+            db.update_balance(uid, gid, payout, 'event_win')
             if bot_uid:
-                _house_tx(db, bot_uid, gid, -share, 'house_payout')
-            rows.append((uid, f"+{share:,}", "✅", bet))
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
+            rows.append((uid, f"+{payout:,}", "✅", bet))
         else:
-            rows.append((uid, f"-{data['amount']:,}", "❌", bet))
+            rows.append((uid, f"-{amount:,}", "❌", bet))
     return f"{emoji} Ball landed on **{result}**", rows
 
 
@@ -128,50 +148,56 @@ def resolve_baccarat(participants: dict, db, gid: str, dm_mult: float = 1.0, bot
     pt      = _bhand()
     bt      = _bhand()
     outcome = "player" if pt > bt else ("banker" if bt > pt else "tie")
+    mult    = {"player": 2.0, "banker": 1.95, "tie": 9.0}
     rows    = []
-
-    if outcome == "tie":
-        # Push non-tie bettors, tie bettors split 9× their combined wager
-        tie_bettors = [(uid, d) for uid, d in participants.items() if d["bet"] == "tie"]
-        for uid, data in participants.items():
-            if data["bet"] != "tie":
-                db.update_balance(uid, gid, data["amount"], 'refund')
-                if bot_uid:
-                    _house_tx(db, bot_uid, gid, -data["amount"], 'house_refund')
-                rows.append((uid, "refund", "↩️", data["bet"]))
-        if tie_bettors:
-            tie_pot   = sum(d["amount"] for _, d in tie_bettors)
-            tie_prize = int(tie_pot * 9 / len(tie_bettors))
+    for uid, data in participants.items():
+        amount = data["amount"]
+        bet    = data["bet"]
+        if bet == outcome:
+            payout = int(amount * mult[bet])
             if dm_mult > 1.0:
-                tie_prize = int(tie_prize * dm_mult)
-            for uid, data in tie_bettors:
-                db.update_balance(uid, gid, tie_prize, 'event_win')
-                if bot_uid:
-                    _house_tx(db, bot_uid, gid, -tie_prize, 'house_payout')
-                rows.append((uid, f"+{tie_prize:,}", "✅", data["bet"]))
-    else:
-        winner_uids = [uid for uid, d in participants.items() if d["bet"] == outcome]
-        n_winners   = len(winner_uids)
-        for uid, data in participants.items():
-            if data["bet"] == outcome and n_winners:
-                share = int(prize_pool / n_winners)
-                if dm_mult > 1.0:
-                    share = int(share * dm_mult)
-                db.update_balance(uid, gid, share, 'event_win')
-                if bot_uid:
-                    _house_tx(db, bot_uid, gid, -share, 'house_payout')
-                rows.append((uid, f"+{share:,}", "✅", data["bet"]))
-            elif data["bet"] != outcome:
-                rows.append((uid, f"-{data['amount']:,}", "❌", data["bet"]))
-
+                payout = amount + int((payout - amount) * dm_mult)
+            db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
+            rows.append((uid, f"+{payout:,}", "✅", bet))
+        elif outcome == "tie" and bet != "tie":
+            db.update_balance(uid, gid, amount, 'refund')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -amount, 'house_refund')
+            rows.append((uid, "refund", "↩️", bet))
+        else:
+            rows.append((uid, f"-{amount:,}", "❌", bet))
     summary = f"👤 Player **{pt}** vs 🏦 Banker **{bt}** → {outcome.capitalize()} wins!"
     return summary, rows
 
 
+def resolve_horseracing(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = "", prize_pool: int = 0):
+    winner_id = _hr_winner()
+    winner    = _HORSES[winner_id - 1]
+    rows      = []
+    for uid, data in participants.items():
+        amount = data["amount"]
+        bet    = data["bet"]
+        h      = _HORSES[bet - 1] if isinstance(bet, int) and 1 <= bet <= 6 else winner
+        if bet == winner_id:
+            payout = amount * winner["odds"]
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
+            db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
+            rows.append((uid, f"+{payout:,}", "✅", f"{winner['emoji']} {winner['name']}"))
+        else:
+            rows.append((uid, f"-{amount:,}", "❌", f"{h['emoji']} {h['name']}"))
+    return f"🏆 **{winner['emoji']} {winner['name']}** wins the race!", rows
+
+
 RESOLVERS = {
-    "roulette": resolve_roulette,
-    "gamble":   resolve_gamble,
-    "baccarat": resolve_baccarat,
+    "roulette":    resolve_roulette,
+    "gamble":      resolve_gamble,
+    "baccarat":    resolve_baccarat,
+    "horseracing": resolve_horseracing,
 }
 
 # ============================================================================
@@ -184,12 +210,17 @@ class _BetView(discord.ui.View):
         self.participants = participants
         self.uid          = uid
 
-    async def _pick(self, interaction: discord.Interaction, bet: str):
+    async def _pick(self, interaction: discord.Interaction, bet):
         self.participants[self.uid]["bet"] = bet
         for item in self.children:
             item.disabled = True
+        if isinstance(bet, int) and 1 <= bet <= 6:
+            h       = _HORSES[bet - 1]
+            display = f"{h['emoji']} {h['name']}"
+        else:
+            display = str(bet)
         await interaction.response.edit_message(
-            content=f"✅ Bet updated to **{bet}**!", view=self,
+            content=f"✅ Bet updated to **{display}**!", view=self,
         )
         self.stop()
 
@@ -249,20 +280,37 @@ class BaccaratBetView(_BetView):
     async def tie(self,    i: discord.Interaction, _b): await self._pick(i, "tie")
 
 
+class HorseRacingEventView(_BetView):
+    @discord.ui.button(label="⚡ Thunder  (2:1)",  style=discord.ButtonStyle.primary,   row=0)
+    async def h1(self, i, _): await self._pick(i, 1)
+    @discord.ui.button(label="💧 Splash   (3:1)",  style=discord.ButtonStyle.primary,   row=0)
+    async def h2(self, i, _): await self._pick(i, 2)
+    @discord.ui.button(label="🔥 Blaze    (5:1)",  style=discord.ButtonStyle.primary,   row=0)
+    async def h3(self, i, _): await self._pick(i, 3)
+    @discord.ui.button(label="🍀 Lucky    (7:1)",  style=discord.ButtonStyle.success,   row=1)
+    async def h4(self, i, _): await self._pick(i, 4)
+    @discord.ui.button(label="🌙 Midnight (9:1)",  style=discord.ButtonStyle.success,   row=1)
+    async def h5(self, i, _): await self._pick(i, 5)
+    @discord.ui.button(label="⭐ Comet    (14:1)", style=discord.ButtonStyle.secondary, row=1)
+    async def h6(self, i, _): await self._pick(i, 6)
+
+
 _BET_VIEWS: dict[str, type[_BetView]] = {
-    "roulette": RouletteBetView,
-    "baccarat": BaccaratBetView,
+    "roulette":    RouletteBetView,
+    "baccarat":    BaccaratBetView,
+    "horseracing": HorseRacingEventView,
 }
 
 _DEFAULT_BETS: dict[str, callable] = {
-    "roulette": lambda: random.choice(["red", "black", "odd", "even"]),
-    "baccarat": lambda: random.choice(["player", "banker"]),
-    "gamble":   lambda: True,
+    "roulette":    lambda: random.choice(["red", "black", "odd", "even"]),
+    "baccarat":    lambda: random.choice(["player", "banker"]),
+    "gamble":      lambda: True,
+    "horseracing": lambda: random.randint(1, 6),
 }
 
 def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict) -> discord.Embed:
+    pot_mode         = game.get("pot_mode", False)
     total_player_pot = sum(d["amount"] for d in participants.values())
-    prize_pool       = total_player_pot * 2
     count            = len(participants)
     embed = discord.Embed(
         title=f"🎰 Casino Event: {game['label']}!",
@@ -273,9 +321,16 @@ def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict)
         ),
         color=game["color"],
     )
-    embed.add_field(name="👥 Players",    value=str(count),                                      inline=True)
-    embed.add_field(name="🏆 Prize Pool", value=f"{var.CURRENCY_SYMBOL} {prize_pool:,} *(house matched!)*" if count else f"{var.CURRENCY_SYMBOL} 0", inline=True)
-    embed.set_footer(text=f"{var.SERVER_NAME} · House doubles the pot!")
+    embed.add_field(name="👥 Players", value=str(count), inline=True)
+    if pot_mode:
+        prize_pool = total_player_pot * 2
+        pool_value = f"{var.CURRENCY_SYMBOL} {prize_pool:,} *(house matched!)*" if count else f"{var.CURRENCY_SYMBOL} 0"
+        embed.add_field(name="🏆 Prize Pool", value=pool_value, inline=True)
+        embed.set_footer(text=f"{var.SERVER_NAME} · House doubles the pot!")
+    else:
+        wagered_value = f"{var.CURRENCY_SYMBOL} {total_player_pot:,}" if count else f"{var.CURRENCY_SYMBOL} 0"
+        embed.add_field(name="💰 Total Wagered", value=wagered_value, inline=True)
+        embed.set_footer(text=f"{var.SERVER_NAME} · Winners paid at individual odds!")
     embed.timestamp = datetime.utcnow()
     return embed
 
@@ -398,8 +453,9 @@ class CasinoEventCog(commands.Cog):
             self.event_active = False
             return None
 
+        pot_mode         = game.get("pot_mode", False)
         total_player_pot = sum(d["amount"] for d in participants.values())
-        prize_pool       = total_player_pot * 2   # house doubles the pot
+        prize_pool       = total_player_pot * 2 if pot_mode else total_player_pot
 
         dm_mult          = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
         bot_uid          = str(self.bot.user.id) if self.bot.user else ""
@@ -420,10 +476,15 @@ class CasinoEventCog(commands.Cog):
             if emoji == "✅":
                 any_winner = True
 
-        sym      = var.CURRENCY_SYMBOL
-        pot_line = f"💰 **Prize Pool:** {sym} {prize_pool:,} *(house matched {sym} {total_player_pot:,})*\n\n"
-        if not any_winner:
-            pot_line += f"🏦 No winners — house claims {sym} {total_player_pot:,}!\n\n"
+        sym = var.CURRENCY_SYMBOL
+        if pot_mode:
+            pot_line = f"💰 **Prize Pool:** {sym} {prize_pool:,} *(house matched {sym} {total_player_pot:,})*\n\n"
+            if not any_winner:
+                pot_line += f"🏦 No winners — house claims {sym} {prize_pool:,}!\n\n"
+        else:
+            pot_line = f"💰 **Total Wagered:** {sym} {total_player_pot:,}\n\n"
+            if not any_winner:
+                pot_line += f"🏦 No winners — house keeps all bets!\n\n"
         dm_note      = f"\n💰 **{dm_mult}x** Double Money Event — all payouts boosted!" if dm_mult > 1.0 else ""
         result_embed = discord.Embed(
             title=f"🏆 Event Results: {game['label']}",
