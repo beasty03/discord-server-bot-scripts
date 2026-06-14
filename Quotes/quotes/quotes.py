@@ -121,18 +121,38 @@ class QuotesCog(commands.Cog):
                     except Exception:
                         pass
 
+            dm_embed = discord.Embed(
+                title="⏰ Quote Cancelled — No GIF Dropped",
+                description=(
+                    f"Your quote in **{channel.guild.name}** was removed because no GIF was "
+                    f"dropped within {var.GIF_TIMEOUT // 60} minutes.\n\n"
+                    f"**Quote info to resubmit:**\n"
+                    f"> {pending['text']}\n"
+                    f"**— {pending['quoted_uname']}**\n\n"
+                    f"Use `/quote` with the text above and drop a GIF right after!"
+                ),
+                color=var.COLOR_ERROR,
+            )
+            dm_sent = False
             try:
                 user = await self.bot.fetch_user(uid)
-                await user.send(embed=discord.Embed(
-                    description=(
-                        f"⏰ Your quote in **{channel.guild.name}** was cancelled "
-                        f"because no GIF was dropped within {var.GIF_TIMEOUT // 60} minutes.\n"
-                        f"Use `/quote` again whenever you're ready!"
-                    ),
-                    color=var.COLOR_ERROR,
-                ))
+                await user.send(embed=dm_embed)
+                dm_sent = True
+            except discord.Forbidden:
+                pass
             except Exception:
                 pass
+
+            if not dm_sent:
+                try:
+                    await channel.send(
+                        f"<@{uid}> Your quote was removed (no GIF dropped in time). "
+                        f"Enable DMs from server members so I can send you the quote info, "
+                        f"or use `/quote` again.",
+                        delete_after=60,
+                    )
+                except Exception:
+                    pass
 
         except asyncio.CancelledError:
             pass
