@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -87,6 +88,55 @@ class QuotesCog(commands.Cog):
         cid = _load_settings().get('quote_channel_id')
         return self.bot.get_channel(int(cid)) if cid else None
 
+    # ── Gif timeout task ──────────────────────────────────────────────────────
+
+    async def _gif_timeout_task(self, gid: str, embed_msg: discord.Message,
+                                channel: discord.TextChannel, uid: int):
+        try:
+            # Stage 1: public reminder after GIF_REMINDER_DELAY seconds
+            await asyncio.sleep(var.GIF_REMINDER_DELAY)
+            if gid not in self._pending:
+                return
+
+            try:
+                reminder = await channel.send(
+                    f"📸 <@{uid}> ⬆️ Don't forget to drop a GIF here to complete your quote!"
+                )
+                self._pending[gid]["reminder_msg"] = reminder
+            except Exception:
+                reminder = None
+
+            # Stage 2: cancel + DM after remaining time
+            remaining = max(0, var.GIF_TIMEOUT - var.GIF_REMINDER_DELAY)
+            await asyncio.sleep(remaining)
+            if gid not in self._pending:
+                return
+
+            pending = self._pending.pop(gid)
+
+            for msg in (embed_msg, pending.get("reminder_msg")):
+                if msg:
+                    try:
+                        await msg.delete()
+                    except Exception:
+                        pass
+
+            try:
+                user = await self.bot.fetch_user(uid)
+                await user.send(embed=discord.Embed(
+                    description=(
+                        f"⏰ Your quote in **{channel.guild.name}** was cancelled "
+                        f"because no GIF was dropped within {var.GIF_TIMEOUT // 60} minutes.\n"
+                        f"Use `/quote` again whenever you're ready!"
+                    ),
+                    color=var.COLOR_ERROR,
+                ))
+            except Exception:
+                pass
+
+        except asyncio.CancelledError:
+            pass
+
     # ── Gif listener ──────────────────────────────────────────────────────────
 
     async def _handle_gif_message(self, message: discord.Message):
@@ -100,6 +150,15 @@ class QuotesCog(commands.Cog):
             return
         if not _is_gif(message):
             return
+
+        # Cancel the timeout task and clean up the public reminder
+        if pending.get("task"):
+            pending["task"].cancel()
+        if pending.get("reminder_msg"):
+            try:
+                await pending["reminder_msg"].delete()
+            except Exception:
+                pass
 
         del self._pending[gid]
 
@@ -218,11 +277,21 @@ class QuotesCog(commands.Cog):
             "quoted_uname":  user.display_name,
             "quoted_avatar": str(user.display_avatar.url),
             "text":          quote,
+            "reminder_msg":  None,
+            "task":          None,
         }
+        task = asyncio.create_task(
+            self._gif_timeout_task(gid, msg, channel, interaction.user.id)
+        )
+        self._pending[gid]["task"] = task
 
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=f"✅ Quote posted! Now drop a gif in {channel.mention} to unlock the next quote.",
+                description=(
+                    f"✅ Quote posted in {channel.mention}!\n"
+                    f"Drop a GIF there now to complete it — "
+                    f"it'll be cancelled if no GIF is dropped within {var.GIF_TIMEOUT // 60} minutes."
+                ),
                 color=var.COLOR_WIN,
             ),
             ephemeral=True,
