@@ -691,14 +691,21 @@ class CasinoEventCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="set_casino_event_downtime", description="Set the random interval between casino events.")
+    @app_commands.command(name="set_event_downtime", description="Set the random interval between automatic events.")
     @app_commands.describe(
+        event="Which event type to configure",
         min_minutes="Minimum minutes between events",
         max_minutes="Maximum minutes between events",
     )
-    async def set_casino_event_downtime(
+    @app_commands.choices(event=[
+        app_commands.Choice(name="Casino",      value="casino"),
+        app_commands.Choice(name="Multiplier",  value="multiplier"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_event_downtime(
         self,
         interaction: discord.Interaction,
+        event: str,
         min_minutes: int,
         max_minutes: int,
     ):
@@ -714,28 +721,44 @@ class CasinoEventCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        data = _load_settings()
-        data["interval_min"] = min_minutes
-        data["interval_max"] = max_minutes
-        _save_settings(data)
 
-        # Restart the loop so the new interval takes effect immediately
-        # (only if no event is currently running — restarting mid-event would cut it short)
-        restarted = False
-        if not self.event_active:
-            if self._loop_task and not self._loop_task.done():
-                self._loop_task.cancel()
-            self._loop_task = asyncio.create_task(self._event_loop())
-            restarted = True
+        label = "Casino" if event == "casino" else "Multiplier"
 
-        note = (
-            f"Next event will fire in **{min_minutes}–{max_minutes} minutes**."
-            if restarted else
-            f"Takes effect after the current event ends."
-        )
+        if event == "casino":
+            data = _load_settings()
+            data["interval_min"] = min_minutes
+            data["interval_max"] = max_minutes
+            _save_settings(data)
+            restarted = False
+            if not self.event_active:
+                if self._loop_task and not self._loop_task.done():
+                    self._loop_task.cancel()
+                self._loop_task = asyncio.create_task(self._event_loop())
+                restarted = True
+            note = (
+                f"Next event will fire in **{min_minutes}–{max_minutes} minutes**."
+                if restarted else
+                "Takes effect after the current event ends."
+            )
+        else:
+            cog = self.bot.get_cog("MultiplierEventCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    embed=discord.Embed(description="❌ MultiplierEventCog is not loaded.", color=var.COLOR_ERROR),
+                    ephemeral=True,
+                )
+                return
+            cog.set_interval(min_minutes, max_minutes)
+            active = self.bot.multiplier_event_mult is not None
+            note = (
+                "Takes effect after the current event ends."
+                if active else
+                f"Next event will fire in **{min_minutes}–{max_minutes} minutes**."
+            )
+
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=f"✅ Event interval set to **{min_minutes}–{max_minutes} minutes**. {note}",
+                description=f"✅ **{label}** event interval set to **{min_minutes}–{max_minutes} minutes**. {note}",
                 color=var.COLOR_WIN,
             ),
             ephemeral=True,

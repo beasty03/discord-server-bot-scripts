@@ -16,6 +16,11 @@ MULTIPLIER_MAX = 2.0
 # ── Duration ──────────────────────────────────────────────────────────────────
 EVENT_DURATION = 300  # seconds (5 minutes)
 
+# ── Auto-loop interval ────────────────────────────────────────────────────────
+# A random interval is picked in [MIN, MAX] between automatic event fires.
+EVENT_INTERVAL_MIN = 30   # minutes
+EVENT_INTERVAL_MAX = 90   # minutes
+
 # ── Currency ──────────────────────────────────────────────────────────────────
 CURRENCY_NAME   = config.get("currency_name",   "coins")
 CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")

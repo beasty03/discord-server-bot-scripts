@@ -26,6 +26,7 @@ class MultiplierEventCog(commands.Cog):
         self.bot = bot
         self._settings: dict = self._load_settings()
         self._event_task: asyncio.Task | None = None
+        self._loop_task:  asyncio.Task | None = None
         if not hasattr(self.bot, 'multiplier_event_mult'):
             self.bot.multiplier_event_mult = None
 
@@ -49,6 +50,41 @@ class MultiplierEventCog(commands.Cog):
                 return ch
         cid = self._settings.get('event_channel_id') or var.EVENT_CHANNEL_ID
         return self.bot.get_channel(int(cid)) if cid else None
+
+    # ── Auto-loop ─────────────────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._event_loop())
+
+    def cog_unload(self):
+        if self._loop_task:
+            self._loop_task.cancel()
+        if self._event_task:
+            self._event_task.cancel()
+
+    async def _event_loop(self):
+        await self.bot.wait_until_ready()
+        while True:
+            min_m = self._settings.get("interval_min", var.EVENT_INTERVAL_MIN)
+            max_m = self._settings.get("interval_max", var.EVENT_INTERVAL_MAX)
+            wait  = random.randint(min_m, max_m)
+            log.info("MultiplierEvent: next event in %d minutes", wait)
+            await asyncio.sleep(wait * 60)
+            if self.bot.multiplier_event_mult is None:
+                multiplier = self._pick_multiplier()
+                self.bot.multiplier_event_mult = multiplier
+                self._start_task(multiplier)
+
+    def set_interval(self, min_minutes: int, max_minutes: int):
+        self._settings["interval_min"] = min_minutes
+        self._settings["interval_max"] = max_minutes
+        self._save_settings()
+        if not (self._event_task and not self._event_task.done()):
+            if self._loop_task and not self._loop_task.done():
+                self._loop_task.cancel()
+            self._loop_task = asyncio.create_task(self._event_loop())
 
     # ── Background event task ─────────────────────────────────────────────────
 
@@ -127,10 +163,6 @@ class MultiplierEventCog(commands.Cog):
         )
 
     # ── Commands ──────────────────────────────────────────────────────────────
-
-    @app_commands.command(name="start_multiplier_event", description="Start a Multiplier event — all earnings are boosted.")
-    async def start_event(self, interaction: discord.Interaction):
-        await self.start_from_startevent(interaction)
 
     @app_commands.command(name="stop_multiplier_event", description="Stop the active Multiplier event early.")
     async def stop_event(self, interaction: discord.Interaction):
