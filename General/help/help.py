@@ -80,11 +80,12 @@ CATEGORIES = [
     {
         "label":       "⚔️ D&D",
         "value":       "dnd",
-        "description": "D&D system — character creation, sheets, adventuring parties",
+        "description": "D&D system — character creation, sheets, parties, campaigns",
         "color":       0x8E44AD,
         "sections": [
             ("📜 Character", "CharacterCog"),
             ("🛡️ Parties",   "PartiesCog"),
+            ("🗺️ Campaign",  "CampaignCog"),
         ],
     },
     {
