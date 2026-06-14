@@ -254,7 +254,7 @@ class BlackjackView(discord.ui.View):
                 inline=False,
             )
 
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 
@@ -358,11 +358,11 @@ class BlackjackCog(commands.Cog):
             embed.add_field(name="Your Hand (21)",       value=format_hand(player_hand),             inline=False)
             embed.add_field(name=f"Dealer's Hand ({hand_value(dealer_hand)})", value=format_hand(dealer_hand), inline=False)
             embed.add_field(name="Bet",      value=f"{var.CURRENCY_SYMBOL} {amount:,}",   inline=True)
-            embed.add_field(name="Winnings", value=f"{var.CURRENCY_SYMBOL} {winnings:,}", inline=True)
+            embed.add_field(name="Profit", value=f"{var.CURRENCY_SYMBOL} {profit:,}", inline=True)
             if dm_mult > 1.0:
                 embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
-            embed.set_footer(text=f"Played by {interaction.user.display_name}")
+            embed.set_footer(text=f"Played by {interaction.user.display_name} · {var.SERVER_NAME}")
             embed.timestamp = datetime.utcnow()
             await interaction.response.send_message(embed=embed, ephemeral=True)
             if interaction.channel:

@@ -155,8 +155,8 @@ class SlotsCog(commands.Cog):
         embed.add_field(name="Result", value=result_txt, inline=False)
         if mult > 0 and dm_mult > 1.0:
             embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
-        embed.add_field(name="Balance", value=f"{sym} {new_balance:,}", inline=True)
-        embed.set_footer(text=f"{var.SERVER_NAME} Casino")
+        embed.add_field(name="New Balance", value=f"{sym} {new_balance:,} {var.CURRENCY_NAME}", inline=True)
+        embed.set_footer(text=f"Played by {interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
 
         await interaction.response.send_message(embed=embed, ephemeral=True)

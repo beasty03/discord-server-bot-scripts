@@ -46,7 +46,7 @@ HORSES = [
 ]
 
 BUTTON_TIMEOUT       = 60   # seconds to pick a horse after joining
-JOIN_WINDOW          = 45   # seconds the lobby stays open for new riders
+JOIN_WINDOW          = 90   # seconds the lobby stays open for new riders
 RACE_ANIMATION_DELAY = 2.5  # seconds between mid-race and final-result frames
 TRACK_LENGTH         = 12   # number of progress bar segments
 

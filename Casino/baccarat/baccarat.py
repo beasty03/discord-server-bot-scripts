@@ -215,7 +215,7 @@ class BaccaratView(discord.ui.View):
         bet_label = {"player": "👤 Player", "banker": "🏦 Banker", "tie": "🤝 Tie"}[chosen_bet]
         embed.add_field(name="Your Bet",    value=f"{bet_label} — {var.CURRENCY_SYMBOL} {self.bet:,}", inline=True)
         embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=True)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 

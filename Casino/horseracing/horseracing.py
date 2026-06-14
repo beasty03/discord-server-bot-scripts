@@ -85,6 +85,13 @@ class _Race:
 
 # ── Horse-picker view (ephemeral, per-user) ───────────────────────────────────
 
+_ROW_STYLES = (
+    discord.ButtonStyle.primary,
+    discord.ButtonStyle.success,
+    discord.ButtonStyle.secondary,
+)
+
+
 class HorsePickView(discord.ui.View):
     def __init__(self, cog: "HorseRacingCog", race: _Race, uid: str, amount: int, bot_uid: str, timeout: float):
         super().__init__(timeout=max(5.0, timeout))
@@ -94,6 +101,21 @@ class HorsePickView(discord.ui.View):
         self.amount  = amount
         self.bot_uid = bot_uid
         self.picked  = False
+        for i, h in enumerate(var.HORSES):
+            row   = i // 3
+            style = _ROW_STYLES[min(row, len(_ROW_STYLES) - 1)]
+            btn   = discord.ui.Button(
+                label=f"{h['emoji']} {h['name']} ({h['odds']}:1)",
+                style=style,
+                row=row,
+            )
+            btn.callback = self._make_callback(h)
+            self.add_item(btn)
+
+    def _make_callback(self, horse: dict):
+        async def _cb(interaction: discord.Interaction):
+            await self._pick(interaction, horse)
+        return _cb
 
     async def _pick(self, interaction: discord.Interaction, horse: dict):
         if str(interaction.user.id) != self.uid:
@@ -128,18 +150,6 @@ class HorsePickView(discord.ui.View):
             _house_tx(self.cog.db, self.bot_uid, gid, -self.amount, 'house_refund')
             self.race.participants.pop(self.uid, None)
 
-    @discord.ui.button(label="⚡ Thunder  (2:1)",   style=discord.ButtonStyle.primary,   row=0)
-    async def h1(self, i, _): await self._pick(i, var.HORSES[0])
-    @discord.ui.button(label="💧 Splash   (3:1)",   style=discord.ButtonStyle.primary,   row=0)
-    async def h2(self, i, _): await self._pick(i, var.HORSES[1])
-    @discord.ui.button(label="🔥 Blaze    (5:1)",   style=discord.ButtonStyle.primary,   row=0)
-    async def h3(self, i, _): await self._pick(i, var.HORSES[2])
-    @discord.ui.button(label="🍀 Lucky    (7:1)",   style=discord.ButtonStyle.success,   row=1)
-    async def h4(self, i, _): await self._pick(i, var.HORSES[3])
-    @discord.ui.button(label="🌙 Midnight (9:1)",   style=discord.ButtonStyle.success,   row=1)
-    async def h5(self, i, _): await self._pick(i, var.HORSES[4])
-    @discord.ui.button(label="⭐ Comet    (14:1)",  style=discord.ButtonStyle.secondary, row=1)
-    async def h6(self, i, _): await self._pick(i, var.HORSES[5])
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
 

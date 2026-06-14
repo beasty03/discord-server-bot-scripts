@@ -211,7 +211,7 @@ class RouletteView(discord.ui.View):
             embed.add_field(name="Lost",   value=f"{var.CURRENCY_SYMBOL} -{self.bet:,} {var.CURRENCY_NAME}", inline=False)
 
         embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 

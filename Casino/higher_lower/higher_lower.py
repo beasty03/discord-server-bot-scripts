@@ -196,7 +196,7 @@ class HigherLowerView(discord.ui.View):
             color=var.COLOR_PLAYING,
         )
         self._add_round_fields(embed)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 
@@ -210,7 +210,7 @@ class HigherLowerView(discord.ui.View):
             color=0xF1C40F,
         )
         self._add_round_fields(embed)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 
@@ -227,7 +227,7 @@ class HigherLowerView(discord.ui.View):
         )
         embed.add_field(name="Correct Guesses", value=str(self.correct_rounds), inline=True)
         embed.add_field(name="New Balance",     value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 
@@ -247,7 +247,7 @@ class HigherLowerView(discord.ui.View):
         if dm_mult > 1.0:
             embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
         embed.add_field(name="New Balance",  value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
-        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {self.original_interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         return embed
 

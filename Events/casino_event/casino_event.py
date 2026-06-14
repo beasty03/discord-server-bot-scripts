@@ -65,6 +65,12 @@ def _record_event_stats(db, uid: str, gid: str, game_type: str, won: bool | None
 # ── Horse racing data (mirrors Casino/horseracing/horseracing.py) ─────────────
 _HORSES = _hr_var.HORSES
 
+_ROW_STYLES = (
+    discord.ButtonStyle.primary,
+    discord.ButtonStyle.success,
+    discord.ButtonStyle.secondary,
+)
+
 def _hr_winner() -> int:
     roll = random.randint(1, 100)
     cumul = 0
@@ -281,18 +287,23 @@ class BaccaratBetView(_BetView):
 
 
 class HorseRacingEventView(_BetView):
-    @discord.ui.button(label="⚡ Thunder  (2:1)",  style=discord.ButtonStyle.primary,   row=0)
-    async def h1(self, i, _): await self._pick(i, 1)
-    @discord.ui.button(label="💧 Splash   (3:1)",  style=discord.ButtonStyle.primary,   row=0)
-    async def h2(self, i, _): await self._pick(i, 2)
-    @discord.ui.button(label="🔥 Blaze    (5:1)",  style=discord.ButtonStyle.primary,   row=0)
-    async def h3(self, i, _): await self._pick(i, 3)
-    @discord.ui.button(label="🍀 Lucky    (7:1)",  style=discord.ButtonStyle.success,   row=1)
-    async def h4(self, i, _): await self._pick(i, 4)
-    @discord.ui.button(label="🌙 Midnight (9:1)",  style=discord.ButtonStyle.success,   row=1)
-    async def h5(self, i, _): await self._pick(i, 5)
-    @discord.ui.button(label="⭐ Comet    (14:1)", style=discord.ButtonStyle.secondary, row=1)
-    async def h6(self, i, _): await self._pick(i, 6)
+    def __init__(self, participants: dict, uid: str, timeout: float):
+        super().__init__(participants, uid, timeout)
+        for i, h in enumerate(_HORSES):
+            row   = i // 3
+            style = _ROW_STYLES[min(row, len(_ROW_STYLES) - 1)]
+            btn   = discord.ui.Button(
+                label=f"{h['emoji']} {h['name']} ({h['odds']}:1)",
+                style=style,
+                row=row,
+            )
+            btn.callback = self._make_callback(h["id"])
+            self.add_item(btn)
+
+    def _make_callback(self, horse_id: int):
+        async def _cb(interaction: discord.Interaction):
+            await self._pick(interaction, horse_id)
+        return _cb
 
 
 _BET_VIEWS: dict[str, type[_BetView]] = {

@@ -120,6 +120,7 @@ class CrossyRoadView(discord.ui.View):
             _record_stats(self.cog.db, uid, gid, 0, self.bet)
             embed = self._build_embed(hit_lane=hit_lane)
             embed.description += f"\n\n💥 **WHAM!** You lost {sym} {self.bet:,}."
+            embed.set_footer(text=f"Played by {name} · {var.SERVER_NAME}")
             await interaction.response.edit_message(embed=embed, view=self)
             await interaction.channel.send(
                 f"🚗 **{name}** got hit by a car on lane {hit_lane} and lost "
@@ -145,7 +146,8 @@ class CrossyRoadView(discord.ui.View):
             if dm_mult > 1.0:
                 embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             new_balance = self.cog.db.get_balance(uid, gid)
-            embed.add_field(name="Balance", value=f"{sym} {new_balance:,}", inline=True)
+            embed.add_field(name="New Balance", value=f"{sym} {new_balance:,} {var.CURRENCY_NAME}", inline=True)
+            embed.set_footer(text=f"Played by {name} · {var.SERVER_NAME}")
 
             await interaction.response.edit_message(embed=embed, view=self)
 

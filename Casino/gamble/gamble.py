@@ -116,7 +116,7 @@ class GambleCog(commands.Cog):
             )
             embed.add_field(name="Roll",     value=f"{roll}/100",                       inline=True)
             embed.add_field(name="Bet",      value=f"{var.CURRENCY_SYMBOL} {amount:,}", inline=True)
-            embed.add_field(name="Winnings", value=f"{var.CURRENCY_SYMBOL} {profit:,}", inline=True)
+            embed.add_field(name="Profit", value=f"{var.CURRENCY_SYMBOL} {profit:,}", inline=True)
             if dm_mult > 1.0:
                 embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
@@ -135,7 +135,7 @@ class GambleCog(commands.Cog):
             embed.add_field(name="Win Chance",  value=f"{var.WIN_CHANCE}%",                    inline=True)
             embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_balance:,} {var.CURRENCY_NAME}", inline=False)
 
-        embed.set_footer(text=f"Requested by {interaction.user.display_name}")
+        embed.set_footer(text=f"Played by {interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
         if interaction.channel:
