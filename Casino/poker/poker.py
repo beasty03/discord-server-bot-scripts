@@ -64,18 +64,17 @@ def _eval_five(cards) -> tuple:
     ordered = [g[0] for g in groups]
     if is_straight and is_flush:
         return (9 if ranks[0] == 14 and not is_wheel else 8, tuple(ranks))
-    if freq[0] == 4:    return (7, tuple(ordered))
-    if freq[:2] == [3, 2]: return (6, tuple(ordered))
-    if is_flush:        return (5, tuple(ranks))
-    if is_straight:     return (4, tuple(ranks))
-    if freq[0] == 3:    return (3, tuple(ordered))
-    if freq[:2] == [2, 2]: return (2, tuple(ordered))
-    if freq[0] == 2:    return (1, tuple(ordered))
+    if freq[0] == 4:         return (7, tuple(ordered))
+    if freq[:2] == [3, 2]:   return (6, tuple(ordered))
+    if is_flush:             return (5, tuple(ranks))
+    if is_straight:          return (4, tuple(ranks))
+    if freq[0] == 3:         return (3, tuple(ordered))
+    if freq[:2] == [2, 2]:   return (2, tuple(ordered))
+    if freq[0] == 2:         return (1, tuple(ordered))
     return (0, tuple(ranks))
 
 
 def best_hand(all_cards: list) -> tuple:
-    """Given 5–7 cards, return (rank_int, tiebreak, hand_name, best_5_list)."""
     if len(all_cards) < 5:
         return (0, (0,), 'High Card', list(all_cards))
     best_score = None
@@ -109,6 +108,33 @@ def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
 def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
     db.ensure_user(bot_uid, gid, "House")
     db.update_balance(bot_uid, gid, amount, tx_type)
+
+
+# ── "See my cards" view — attached to each phase message ─────────────────────
+
+class _CardsView(discord.ui.View):
+    """Single ephemeral-button view that lets any player peek at their hole cards."""
+
+    def __init__(self, player_uids: set, holes: dict, timeout: float = 600.0):
+        super().__init__(timeout=timeout)
+        self.player_uids = set(player_uids)
+        self.holes       = holes
+
+    @discord.ui.button(label="🃏 My Cards", style=discord.ButtonStyle.secondary)
+    async def cards_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.player_uids:
+            await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
+            return
+        cards = self.holes.get(uid, [])
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🃏 Your Hole Cards",
+                description=f"**{_hand_str(cards)}**",
+                color=var.COLOR_INFO,
+            ),
+            ephemeral=True,
+        )
 
 
 # ── Join view ─────────────────────────────────────────────────────────────────
@@ -222,30 +248,27 @@ class _JoinView(discord.ui.View):
 # ── Pre-flop view ─────────────────────────────────────────────────────────────
 
 class _PreFlopView(discord.ui.View):
-    """Check / Fold buttons shown on the public message before cards are revealed."""
+    """Check / Fold / My Cards buttons shown on the public message before community cards."""
 
-    def __init__(self, player_uids: set, timeout: float):
+    def __init__(self, player_uids: set, holes: dict, timeout: float):
         super().__init__(timeout=timeout)
         self.player_uids = set(player_uids)
+        self.holes       = holes
         self.checked: set[str] = set()
         self.folded:  set[str] = set()
 
     def _acted(self) -> int:
         return len(self.checked) + len(self.folded)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        uid = str(interaction.user.id)
-        if uid not in self.player_uids:
-            await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
-            return False
-        if uid in self.checked or uid in self.folded:
-            await interaction.response.send_message("✅ You've already made your decision.", ephemeral=True)
-            return False
-        return True
-
     @discord.ui.button(label="✅ Check — Stay In", style=discord.ButtonStyle.success)
     async def check_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
+        if uid not in self.player_uids:
+            await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
+            return
+        if uid in self.checked or uid in self.folded:
+            await interaction.response.send_message("✅ You've already made your decision.", ephemeral=True)
+            return
         self.checked.add(uid)
         await interaction.response.send_message("✅ You stay in — good luck!", ephemeral=True)
         if self._acted() >= len(self.player_uids):
@@ -254,7 +277,12 @@ class _PreFlopView(discord.ui.View):
     @discord.ui.button(label="❌ Fold — Lose Ante", style=discord.ButtonStyle.danger)
     async def fold_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = str(interaction.user.id)
-        # Prevent folding if you'd be the last player standing
+        if uid not in self.player_uids:
+            await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
+            return
+        if uid in self.checked or uid in self.folded:
+            await interaction.response.send_message("✅ You've already made your decision.", ephemeral=True)
+            return
         remaining = len(self.player_uids) - len(self.folded)
         if remaining <= 1:
             await interaction.response.send_message(
@@ -268,8 +296,23 @@ class _PreFlopView(discord.ui.View):
         if self._acted() >= len(self.player_uids):
             self.stop()
 
+    @discord.ui.button(label="🃏 My Cards", style=discord.ButtonStyle.secondary)
+    async def cards_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.player_uids:
+            await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
+            return
+        cards = self.holes.get(uid, [])
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🃏 Your Hole Cards",
+                description=f"**{_hand_str(cards)}**",
+                color=var.COLOR_INFO,
+            ),
+            ephemeral=True,
+        )
+
     async def on_timeout(self):
-        # Auto-check anyone who didn't act (don't auto-fold)
         for uid in self.player_uids:
             if uid not in self.checked and uid not in self.folded:
                 self.checked.add(uid)
@@ -282,7 +325,7 @@ class PokerCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot     = bot
         self.db      = ForgeDB.get()
-        self._active: set[str] = set()   # guild_ids with active game
+        self._active: set[str] = set()
 
     @app_commands.command(
         name="poker",
@@ -339,7 +382,7 @@ class PokerCog(commands.Cog):
         self._active.add(gid)
 
         view = _JoinView(self, uid, gid, ante, interaction.channel)
-        view.players[uid] = interaction.user.display_name   # host auto-joins
+        view.players[uid] = interaction.user.display_name
 
         embed = discord.Embed(
             title="🃏 Poker — Join the Table!",
@@ -401,37 +444,18 @@ class PokerCog(commands.Cog):
         holes     = {uid: [deck.pop(), deck.pop()] for uid in uids}
         community = [deck.pop() for _ in range(5)]
 
-        # DM hole cards
-        dm_failed: set[str] = set()
-        for uid, cards in holes.items():
-            try:
-                user = await self.bot.fetch_user(int(uid))
-                embed = discord.Embed(
-                    title="🃏 Your Hole Cards",
-                    description=f"**{_hand_str(cards)}**\n\nCheck the game in {channel.mention}!",
-                    color=var.COLOR_INFO,
-                )
-                embed.set_footer(text=f"Poker · {channel.guild.name}")
-                await user.send(embed=embed)
-            except Exception:
-                dm_failed.add(uid)
-
-        # Pre-flop decision
-        dm_note = ""
-        if dm_failed:
-            failed_names = ", ".join(players[u] for u in dm_failed)
-            dm_note = f"\n⚠️ Could not DM: **{failed_names}** — they auto-check."
+        # Pre-flop: Check / Fold / My Cards
         preflop_embed = discord.Embed(
             title="🃏 Pre-Flop — Check or Fold?",
             description=(
                 f"**Pot:** {var.CURRENCY_SYMBOL} **{pot:,}** · **{len(uids)} players**\n"
-                f"Cards have been sent to your DMs! "
-                f"You have **{var.PREFLOP_TIMEOUT}s** to decide.{dm_note}"
+                f"Press **🃏 My Cards** to see your hole cards privately.\n"
+                f"You have **{var.PREFLOP_TIMEOUT}s** to decide."
             ),
             color=var.COLOR_FLOP,
         )
         preflop_embed.set_footer(text=f"{var.SERVER_NAME} · No response = auto-check")
-        pf_view = _PreFlopView(set(uids), float(var.PREFLOP_TIMEOUT))
+        pf_view = _PreFlopView(set(uids), holes, float(var.PREFLOP_TIMEOUT))
         try:
             await msg.edit(embed=preflop_embed, view=pf_view)
         except Exception:
@@ -440,7 +464,6 @@ class PokerCog(commands.Cog):
 
         remaining = {uid: name for uid, name in players.items() if uid not in pf_view.folded}
 
-        # If all folded (shouldn't happen due to guard in view)
         if not remaining:
             for uid in uids:
                 db.update_balance(uid, gid, ante, 'refund')
@@ -450,7 +473,7 @@ class PokerCog(commands.Cog):
             ))
             return
 
-        # One player left — they win the whole pot
+        # One player left after folds
         if len(remaining) == 1:
             w_uid, w_name = next(iter(remaining.items()))
             db.update_balance(w_uid, gid, pot, 'poker_win')
@@ -473,7 +496,8 @@ class PokerCog(commands.Cog):
                 await channel.send(embed=embed)
             return
 
-        # Reveal community cards
+        # Reveal community cards — each message includes a "My Cards" button
+        remaining_uids = set(remaining.keys())
         flop   = community[:3]
         turn_c = community[3]
         river  = community[4]
@@ -490,7 +514,7 @@ class PokerCog(commands.Cog):
         )
         flop_embed.set_footer(text=var.SERVER_NAME)
         try:
-            await msg.edit(embed=flop_embed, view=None)
+            await msg.edit(embed=flop_embed, view=_CardsView(remaining_uids, holes))
         except Exception:
             pass
         await asyncio.sleep(var.REVEAL_DELAY)
@@ -505,7 +529,7 @@ class PokerCog(commands.Cog):
             ),
             color=var.COLOR_TURN,
         )
-        await channel.send(embed=turn_embed)
+        await channel.send(embed=turn_embed, view=_CardsView(remaining_uids, holes))
         await asyncio.sleep(var.REVEAL_DELAY)
 
         # RIVER
@@ -518,10 +542,10 @@ class PokerCog(commands.Cog):
             ),
             color=var.COLOR_RIVER,
         )
-        await channel.send(embed=river_embed)
+        await channel.send(embed=river_embed, view=_CardsView(remaining_uids, holes))
         await asyncio.sleep(var.REVEAL_DELAY)
 
-        # SHOWDOWN — evaluate hands
+        # SHOWDOWN
         results = []
         for uid, name in remaining.items():
             rank_int, tiebreak, hand_name, best_5 = best_hand(holes[uid] + all_comm)
@@ -535,7 +559,6 @@ class PokerCog(commands.Cog):
         winners    = [r for r in results if r['score'] == best_score]
         losers     = [r for r in results if r['score'] != best_score]
 
-        # Pay
         split    = pot // len(winners)
         leftover = pot % len(winners)
         dm_mult  = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
@@ -551,7 +574,6 @@ class PokerCog(commands.Cog):
         for uid in pf_view.folded:
             _record_stats(db, uid, gid, 0, ante)
 
-        # Build showdown embed
         showdown = discord.Embed(title="🃏 Showdown!", color=var.COLOR_WIN)
         showdown.add_field(
             name="Community Cards",
