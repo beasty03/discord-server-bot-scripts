@@ -38,18 +38,6 @@ def _track(positions: list[int], winner_id: int = -1) -> str:
     return "\n".join(lines)
 
 
-def _mid_positions(winner_id: int) -> list[int]:
-    mid = var.TRACK_LENGTH // 2
-    pos = [random.randint(max(1, mid - 3), mid + 1) for _ in range(6)]
-    pos[winner_id - 1] = random.randint(mid + 1, mid + 3)
-    return pos
-
-
-def _final_positions(winner_id: int) -> list[int]:
-    pos = [random.randint(var.TRACK_LENGTH - 7, var.TRACK_LENGTH - 1) for _ in range(6)]
-    pos[winner_id - 1] = var.TRACK_LENGTH
-    return pos
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _record_stats(db, uid, gid, won=0, lost=0):
@@ -131,12 +119,15 @@ class HorsePickView(discord.ui.View):
 
         self.race.participants[self.uid]["horse_id"] = horse["id"]
 
+        secs_left = max(0, int(self.race.end_ts - time.time()))
+        timer_line = "🏁 Race in progress!" if secs_left == 0 else f"⏱️ Race starts in ~{secs_left}s"
+
         await interaction.response.edit_message(
             embed=discord.Embed(
                 description=(
                     f"✅ You're riding **{horse['emoji']} {horse['name']}** ({horse['odds']}:1)!\n"
                     f"Bet: {var.CURRENCY_SYMBOL} **{self.amount:,}**\n\n"
-                    f"⏱️ Race starts <t:{self.race.end_ts}:R> — good luck! 🍀"
+                    f"{timer_line} — good luck! 🍀"
                 ),
                 color=var.COLOR_INFO,
             ),
@@ -186,19 +177,45 @@ class HorseRacingCog(commands.Cog):
         bot_uid   = str(self.bot.user.id) if self.bot.user else ""
         dm_mult   = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
 
-        # Frame 1 — mid-race
-        mid_embed = discord.Embed(
-            title="🏇 Mid-Race!",
-            description=_track(_mid_positions(winner_id)),
-            color=var.COLOR_PLAYING,
-        )
-        mid_embed.set_footer(text=f"{var.SERVER_NAME} · And they're off!")
-        mid_embed.timestamp = datetime.utcnow()
-        await race.msg.edit(embed=mid_embed)
-        await asyncio.sleep(var.RACE_ANIMATION_DELAY)
+        TRACK = var.TRACK_LENGTH
+        step_delay = var.RACE_ANIMATION_DELAY / TRACK
 
-        # Frame 2 — final result + payouts
-        final_pos    = _final_positions(winner_id)
+        # Pre-generate final positions: winner at TRACK, others fall short
+        final_pos = [random.randint(max(1, TRACK - 4), TRACK - 1) for _ in range(6)]
+        final_pos[winner_id - 1] = TRACK
+
+        # Build linear paths per horse: position at each of TRACK steps
+        paths = []
+        for i in range(6):
+            fp = final_pos[i]
+            paths.append([int(fp * (s + 1) / TRACK) for s in range(TRACK)])
+
+        # Animate step by step — each segment takes step_delay seconds
+        for step in range(TRACK):
+            is_last = step == TRACK - 1
+            positions = [paths[i][step] for i in range(6)]
+
+            if is_last:
+                embed = discord.Embed(
+                    title=f"🏆 {winner['emoji']} {winner['name']} crosses the finish line!",
+                    description=_track(positions, winner_id),
+                    color=var.COLOR_WIN,
+                )
+            else:
+                embed = discord.Embed(
+                    title="🏇 Race in Progress...",
+                    description=_track(positions),
+                    color=var.COLOR_PLAYING,
+                )
+            embed.timestamp = datetime.utcnow()
+            await race.msg.edit(embed=embed)
+
+            if not is_last:
+                await asyncio.sleep(step_delay)
+
+        # Brief pause, then show full results with payouts
+        await asyncio.sleep(1.5)
+
         result_lines = []
         for uid, data in participants.items():
             amount   = data["amount"]

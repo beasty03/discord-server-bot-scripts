@@ -30,7 +30,7 @@ CATEGORIES = [
     {
         "label":       "🎰 Casino",
         "value":       "casino",
-        "description": "Gambling games — Gamble, Blackjack, Roulette, Slots, Baccarat, Horse Racing, Coin Flip, RPS, Poker & more",
+        "description": "Gambling games — Blackjack, Roulette, Slots, Horse Racing, Coin Flip, RPS, Poker & more",
         "color":       var.COLOR_CASINO,
         "sections": [
             ("🎲 Gamble",          "GambleCog"),

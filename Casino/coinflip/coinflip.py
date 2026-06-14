@@ -1,16 +1,17 @@
 import asyncio
+import importlib.util as _ilu
 import random
 import time
 from datetime import datetime
 from pathlib import Path
-import sys
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-sys.path.insert(0, str(Path(__file__).parent))
-import variables as var
+_spec = _ilu.spec_from_file_location('coinflip_variables', Path(__file__).parent / 'variables.py')
+var = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
 
