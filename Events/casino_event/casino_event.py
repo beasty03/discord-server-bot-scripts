@@ -14,9 +14,16 @@ _spec = _ilu.spec_from_file_location('ce_variables', Path(__file__).parent / 'va
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 
-_hr_spec = _ilu.spec_from_file_location('hr_variables', Path(__file__).parent.parent.parent / 'Casino' / 'horseracing' / 'variables.py')
-_hr_var = _ilu.module_from_spec(_hr_spec)
-_hr_spec.loader.exec_module(_hr_var)
+try:
+    _hr_spec = _ilu.spec_from_file_location(
+        'hr_variables',
+        Path(__file__).parent.parent.parent / 'Casino' / 'horseracing' / 'variables.py',
+    )
+    _hr_var = _ilu.module_from_spec(_hr_spec)
+    _hr_spec.loader.exec_module(_hr_var)
+    _HORSES_FROM_VAR = _hr_var.HORSES
+except Exception:
+    _HORSES_FROM_VAR = None
 
 from forge_db import ForgeDB
 from utils.config_loader import load_config, save_config
@@ -62,8 +69,15 @@ def _record_event_stats(db, uid: str, gid: str, game_type: str, won: bool | None
 # Balance was already deducted at join time; resolvers only ADD winnings.
 # ============================================================================
 
-# ── Horse racing data (mirrors Casino/horseracing/horseracing.py) ─────────────
-_HORSES = _hr_var.HORSES
+# ── Horse racing data — loaded from Casino/horseracing/variables.py if available
+_HORSES = _HORSES_FROM_VAR or [
+    {"id": 1, "name": "Thunder",  "emoji": "⚡", "odds": 2,  "chance": 34},
+    {"id": 2, "name": "Splash",   "emoji": "💧", "odds": 3,  "chance": 26},
+    {"id": 3, "name": "Blaze",    "emoji": "🔥", "odds": 5,  "chance": 18},
+    {"id": 4, "name": "Lucky",    "emoji": "🍀", "odds": 7,  "chance": 12},
+    {"id": 5, "name": "Midnight", "emoji": "🌙", "odds": 9,  "chance":  7},
+    {"id": 6, "name": "Comet",    "emoji": "⭐", "odds": 14, "chance":  3},
+]
 
 _ROW_STYLES = (
     discord.ButtonStyle.primary,
