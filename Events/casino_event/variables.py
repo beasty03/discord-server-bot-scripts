@@ -57,7 +57,17 @@ CASINO_GAMES = [
         "description": "Pick a horse and hope it wins — winners split the pot!",
         "color":       0xF1C40F,
     },
+    {
+        "id":          "poker",
+        "label":       "🃏 Poker",
+        "description": "Texas Hold'em — best hand wins the house-doubled pot! (min 3 players)",
+        "color":       0x9B59B6,
+        "pot_mode":    True,
+    },
 ]
+
+# ── Poker event settings ──────────────────────────────────────────────────────
+POKER_EVENT_MIN_PLAYERS = 3   # minimum players needed to run a poker event
 
 # ── Embed colors ──────────────────────────────────────────────────────────────
 COLOR_WIN   = 0x57F287

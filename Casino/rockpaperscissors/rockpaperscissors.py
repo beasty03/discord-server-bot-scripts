@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -197,15 +198,16 @@ class _PvPChallengeView(discord.ui.View):
         _house_tx(db, str(self.cog.bot.user.id), self.gid, self.amount, 'pvp_hold')
 
         # Switch to pick view
-        pick_view = _PvPPickView(
+        pick_view   = _PvPPickView(
             self.cog, self.challenger, self.challengee, self.amount, self.gid
         )
+        pick_end_ts = int(time.time()) + var.PICK_TIMEOUT
         embed = discord.Embed(
             title="✂️ Rock Paper Scissors — Pick your move!",
             description=(
-                f"Both players have **{var.PICK_TIMEOUT} seconds** to choose.\n"
-                f"Your pick is hidden until both players have chosen.\n\n"
-                f"**Pot:** {var.CURRENCY_SYMBOL} **{self.amount * 2:,}** {var.CURRENCY_NAME}"
+                f"Your pick is hidden until both players have chosen.\n"
+                f"**Pot:** {var.CURRENCY_SYMBOL} **{self.amount * 2:,}** {var.CURRENCY_NAME}\n"
+                f"Picks close <t:{pick_end_ts}:R>"
             ),
             color=var.COLOR_INFO,
         )
@@ -213,6 +215,7 @@ class _PvPChallengeView(discord.ui.View):
         embed.add_field(name=self.challengee.display_name, value="⏳ Picking…", inline=True)
         embed.set_footer(text=f"{self.challenger.display_name} vs {self.challengee.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
+        pick_view.pick_end_ts = pick_end_ts
         await interaction.response.edit_message(embed=embed, view=pick_view)
         pick_view.message = interaction.message
 
@@ -245,7 +248,7 @@ class _PvPChallengeView(discord.ui.View):
             try:
                 embed = discord.Embed(
                     description=(
-                        f"⏰ **{self.challengee.display_name}** didn't respond in time.\n"
+                        f"⏰ Challenge expired — **{self.challengee.display_name}** didn't respond.\n"
                         f"{var.CURRENCY_SYMBOL} **{self.amount:,}** refunded to {self.challenger.mention}."
                     ),
                     color=var.COLOR_ERROR,
@@ -320,16 +323,18 @@ class _PvPPickView(discord.ui.View):
         """Refresh the public message to show which players have picked (not what)."""
         if not self.message:
             return
-        c_uid = str(self.challenger.id)
-        e_uid = str(self.challengee.id)
-        c_status = "✅ Ready!" if c_uid in self.picks else "⏳ Picking…"
-        e_status = "✅ Ready!" if e_uid in self.picks else "⏳ Picking…"
+        c_uid     = str(self.challenger.id)
+        e_uid     = str(self.challengee.id)
+        c_status  = "✅ Ready!" if c_uid in self.picks else "⏳ Picking…"
+        e_status  = "✅ Ready!" if e_uid in self.picks else "⏳ Picking…"
+        end_ts    = getattr(self, 'pick_end_ts', 0)
+        timer_str = f"\nPicks close <t:{end_ts}:R>" if end_ts else ""
         embed = discord.Embed(
             title="✂️ Rock Paper Scissors — Pick your move!",
             description=(
-                f"Both players have **{var.PICK_TIMEOUT} seconds** to choose.\n"
-                f"Your pick is hidden until both players have chosen.\n\n"
+                f"Your pick is hidden until both players have chosen.\n"
                 f"**Pot:** {var.CURRENCY_SYMBOL} **{self.amount * 2:,}** {var.CURRENCY_NAME}"
+                f"{timer_str}"
             ),
             color=var.COLOR_INFO,
         )
@@ -507,13 +512,14 @@ class RPSCog(commands.Cog):
         _house_tx(self.db, bot_uid, gid, amount, 'pvp_hold')
 
         view = _PvPChallengeView(self, interaction.user, target, amount, gid)
-        embed = discord.Embed(
+        end_ts = int(time.time()) + var.CHALLENGE_TIMEOUT
+        embed  = discord.Embed(
             title="✂️ Rock Paper Scissors Challenge!",
             description=(
                 f"{target.mention}, **{interaction.user.display_name}** challenges you to RPS!\n\n"
                 f"**Bet:** {var.CURRENCY_SYMBOL} **{amount:,}** {var.CURRENCY_NAME} each\n"
                 f"**Winner takes:** {var.CURRENCY_SYMBOL} **{amount * 2:,}**\n\n"
-                f"You have **{var.CHALLENGE_TIMEOUT} seconds** to accept or decline."
+                f"Expires <t:{end_ts}:R>"
             ),
             color=var.COLOR_INFO,
         )

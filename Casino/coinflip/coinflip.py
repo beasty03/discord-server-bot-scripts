@@ -1,5 +1,6 @@
 import asyncio
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -35,9 +36,8 @@ def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
 
 
 def _validate_bet(db, uid: str, gid: str, amount: int):
-    """Returns an error string or None if the bet is valid."""
     if amount <= 0:
-        return var.MESSAGE_INVALID_BET
+        return "Please enter a valid bet amount."
     if amount < var.MIN_BET:
         return f"Minimum bet is {var.CURRENCY_SYMBOL} **{var.MIN_BET:,}** {var.CURRENCY_NAME}."
     if var.MAX_BET > 0 and amount > var.MAX_BET:
@@ -46,6 +46,106 @@ def _validate_bet(db, uid: str, gid: str, amount: int):
     if balance < amount:
         return f"You only have {var.CURRENCY_SYMBOL} **{balance:,}** {var.CURRENCY_NAME}."
     return None
+
+
+# ── vs-bot choice view ────────────────────────────────────────────────────────
+
+class _BotChoiceView(discord.ui.View):
+    """Heads / Tails pick buttons for the vs-bot game (ephemeral)."""
+
+    def __init__(self, cog: "CoinFlipCog", uid: str, gid: str, amount: int):
+        super().__init__(timeout=30.0)
+        self.cog    = cog
+        self.uid    = uid
+        self.gid    = gid
+        self.amount = amount
+        self.done   = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) != self.uid:
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
+            return False
+        if self.done:
+            return False
+        return True
+
+    @discord.ui.button(label="🪙 Heads", style=discord.ButtonStyle.primary)
+    async def heads(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "heads")
+
+    @discord.ui.button(label="🌑 Tails", style=discord.ButtonStyle.secondary)
+    async def tails(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._resolve(interaction, "tails")
+
+    async def _resolve(self, interaction: discord.Interaction, pick: str):
+        self.done = True
+        self.stop()
+
+        db      = self.cog.db
+        bot_uid = str(self.cog.bot.user.id)
+        name    = interaction.user.display_name
+        dm_mult = getattr(self.cog.bot, 'multiplier_event_mult', None) or 1.0
+
+        # 48 % win chance — if player wins, coin shows their pick; otherwise shows opposite
+        player_wins  = random.randint(1, 100) <= var.WIN_CHANCE
+        coin_result  = pick if player_wins else ("tails" if pick == "heads" else "heads")
+        coin_display = "🪙 Heads" if coin_result == "heads" else "🌑 Tails"
+        pick_display = "🪙 Heads" if pick == "heads" else "🌑 Tails"
+
+        # Show flip animation
+        for item in self.children:
+            item.disabled = True
+        flip_embed = discord.Embed(
+            title="🪙 Flipping…",
+            description=f"You picked **{pick_display}** — coin is in the air!",
+            color=0xF1C40F,
+        )
+        await interaction.response.edit_message(embed=flip_embed, view=self)
+        await asyncio.sleep(1.5)
+
+        if player_wins:
+            profit = int(self.amount * (var.WIN_MULTIPLIER - 1))
+            if dm_mult > 1.0:
+                profit = int(profit * dm_mult)
+            db.update_balance(self.uid, self.gid, profit, 'win')
+            _house_tx(db, bot_uid, self.gid, -profit, 'house_payout')
+            _record_stats(db, self.uid, self.gid, profit, 0)
+            new_bal = db.get_balance(self.uid, self.gid)
+            embed = discord.Embed(title=f"🎉 You Won! — {coin_display}", color=var.COLOR_WIN)
+            embed.add_field(name="Your Pick",   value=pick_display,                                inline=True)
+            embed.add_field(name="Bet",         value=f"{var.CURRENCY_SYMBOL} {self.amount:,}",   inline=True)
+            embed.add_field(name="Profit",      value=f"{var.CURRENCY_SYMBOL} {profit:,}",        inline=True)
+            embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_bal:,} {var.CURRENCY_NAME}", inline=False)
+            if dm_mult > 1.0:
+                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
+            pub_desc = f"🪙 **{name}** won {var.CURRENCY_SYMBOL} **{profit:,}** on Coin Flip!"
+            if dm_mult > 1.0:
+                pub_desc += f" *(💰 {dm_mult}x event!)*"
+        else:
+            db.update_balance(self.uid, self.gid, -self.amount, 'loss')
+            _house_tx(db, bot_uid, self.gid, self.amount, 'house_gain')
+            _record_stats(db, self.uid, self.gid, 0, self.amount)
+            new_bal = db.get_balance(self.uid, self.gid)
+            embed = discord.Embed(title=f"💸 You Lost! — {coin_display}", color=var.COLOR_LOSE)
+            embed.add_field(name="Your Pick",   value=pick_display,                                inline=True)
+            embed.add_field(name="Bet",         value=f"{var.CURRENCY_SYMBOL} {self.amount:,}",   inline=True)
+            embed.add_field(name="Chance",      value=f"{var.WIN_CHANCE}%",                        inline=True)
+            embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_bal:,} {var.CURRENCY_NAME}", inline=False)
+            pub_desc = f"🪙 **{name}** lost {var.CURRENCY_SYMBOL} **{self.amount:,}** on Coin Flip."
+
+        embed.set_footer(text=f"Played by {name} · {var.SERVER_NAME}")
+        embed.timestamp = datetime.utcnow()
+        await interaction.edit_original_response(embed=embed, view=self)
+
+        if interaction.channel:
+            await interaction.channel.send(embed=discord.Embed(
+                description=pub_desc,
+                color=var.COLOR_WIN if player_wins else var.COLOR_LOSE,
+            ))
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
 
 
 # ── PvP challenge view ────────────────────────────────────────────────────────
@@ -86,11 +186,9 @@ class _ChallengeView(discord.ui.View):
         self.resolved = True
         self.stop()
 
-        # Deduct challengee and hold in house
         db.update_balance(uid, self.gid, -self.amount, 'coinflip_bet')
         _house_tx(db, str(self.cog.bot.user.id), self.gid, self.amount, 'pvp_hold')
 
-        # Flip
         challenger_wins = random.random() < 0.5
         winner = self.challenger if challenger_wins else self.challengee
         loser  = self.challengee if challenger_wins else self.challenger
@@ -98,16 +196,11 @@ class _ChallengeView(discord.ui.View):
         l_uid  = str(loser.id)
         side   = "🪙 Heads" if challenger_wins else "🌑 Tails"
 
-        # Pay winner (they get both bets back: their own was already deducted, so +2*amount nets +amount)
         db.update_balance(w_uid, self.gid, self.amount * 2, 'coinflip_win')
         _house_tx(db, str(self.cog.bot.user.id), self.gid, -(self.amount * 2), 'pvp_payout')
         _record_stats(db, w_uid, self.gid, self.amount, 0)
         _record_stats(db, l_uid, self.gid, 0, self.amount)
 
-        w_bal = db.get_balance(w_uid, self.gid)
-        l_bal = db.get_balance(l_uid, self.gid)
-
-        # "Flipping" animation
         for item in self.children:
             item.disabled = True
         flip_embed = discord.Embed(
@@ -118,7 +211,8 @@ class _ChallengeView(discord.ui.View):
         await interaction.response.edit_message(embed=flip_embed, view=self)
         await asyncio.sleep(1.5)
 
-        # Result embed
+        w_bal = db.get_balance(w_uid, self.gid)
+        l_bal = db.get_balance(l_uid, self.gid)
         result_embed = discord.Embed(
             title=f"🪙 Coin Flip — {side}",
             color=var.COLOR_WIN,
@@ -173,7 +267,7 @@ class _ChallengeView(discord.ui.View):
             try:
                 embed = discord.Embed(
                     description=(
-                        f"⏰ **{self.challengee.display_name}** didn't respond in time.\n"
+                        f"⏰ Challenge expired — **{self.challengee.display_name}** didn't respond.\n"
                         f"{var.CURRENCY_SYMBOL} **{self.amount:,}** refunded to {self.challenger.mention}."
                     ),
                     color=var.COLOR_ERROR,
@@ -183,8 +277,8 @@ class _ChallengeView(discord.ui.View):
                 pass
 
     def _refund_challenger(self):
-        db = self.cog.db
-        c_uid  = str(self.challenger.id)
+        db      = self.cog.db
+        c_uid   = str(self.challenger.id)
         bot_uid = str(self.cog.bot.user.id)
         db.update_balance(c_uid, self.gid, self.amount, 'refund')
         _house_tx(db, bot_uid, self.gid, -self.amount, 'pvp_refund')
@@ -198,11 +292,9 @@ class CoinFlipCog(commands.Cog):
         self.bot = bot
         self.db  = ForgeDB.get()
 
-    # ── /coinflip ─────────────────────────────────────────────────────────────
-
-    @app_commands.command(name="coinflip", description="Flip a coin — play against the bot or challenge another user!")
+    @app_commands.command(name="coinflip", description="Flip a coin — pick Heads or Tails, or challenge another user!")
     @app_commands.describe(
-        amount=f"Amount to bet",
+        amount="Amount to bet",
         user="User to challenge (leave empty to play against the bot)",
     )
     async def coinflip(
@@ -215,17 +307,13 @@ class CoinFlipCog(commands.Cog):
         gid = str(interaction.guild_id)
         self.db.ensure_user(uid, gid, interaction.user.display_name)
 
-        # Can't challenge yourself
         if user is not None and user.id == interaction.user.id:
-            await interaction.response.send_message(
-                "❌ You can't challenge yourself!", ephemeral=True
-            )
+            await interaction.response.send_message("❌ You can't challenge yourself!", ephemeral=True)
             return
 
-        # Can't challenge the bot
         if user is not None and user.bot:
             await interaction.response.send_message(
-                "❌ You can't challenge a bot — use `/coinflip` without a user to play against me!",
+                "❌ You can't challenge a bot — leave the user field empty to play against me!",
                 ephemeral=True,
             )
             return
@@ -246,47 +334,14 @@ class CoinFlipCog(commands.Cog):
     # ── vs bot ────────────────────────────────────────────────────────────────
 
     async def _vs_bot(self, interaction: discord.Interaction, uid: str, gid: str, amount: int):
-        bot_uid = str(self.bot.user.id)
-        dm_mult = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
-        won     = random.randint(1, 100) <= var.WIN_CHANCE
-        side    = random.choice(["🪙 Heads", "🌑 Tails"])
-
-        if won:
-            profit = int(amount * (var.WIN_MULTIPLIER - 1))
-            if dm_mult > 1.0:
-                profit = int(profit * dm_mult)
-            self.db.update_balance(uid, gid, profit, 'win')
-            _house_tx(self.db, bot_uid, gid, -profit, 'house_payout')
-            _record_stats(self.db, uid, gid, profit, 0)
-            new_bal = self.db.get_balance(uid, gid)
-            embed = discord.Embed(title=f"🎉 You Won! — {side}", color=var.COLOR_WIN)
-            embed.add_field(name="Bet",         value=f"{var.CURRENCY_SYMBOL} {amount:,}",      inline=True)
-            embed.add_field(name="Profit",      value=f"{var.CURRENCY_SYMBOL} {profit:,}",      inline=True)
-            embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_bal:,} {var.CURRENCY_NAME}", inline=False)
-            if dm_mult > 1.0:
-                embed.add_field(name="💰 Event Bonus", value=f"**{dm_mult}x** multiplier applied!", inline=False)
-            pub_desc = f"🪙 **{interaction.user.display_name}** won {var.CURRENCY_SYMBOL} **{profit:,}** on Coin Flip!"
-            if dm_mult > 1.0:
-                pub_desc += f" *(💰 {dm_mult}x event!)*"
-        else:
-            self.db.update_balance(uid, gid, -amount, 'loss')
-            _house_tx(self.db, bot_uid, gid, amount, 'house_gain')
-            _record_stats(self.db, uid, gid, 0, amount)
-            new_bal = self.db.get_balance(uid, gid)
-            embed = discord.Embed(title=f"💸 You Lost! — {side}", color=var.COLOR_LOSE)
-            embed.add_field(name="Bet",         value=f"{var.CURRENCY_SYMBOL} {amount:,}",      inline=True)
-            embed.add_field(name="Chance",      value=f"{var.WIN_CHANCE}%",                      inline=True)
-            embed.add_field(name="New Balance", value=f"{var.CURRENCY_SYMBOL} {new_bal:,} {var.CURRENCY_NAME}", inline=False)
-            pub_desc = f"🪙 **{interaction.user.display_name}** lost {var.CURRENCY_SYMBOL} **{amount:,}** on Coin Flip."
-
+        view = _BotChoiceView(self, uid, gid, amount)
+        embed = discord.Embed(
+            title="🪙 Coin Flip — Pick a Side!",
+            description=f"**Bet:** {var.CURRENCY_SYMBOL} **{amount:,}** {var.CURRENCY_NAME}\n\nChoose Heads or Tails!",
+            color=var.COLOR_INFO,
+        )
         embed.set_footer(text=f"Played by {interaction.user.display_name} · {var.SERVER_NAME}")
-        embed.timestamp = datetime.utcnow()
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        if interaction.channel:
-            await interaction.channel.send(embed=discord.Embed(
-                description=pub_desc,
-                color=var.COLOR_WIN if won else var.COLOR_LOSE,
-            ))
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     # ── vs user ───────────────────────────────────────────────────────────────
 
@@ -301,18 +356,18 @@ class CoinFlipCog(commands.Cog):
         bot_uid = str(self.bot.user.id)
         self.db.ensure_user(uid, gid, interaction.user.display_name)
 
-        # Deduct challenger immediately (held until resolve)
         self.db.update_balance(uid, gid, -amount, 'coinflip_bet')
         _house_tx(self.db, bot_uid, gid, amount, 'pvp_hold')
 
-        view = _ChallengeView(self, interaction.user, target, amount, gid)
-        embed = discord.Embed(
+        end_ts = int(time.time()) + var.CHALLENGE_TIMEOUT
+        view   = _ChallengeView(self, interaction.user, target, amount, gid)
+        embed  = discord.Embed(
             title="🪙 Coin Flip Challenge!",
             description=(
                 f"{target.mention}, **{interaction.user.display_name}** challenges you to a coin flip!\n\n"
                 f"**Bet:** {var.CURRENCY_SYMBOL} **{amount:,}** {var.CURRENCY_NAME} each\n"
                 f"**Winner takes:** {var.CURRENCY_SYMBOL} **{amount * 2:,}**\n\n"
-                f"You have **{var.CHALLENGE_TIMEOUT} seconds** to accept or decline."
+                f"Expires <t:{end_ts}:R>"
             ),
             color=var.COLOR_INFO,
         )

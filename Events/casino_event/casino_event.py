@@ -6,7 +6,9 @@ import asyncio
 import json
 import time
 import logging
+from collections import Counter
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 
 import importlib.util as _ilu
@@ -84,6 +86,72 @@ _ROW_STYLES = (
     discord.ButtonStyle.success,
     discord.ButtonStyle.secondary,
 )
+
+# ── Poker card / hand utilities ───────────────────────────────────────────────
+
+_P_SUITS  = ['♠', '♥', '♦', '♣']
+_P_RANKS  = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
+_P_RANK_V = {r: i + 2 for i, r in enumerate(_P_RANKS)}
+_P_HAND_NAMES = [
+    'High Card', 'One Pair', 'Two Pair', 'Three of a Kind',
+    'Straight', 'Flush', 'Full House', 'Four of a Kind',
+    'Straight Flush', 'Royal Flush',
+]
+
+
+def _poker_deck() -> list:
+    deck = [(_P_RANK_V[r], s) for r in _P_RANKS for s in _P_SUITS]
+    random.shuffle(deck)
+    return deck
+
+
+def _card_str(card) -> str:
+    rn = {14: 'A', 13: 'K', 12: 'Q', 11: 'J'}
+    return f"{rn.get(card[0], str(card[0]))}{card[1]}"
+
+
+def _hand_str(cards) -> str:
+    return '  '.join(_card_str(c) for c in cards)
+
+
+def _eval_five(cards) -> tuple:
+    ranks = sorted([c[0] for c in cards], reverse=True)
+    suits = [c[1] for c in cards]
+    is_flush    = len(set(suits)) == 1
+    rank_set    = set(ranks)
+    is_straight = len(rank_set) == 5 and ranks[0] - ranks[4] == 4
+    is_wheel    = rank_set == {14, 2, 3, 4, 5}
+    if is_wheel:
+        is_straight = True
+        ranks = [5, 4, 3, 2, 1]
+    counts  = Counter(ranks)
+    groups  = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+    freq    = [g[1] for g in groups]
+    ordered = [g[0] for g in groups]
+    if is_straight and is_flush:
+        return (9 if ranks[0] == 14 and not is_wheel else 8, tuple(ranks))
+    if freq[0] == 4:       return (7, tuple(ordered))
+    if freq[:2] == [3, 2]: return (6, tuple(ordered))
+    if is_flush:           return (5, tuple(ranks))
+    if is_straight:        return (4, tuple(ranks))
+    if freq[0] == 3:       return (3, tuple(ordered))
+    if freq[:2] == [2, 2]: return (2, tuple(ordered))
+    if freq[0] == 2:       return (1, tuple(ordered))
+    return (0, tuple(ranks))
+
+
+def _best_hand(all_cards: list) -> tuple:
+    """Return (rank_int, tiebreak, hand_name, best_5) for 5–7 cards."""
+    best_score = None
+    best_combo = None
+    for combo in combinations(all_cards, 5):
+        score = _eval_five(combo)
+        if best_score is None or score > best_score:
+            best_score = score
+            best_combo = combo
+    rank_int, tb = best_score
+    return rank_int, tb, _P_HAND_NAMES[rank_int], list(best_combo)
+
 
 def _hr_winner() -> int:
     roll = random.randint(1, 100)
@@ -333,16 +401,17 @@ _DEFAULT_BETS: dict[str, callable] = {
     "horseracing": lambda: random.randint(1, 6),
 }
 
-def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict) -> discord.Embed:
+def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict, closed: bool = False) -> discord.Embed:
     pot_mode         = game.get("pot_mode", False)
     total_player_pot = sum(d["amount"] for d in participants.values())
     count            = len(participants)
+    timer_line = "🔒 **Closed**" if closed else f"⏱️ Closes <t:{end_ts}:R> — use `/join` to enter!"
     embed = discord.Embed(
         title=f"🎰 Casino Event: {game['label']}!",
         description=(
             f"{game['description']}\n\n"
             f"**Minimum wager:** {var.CURRENCY_SYMBOL} {min_bet:,} {var.CURRENCY_NAME}\n"
-            f"⏱️ Closes <t:{end_ts}:R> — use `/join` to enter!"
+            f"{timer_line}"
         ),
         color=game["color"],
     )
@@ -471,6 +540,31 @@ class CasinoEventCog(commands.Cog):
             self.event_active = False
             return None
 
+        # Poker has a custom async multi-step handler
+        if game["id"] == "poker":
+            bot_uid     = str(self.bot.user.id) if self.bot.user else ""
+            min_players = getattr(var, 'POKER_EVENT_MIN_PLAYERS', 3)
+            if len(participants) < min_players:
+                for uid, data in participants.items():
+                    self.db.update_balance(uid, gid, data["amount"], 'refund')
+                    _house_tx(self.db, bot_uid, gid, -data["amount"], 'pvp_refund')
+                cancelled = discord.Embed(
+                    title="🃏 Poker Event — Not Enough Players",
+                    description=(
+                        f"Need at least **{min_players}** players — only **{len(participants)}** joined. "
+                        f"All bets have been refunded."
+                    ),
+                    color=var.COLOR_ERROR,
+                )
+                await msg.edit(embed=cancelled)
+                self._event_msg = None
+                self.event_active = False
+                return None
+            await self._run_poker_event(game, participants, gid, channel, msg)
+            self._event_msg = None
+            self.event_active = False
+            return None
+
         resolver = RESOLVERS.get(game["id"])
         if resolver is None:
             log.error("CasinoEvent: no resolver for game id '%s'", game["id"])
@@ -521,14 +615,174 @@ class CasinoEventCog(commands.Cog):
         )
         result_embed.timestamp = datetime.utcnow()
 
-        closed = _build_join_embed(game, min_bet, end_ts, participants)
-        closed.title = f"🎰 Casino Event: {game['label']} — Closed"
-        await msg.edit(embed=closed)
+        closed_embed = _build_join_embed(game, min_bet, end_ts, participants, closed=True)
+        closed_embed.title = f"🎰 Casino Event: {game['label']} — Closed"
+        await msg.edit(embed=closed_embed)
         await channel.send(embed=result_embed)
 
         self._event_msg = None
         self.event_active = False
         return None
+
+    # ── Poker event runner ────────────────────────────────────────────────────
+
+    async def _run_poker_event(self, game: dict, participants: dict, gid: str, channel, msg):
+        """
+        Run a poker event round.
+        Bets are already deducted (house holds them from /join).
+        pot_mode: house doubles the total pot → prize_pool = total_player_pot * 2.
+        """
+        db      = self.db
+        bot_uid = str(self.bot.user.id) if self.bot.user else ""
+        dm_mult = getattr(self.bot, 'multiplier_event_mult', None) or 1.0
+        sym     = var.CURRENCY_SYMBOL
+
+        total_pot  = sum(d["amount"] for d in participants.values())
+        prize_pool = total_pot * 2   # house matches the full player pot
+
+        uids = list(participants.keys())
+
+        # Resolve display names
+        names: dict[str, str] = {}
+        for uid in uids:
+            try:
+                u = await self.bot.fetch_user(int(uid))
+                names[uid] = u.display_name
+            except Exception:
+                names[uid] = f"Player {uid[-4:]}"
+
+        # Show "cards dealt" state on the original event message
+        deal_embed = discord.Embed(
+            title=f"🃏 Poker Event — Cards Dealt!",
+            description=(
+                f"**{len(uids)} players** · "
+                f"**Prize Pool:** {sym} **{prize_pool:,}** *(house matched!)*\n"
+                f"Check your DMs for your hole cards!"
+            ),
+            color=game["color"],
+        )
+        deal_embed.set_footer(text=f"{var.SERVER_NAME} · House doubles the pot!")
+        try:
+            await msg.edit(embed=deal_embed)
+        except Exception:
+            pass
+
+        # Deal
+        deck      = _poker_deck()
+        holes     = {uid: [deck.pop(), deck.pop()] for uid in uids}
+        community = [deck.pop() for _ in range(5)]
+
+        # DM hole cards
+        dm_failed: list[str] = []
+        for uid, cards in holes.items():
+            try:
+                user = await self.bot.fetch_user(int(uid))
+                embed = discord.Embed(
+                    title="🃏 Your Hole Cards (Poker Event)",
+                    description=(
+                        f"**{_hand_str(cards)}**\n\n"
+                        f"Prize Pool: **{sym} {prize_pool:,}**"
+                    ),
+                    color=game["color"],
+                )
+                await user.send(embed=embed)
+            except Exception:
+                dm_failed.append(names[uid])
+
+        if dm_failed:
+            await channel.send(
+                f"⚠️ Could not DM hole cards to: **{', '.join(dm_failed)}** — DMs may be disabled.",
+                delete_after=30,
+            )
+
+        await asyncio.sleep(5)
+
+        # FLOP
+        flop = community[:3]
+        await channel.send(embed=discord.Embed(
+            title="🃏 Flop",
+            description=f"**{_hand_str(flop)}**\n\n**Prize Pool:** {sym} **{prize_pool:,}**",
+            color=0xF1C40F,
+        ))
+        await asyncio.sleep(3)
+
+        # TURN
+        turn_c = community[3]
+        await channel.send(embed=discord.Embed(
+            title="🃏 Turn",
+            description=(
+                f"Flop: **{_hand_str(flop)}**\n"
+                f"Turn: **{_card_str(turn_c)}**\n\n"
+                f"**Prize Pool:** {sym} **{prize_pool:,}**"
+            ),
+            color=0xE67E22,
+        ))
+        await asyncio.sleep(3)
+
+        # RIVER
+        all_comm = flop + [turn_c, community[4]]
+        await channel.send(embed=discord.Embed(
+            title="🃏 River",
+            description=f"**{_hand_str(all_comm)}**\n\n**Prize Pool:** {sym} **{prize_pool:,}**",
+            color=0xE74C3C,
+        ))
+        await asyncio.sleep(3)
+
+        # SHOWDOWN
+        results = []
+        for uid in uids:
+            rank_int, tiebreak, hand_name, _ = _best_hand(holes[uid] + all_comm)
+            results.append({
+                'uid': uid, 'name': names[uid],
+                'hole': holes[uid], 'hand_name': hand_name,
+                'score': (rank_int, tiebreak),
+            })
+        results.sort(key=lambda r: r['score'], reverse=True)
+        best_score = results[0]['score']
+        winners    = [r for r in results if r['score'] == best_score]
+
+        split    = prize_pool // len(winners)
+        leftover = prize_pool % len(winners)
+        for i, w in enumerate(winners):
+            share = split + (leftover if i == 0 else 0)
+            if dm_mult > 1.0:
+                share = int(share * dm_mult)
+            db.update_balance(w['uid'], gid, share, 'poker_event_win')
+            _house_tx(db, bot_uid, gid, -share, 'house_payout')
+            _record_event_stats(db, w['uid'], gid, 'poker', True)
+        for r in [r for r in results if r['score'] != best_score]:
+            _record_event_stats(db, r['uid'], gid, 'poker', False)
+
+        # Result embed
+        showdown = discord.Embed(title="🃏 Poker Event — Showdown!", color=var.COLOR_WIN)
+        showdown.add_field(name="Community Cards", value=_hand_str(all_comm), inline=False)
+        for r in results:
+            is_w = r['score'] == best_score
+            showdown.add_field(
+                name=f"{'🏆 ' if is_w else ''}{r['name']}",
+                value=f"Hole: **{_hand_str(r['hole'])}**\n*{r['hand_name']}*",
+                inline=True,
+            )
+        if len(winners) == 1:
+            w = winners[0]
+            result_line = (
+                f"🏆 **{w['name']}** wins {sym} **{split:,}** with **{w['hand_name']}**!"
+            )
+        else:
+            names_str = " & ".join(w['name'] for w in winners)
+            result_line = f"🤝 Split pot! **{names_str}** each win {sym} **{split:,}**!"
+        pot_line = (
+            f"💰 **Prize Pool:** {sym} {prize_pool:,} "
+            f"*(house matched {sym} {total_pot:,})*\n\n"
+        )
+        if dm_mult > 1.0:
+            result_line += f"\n💰 **{dm_mult}x** Multiplier Event bonus applied!"
+        showdown.add_field(name="Result", value=pot_line + result_line, inline=False)
+        showdown.set_footer(
+            text=f"{len(uids)} player{'s' if len(uids) != 1 else ''} participated · {var.SERVER_NAME}"
+        )
+        showdown.timestamp = datetime.utcnow()
+        await channel.send(embed=showdown)
 
     # ── /join ─────────────────────────────────────────────────────────────────
 

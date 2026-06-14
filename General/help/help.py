@@ -30,7 +30,7 @@ CATEGORIES = [
     {
         "label":       "🎰 Casino",
         "value":       "casino",
-        "description": "Gambling games — Gamble, Blackjack, Roulette, Slots, Baccarat, Horse Racing, Coin Flip, RPS & more",
+        "description": "Gambling games — Gamble, Blackjack, Roulette, Slots, Baccarat, Horse Racing, Coin Flip, RPS, Poker & more",
         "color":       var.COLOR_CASINO,
         "sections": [
             ("🎲 Gamble",          "GambleCog"),
@@ -41,8 +41,9 @@ CATEGORIES = [
             ("🎰 Slots",           "SlotsCog"),
             ("🏇 Horse Racing",    "HorseRacingCog"),
             ("🐸 Crossy Road",     "CrossyRoadCog"),
-            ("🪙 Coin Flip",       "CoinFlipCog"),
+            ("🪙 Coin Flip",           "CoinFlipCog"),
             ("✂️ Rock Paper Scissors", "RPSCog"),
+            ("🃏 Poker",              "PokerCog"),
         ],
     },
     {
