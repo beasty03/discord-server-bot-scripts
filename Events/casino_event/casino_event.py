@@ -37,6 +37,19 @@ def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
     db.ensure_user(bot_uid, gid, "House")
     db.update_balance(bot_uid, gid, amount, tx_type)
 
+def _record_event_stats(db, uid: str, gid: str, game_type: str, won: bool | None):
+    """won=True → win, won=False → loss, won=None → refund (joins only, no win/loss)."""
+    db.execute(
+        """INSERT INTO casino_event_stats
+               (user_id, guild_id, game_type, events_joined, events_won, events_lost)
+           VALUES (?, ?, ?, 1, ?, ?)
+           ON CONFLICT(user_id, guild_id, game_type) DO UPDATE SET
+               events_joined = events_joined + 1,
+               events_won    = events_won    + excluded.events_won,
+               events_lost   = events_lost   + excluded.events_lost""",
+        (uid, gid, game_type, 1 if won is True else 0, 1 if won is False else 0),
+    )
+
 # ============================================================================
 # INLINE GAME RESOLVERS
 # participants: dict[uid -> {"amount": int, "bet": any}]
@@ -244,6 +257,19 @@ class CasinoEventCog(commands.Cog):
         self._event_gid: str | None = None
         self._loop_task: asyncio.Task | None = None
 
+    async def cog_load(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS casino_event_stats (
+                user_id       TEXT    NOT NULL,
+                guild_id      TEXT    NOT NULL,
+                game_type     TEXT    NOT NULL,
+                events_joined INTEGER DEFAULT 0,
+                events_won    INTEGER DEFAULT 0,
+                events_lost   INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id, game_type)
+            )
+        """)
+
     @commands.Cog.listener()
     async def on_ready(self):
         if self._loop_task is None or self._loop_task.done():
@@ -348,6 +374,9 @@ class CasinoEventCog(commands.Cog):
                 name = f"<@{uid}>"
             bet_tag = f" `{_display_bet(bet)}`" if _display_bet(bet) else ""
             lines.append(f"{emoji} **{name}**{bet_tag} → {delta_str}")
+            # Track per-user event stats (category = "casino" for all casino sub-games)
+            won = True if emoji == "✅" else (False if emoji == "❌" else None)
+            _record_event_stats(self.db, uid, gid, "casino", won)
 
         dm_note      = f"\n💰 **{dm_mult}x** Double Money Event — all payouts boosted!" if dm_mult > 1.0 else ""
         result_embed = discord.Embed(

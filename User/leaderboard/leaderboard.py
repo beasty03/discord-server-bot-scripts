@@ -26,6 +26,17 @@ class LeaderboardCog(commands.Cog):
                 self.db.execute(f"ALTER TABLE casino_stats ADD COLUMN {col} INTEGER DEFAULT 0")
             except Exception:
                 pass
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS casino_event_stats (
+                user_id       TEXT    NOT NULL,
+                guild_id      TEXT    NOT NULL,
+                game_type     TEXT    NOT NULL,
+                events_joined INTEGER DEFAULT 0,
+                events_won    INTEGER DEFAULT 0,
+                events_lost   INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, guild_id, game_type)
+            )
+        """)
 
     async def _build_board(
         self,
@@ -103,6 +114,63 @@ class LeaderboardCog(commands.Cog):
             [(r[0], r[1], r[2]) for r in rows],
             "**{v:,}** loss{v_es} · {sym} {e0:,} coins lost",
         )
+
+    @app_commands.command(name="top_event", description="Leaderboard for server event participation.")
+    @app_commands.describe(game="Which event type to show (leave blank for all)")
+    @app_commands.choices(game=[
+        app_commands.Choice(name="Casino", value="casino"),
+    ])
+    async def top_event(self, interaction: discord.Interaction, game: str = "all"):
+        gid = str(interaction.guild_id)
+
+        if game == "all":
+            rows = self.db.execute(
+                """SELECT user_id,
+                          SUM(events_joined) AS joined,
+                          SUM(events_won)    AS won,
+                          SUM(events_lost)   AS lost
+                   FROM casino_event_stats
+                   WHERE guild_id = ?
+                   GROUP BY user_id
+                   ORDER BY joined DESC
+                   LIMIT ?""",
+                (gid, var.LEADERBOARD_TOP_COUNT),
+            )
+            title_suffix = "All Events"
+        else:
+            rows = self.db.execute(
+                """SELECT user_id, events_joined, events_won, events_lost
+                   FROM casino_event_stats
+                   WHERE guild_id = ? AND game_type = ?
+                   ORDER BY events_joined DESC
+                   LIMIT ?""",
+                (gid, game, var.LEADERBOARD_TOP_COUNT),
+            )
+            title_suffix = {"casino": "Casino Event"}.get(game, game.capitalize())
+
+        embed = discord.Embed(
+            title=f"🎰 Top Event Players — {title_suffix}",
+            color=var.COLOR_INFO,
+        )
+        if not rows:
+            embed.description = "No event data yet!"
+        else:
+            lines = []
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+            for rank, (uid, joined, won, lost) in enumerate(rows, 1):
+                try:
+                    user = await self.bot.fetch_user(int(uid))
+                    name = user.display_name
+                except Exception:
+                    name = f"User {uid}"
+                prefix = medals.get(rank, f"**{rank}.**")
+                lines.append(
+                    f"{prefix} **{name}** — {joined} 🎲 · {won}W / {lost}L"
+                )
+            embed.description = "\n".join(lines)
+        embed.set_footer(text=var.SERVER_NAME)
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="top_give", description="Top players by total coins given to others.")
     async def top_give(self, interaction: discord.Interaction):
