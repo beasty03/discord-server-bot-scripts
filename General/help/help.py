@@ -30,7 +30,7 @@ CATEGORIES = [
     {
         "label":       "🎰 Casino",
         "value":       "casino",
-        "description": "Gambling games — Gamble, Blackjack, Roulette, Higher/Lower, Baccarat",
+        "description": "Gambling games — Gamble, Blackjack, Roulette, Slots, Baccarat, Horse Racing & more",
         "color":       var.COLOR_CASINO,
         "sections": [
             ("🎲 Gamble",          "GambleCog"),
@@ -38,16 +38,20 @@ CATEGORIES = [
             ("🎡 Roulette",        "RouletteCog"),
             ("🎴 Higher or Lower", "HigherLowerCog"),
             ("🃏 Baccarat",        "BaccaratCog"),
+            ("🎰 Slots",           "SlotsCog"),
+            ("🏇 Horse Racing",    "HorseRacingCog"),
+            ("🐸 Crossy Road",     "CrossyRoadCog"),
         ],
     },
     {
         "label":       "📋 General",
         "value":       "general",
-        "description": "Server utilities — Rules, Self Roles",
+        "description": "Server utilities — Rules, Self Roles, Quotes",
         "color":       var.COLOR_GENERAL,
         "sections": [
             ("📜 Rules",      "Rules"),
             ("🎭 Self Roles", "SelfRoles"),
+            ("💬 Quotes",     "QuotesCog"),
         ],
     },
     {
@@ -62,10 +66,11 @@ CATEGORIES = [
     {
         "label":       "🎪 Events",
         "value":       "events",
-        "description": "Multiplayer events — Casino events and more",
+        "description": "Multiplayer events — Casino events, Multiplier events",
         "color":       var.COLOR_EVENTS,
         "sections": [
-            ("🎰 Casino Events", "CasinoEventCog"),
+            ("🎰 Casino Events",    "CasinoEventCog"),
+            ("💰 Multiplier Event", "MultiplierEventCog"),
         ],
     },
     {
