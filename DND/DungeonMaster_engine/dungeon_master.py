@@ -60,6 +60,114 @@ def _n_attacks(char_class: str, level: int) -> int:
         if level >= 5: return 2
     return 1
 
+
+def _get_subclass(db, uid: str, gid: str, char_class: str) -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, f"{char_class}_subclass"))
+    return rows[0][0] if rows else None
+
+
+def _get_fighting_style(db, uid: str, gid: str, char_class: str = "fighter") -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, f"{char_class}_fighting_style"))
+    return rows[0][0] if rows else None
+
+
+def _get_human_feat(db, uid: str, gid: str) -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "human_feat"))
+    return rows[0][0] if rows else None
+
+
+def _get_dwarf_trait(db, uid: str, gid: str) -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "dwarf_trait"))
+    return rows[0][0] if rows else None
+
+
+def _get_favored_enemy(db, uid: str, gid: str) -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "ranger_favored_enemy"))
+    return rows[0][0] if rows else None
+
+
+def _get_elf_subrace(db, uid: str, gid: str) -> str | None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "elf_subrace"))
+    return rows[0][0] if rows else None
+
+
+def _get_wizard_known_spells(db, uid: str, gid: str) -> list[str]:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "wizard_known_spells"))
+    if rows and rows[0][0]:
+        return [s for s in rows[0][0].split(",") if s]
+    return []
+
+
+def _get_wizard_prepared_spells(db, uid: str, gid: str) -> list[str]:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "wizard_prepared_spells"))
+    if rows and rows[0][0]:
+        return [s for s in rows[0][0].split(",") if s]
+    return []
+
+
+_FAVORED_ENEMY_KEYWORDS: dict[str, list[str]] = {
+    "humanoid": ["goblin", "bandit", "guard", "scout", "lieutenant", "chief", "soldier", "cultist"],
+    "undead":   ["skeleton", "ghost", "spirit", "lich", "restless", "zombie", "wraith", "vampire"],
+    "beast":    ["spider", "hound", "wolf", "bear", "rat", "serpent", "shadow hound"],
+    "dragon":   ["dragon", "drake", "wyrm", "wyvern"],
+    "fiend":    ["devil", "demon", "imp", "fiend", "infernal"],
+}
+
+
+def _enemy_matches_type(enemy_name: str, enemy_type: str) -> bool:
+    name_lower = enemy_name.lower()
+    return any(kw in name_lower for kw in _FAVORED_ENEMY_KEYWORDS.get(enemy_type, []))
+
+
+def _sup_die_roll(die_type: str) -> int:
+    sides = int(die_type.split("d")[1])
+    return random.randint(1, sides)
+
+
+def _roll_gwf(expr: str) -> int:
+    """Roll damage for Great Weapon Fighting — reroll 1s and 2s once per die."""
+    expr = expr.strip().lower()
+    if expr.startswith("d"):
+        expr = "1" + expr
+    m = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expr)
+    if not m:
+        return max(1, _roll(expr))
+    count = int(m.group(1))
+    sides = int(m.group(2))
+    bonus = int(m.group(3)) if m.group(3) else 0
+    total = bonus
+    for _ in range(max(1, count)):
+        r = random.randint(1, sides)
+        if r <= 2:
+            r = random.randint(1, sides)
+        total += r
+    return max(1, total)
+
+
 # ============================================================================
 # MODALS
 # ============================================================================
@@ -150,11 +258,13 @@ class InitiativeRollView(discord.ui.View):
         if uid in self.rolls:
             await interaction.response.send_message("You already rolled!", ephemeral=True)
             return
-        stats   = self._cog._get_char_combat_stats(uid, self._gid)
-        dex_mod = stats["mods"]["dexterity"] if stats else 0
-        d20     = random.randint(1, 20)
-        total   = d20 + dex_mod
-        self.rolls[uid] = (d20, dex_mod, total)
+        stats    = self._cog._get_char_combat_stats(uid, self._gid)
+        dex_mod  = stats["mods"]["dexterity"] if stats else 0
+        feat     = _get_human_feat(self._cog.db, uid, self._gid)
+        init_mod = dex_mod + (5 if feat == "alert" else 0)
+        d20      = random.randint(1, 20)
+        total    = d20 + init_mod
+        self.rolls[uid] = (d20, init_mod, total)
         if set(self.rolls.keys()) >= self._active:
             self._done.set()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
@@ -273,13 +383,37 @@ class CombatView(discord.ui.View):
             await interaction.response.send_message("You don't have a class set.", ephemeral=True)
             return
         char_class, level = rows[0]
-        used = self._run.get("features_used", {}).get(uid, set())
-        available = [
+        used       = self._run.get("features_used", {}).get(uid, set())
+        surge_left = self._run.get("action_surge_uses", {}).get(uid, 0)
+        available  = [
             f for f in char_var.COMBAT_FEATURES.get(char_class, [])
             if f.get("action_type") == "action"
             and f["level_req"] <= (level or 1)
-            and (f["once_per"] != "combat" or f["id"] not in used)
+            and (
+                f["once_per"] != "combat"
+                or (f["id"] == "action_surge" and surge_left > 0)
+                or (f["id"] != "action_surge" and f["id"] not in used)
+            )
         ]
+        # Wizard: only show cantrips + prepared spells
+        if char_class == "wizard":
+            _wiz_prep    = self._run.get("wizard_prepared", {}).get(uid, [])
+            _wiz_cantrips = char_var.WIZARD_CANTRIPS
+            available    = [f for f in available
+                            if f["id"] in _wiz_cantrips or f["id"] in _wiz_prep]
+        # Include subclass action features (e.g. EK Fire Bolt)
+        sc_rows2 = self._cog.db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, self._gid, f"{char_class}_subclass"))
+        sc = sc_rows2[0][0] if sc_rows2 else None
+        if sc:
+            available += [
+                f for f in char_var.SUBCLASS_COMBAT_FEATURES.get(sc, [])
+                if f.get("action_type") == "action"
+                and f["level_req"] <= (level or 1)
+                and (f["once_per"] != "combat" or f["id"] not in used)
+            ]
         if not available:
             await interaction.response.send_message(
                 "No class actions available at your level / all used.", ephemeral=True)
@@ -313,6 +447,37 @@ class CombatView(discord.ui.View):
             and f["level_req"] <= (level or 1)
             and (f["once_per"] != "combat" or f["id"] not in used)
         ]
+        # Wizard: only show prepared bonus spells (no cantrips are bonus actions)
+        if char_class == "wizard":
+            _wiz_prep_b   = self._run.get("wizard_prepared", {}).get(uid, [])
+            _wiz_cants_b  = char_var.WIZARD_CANTRIPS
+            available     = [f for f in available
+                             if f["id"] in _wiz_cants_b or f["id"] in _wiz_prep_b]
+        sc_rows = self._cog.db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, self._gid, f"{char_class}_subclass"))
+        sc = sc_rows[0][0] if sc_rows else None
+        _bm_ids    = {"bm_precision", "bm_trip", "bm_disarm", "bm_riposte", "bm_menacing"}
+        _sup_left  = self._run.get("sup_dice", {}).get(uid, 0)
+        if sc:
+            sc_feats = [
+                f for f in char_var.SUBCLASS_COMBAT_FEATURES.get(sc, [])
+                if f.get("action_type") == "bonus"
+                and f["level_req"] <= (level or 1)
+                and (f["once_per"] != "combat" or f["id"] not in used)
+                and not (f["id"] in _bm_ids and _sup_left == 0)
+            ]
+            available = available + sc_feats
+        # Sharpshooter feat: offer stance toggle
+        _feat = _get_human_feat(self._cog.db, uid, self._gid)
+        if _feat == "sharpshooter":
+            available.append({
+                "id": "sharpshooter_stance", "name": "Sharpshooter Stance",
+                "label": "🎯 Sharpshooter Stance",
+                "action_type": "bonus", "level_req": 1, "once_per": None,
+                "desc": "Next ranged attack: −5 to hit, +10 damage",
+            })
         if not available:
             await interaction.response.send_message("No bonus actions available.", ephemeral=True)
             return
@@ -783,6 +948,125 @@ class WanderJoinView(discord.ui.View):
             self._all_joined.set()
 
 
+class PrepareSpellsView(discord.ui.View):
+    """Wizard spell preparation — choose which known spells to have ready."""
+
+    def __init__(self, cog: "DungeonMasterCog", uid: str, gid: str,
+                 preparable: list[dict], currently_prepared: list[str], max_prep: int):
+        super().__init__(timeout=60)
+        self._cog = cog
+        self._uid = uid
+        self._gid = gid
+        options = [
+            discord.SelectOption(
+                label=f"{s['emoji']} {s['name']} (Lv {s['level']})",
+                value=s["id"],
+                description=s["desc"][:100],
+                default=s["id"] in currently_prepared,
+            )
+            for s in preparable
+        ]
+        sel = discord.ui.Select(
+            placeholder=f"Choose up to {max_prep} spells to prepare…",
+            min_values=0,
+            max_values=min(max_prep, len(options)),
+            options=options,
+        )
+        sel.callback = self._on_select
+        self.add_item(sel)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        chosen = interaction.data["values"]
+        self._cog.db.execute(
+            "INSERT OR REPLACE INTO dnd_character_choices "
+            "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+            (self._uid, self._gid, "wizard_prepared_spells", ",".join(chosen)))
+        names = [v.replace("_", " ").title() for v in chosen]
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description=(
+                    f"✅ **Spells prepared!**\n"
+                    f"Ready for your next combat: {', '.join(names) or '*(none)*'}"
+                ),
+                color=var.COLOR_WIN,
+            ),
+            view=None,
+        )
+        self.stop()
+
+
+class LearnSpellView(discord.ui.View):
+    """Consume a spell scroll to permanently learn a new wizard spell."""
+
+    def __init__(self, cog: "DungeonMasterCog", uid: str, gid: str,
+                 scrolls: list[tuple]):
+        super().__init__(timeout=60)
+        self._cog = cog
+        self._uid = uid
+        self._gid = gid
+        self._scroll_map: dict[str, tuple] = {}
+        options = []
+        for iid, qty, item in scrolls:
+            if item:
+                spell_id = item.get("teaches", "")
+                self._scroll_map[iid] = (qty, item, spell_id)
+                spell_label = spell_id.replace("_", " ").title() if spell_id else "?"
+                options.append(discord.SelectOption(
+                    label=f"{item['emoji']} {item['name']} ×{qty}",
+                    value=iid,
+                    description=f"Teaches: {spell_label}",
+                ))
+        sel = discord.ui.Select(placeholder="Choose a scroll to study…", options=options)
+        sel.callback = self._on_select
+        self.add_item(sel)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        scroll_id = interaction.data["values"][0]
+        qty, item, spell_id = self._scroll_map.get(scroll_id, (0, None, ""))
+        if not spell_id or not item:
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="❌ Couldn't identify the spell.", color=var.COLOR_ERROR),
+                view=None)
+            self.stop()
+            return
+        known = _get_wizard_known_spells(self._cog.db, self._uid, self._gid)
+        if spell_id in known:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    description=f"You already know **{spell_id.replace('_', ' ').title()}**!",
+                    color=var.COLOR_INFO),
+                view=None)
+            self.stop()
+            return
+        # Consume the scroll
+        self._cog.db.execute(
+            "UPDATE dnd_inventory SET qty=qty-1 "
+            "WHERE user_id=? AND guild_id=? AND item_id=?",
+            (self._uid, self._gid, scroll_id))
+        self._cog.db.execute(
+            "DELETE FROM dnd_inventory "
+            "WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+            (self._uid, self._gid, scroll_id))
+        # Add to known spells
+        known.append(spell_id)
+        self._cog.db.execute(
+            "INSERT OR REPLACE INTO dnd_character_choices "
+            "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+            (self._uid, self._gid, "wizard_known_spells", ",".join(known)))
+        spell_name = spell_id.replace("_", " ").title()
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description=(
+                    f"📚 You studied the **{item['name']}** and permanently learned "
+                    f"**{spell_name}**!\n\n"
+                    f"Use `/prepare_spells` to add it to your prepared list."
+                ),
+                color=var.COLOR_WIN,
+            ),
+            view=None)
+        self.stop()
+
+
 class CampaignSelectView(discord.ui.View):
     """Ephemeral select shown to the initiator for picking a campaign."""
 
@@ -954,6 +1238,13 @@ class DungeonMasterCog(commands.Cog):
             "wisdom":       (wis  or 10) + rm.get("wisdom",       0),
             "charisma":     (cha  or 10) + rm.get("charisma",     0),
         }
+        # Elf subrace: High Elf +1 INT, Wood Elf +1 DEX (applied before mods)
+        if race_id == "elf":
+            _elf_sr = _get_elf_subrace(self.db, uid, gid)
+            if _elf_sr == "high_elf":
+                finals["intelligence"] += 1
+            elif _elf_sr == "wood_elf":
+                finals["dexterity"] += 1
         mods = {ab: (v - 10) // 2 for ab, v in finals.items()}
         prof = 2 + (max(1, level or 1) - 1) // 4
 
@@ -962,17 +1253,39 @@ class DungeonMasterCog(commands.Cog):
         max_hp = max(1, (hit_die + mods["constitution"])
                      + (max(1, level or 1) - 1) * (avg_gain + mods["constitution"]))
         ac = 10 + mods["dexterity"] + (klass.get("armor", 0) if klass else 0)
+        # Add AC bonus from equipped offhand / armor items (shields, chain mail, etc.)
+        inv_rows = self.db.execute(
+            "SELECT item_id FROM dnd_inventory WHERE user_id=? AND guild_id=? AND equipped=1",
+            (uid, gid))
+        for (inv_iid,) in (inv_rows or []):
+            inv_item = self._find_item(inv_iid)
+            if inv_item and inv_item.get("slot") in ("offhand", "armor"):
+                ac += inv_item.get("ac_bonus", 0)
 
         # Equipped weapon
         weapon = self._get_equipped_weapon(uid, gid)
         if weapon:
             atk_ability = weapon.get("ability", "strength")
-            dmg_expr    = weapon.get("damage", "1d6")
+            dmg_expr    = weapon.get("dmg", weapon.get("damage", "1d6"))
             atk_bonus   = mods[atk_ability] + prof
         else:
             atk_ability = "strength"
             dmg_expr    = "1d4"
             atk_bonus   = mods["strength"] + prof
+
+        # Fighting style and feat/racial bonuses
+        fs         = _get_fighting_style(self.db, uid, gid, char_class)
+        feat       = _get_human_feat(self.db, uid, gid)
+        dwarf_tr   = _get_dwarf_trait(self.db, uid, gid)
+        if fs == "defense" and klass and klass.get("armor", 0) > 0:
+            ac += 1
+        if feat == "tough":
+            max_hp += 2 * max(1, level or 1)
+        if dwarf_tr == "dwarven_toughness":
+            max_hp += max(1, level or 1)
+
+        is_ranged = weapon.get("ranged", False) if weapon else False
+        handed    = weapon.get("handed", 1)     if weapon else 1
 
         return {
             "mods":       mods,
@@ -985,6 +1298,8 @@ class DungeonMasterCog(commands.Cog):
                           else f"{dmg_expr}{mods[atk_ability]}",
             "char_class": char_class,
             "level":      level or 1,
+            "is_ranged":  is_ranged,
+            "handed":     handed,
         }
 
     def _get_equipped_weapon(self, uid: str, gid: str) -> dict | None:
@@ -1230,6 +1545,130 @@ class DungeonMasterCog(commands.Cog):
                 "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
                 (uid, gid, choice_key, chosen))
 
+    # ── /prepare_spells ───────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="prepare_spells",
+        description="Wizard only: choose which spells to have ready for your next combat.")
+    async def prepare_spells(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        rows = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if not rows:
+            await interaction.response.send_message(
+                embed=self._err("You don't have a character yet."), ephemeral=True)
+            return
+        char_class, level = rows[0]
+        if char_class != "wizard":
+            await interaction.response.send_message(
+                embed=self._err("Only Wizards can prepare spells."), ephemeral=True)
+            return
+
+        # Auto-init known spells for new wizards
+        known = _get_wizard_known_spells(self.db, uid, gid)
+        if not known:
+            known = list(char_var.WIZARD_STARTING_SPELLS)
+            self.db.execute(
+                "INSERT OR REPLACE INTO dnd_character_choices "
+                "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+                (uid, gid, "wizard_known_spells", ",".join(known)))
+
+        stats    = self._get_char_combat_stats(uid, gid)
+        int_mod  = stats["mods"]["intelligence"] if stats else 0
+        max_prep = max(2, int_mod + max(1, (level or 1) // 2))
+        prepared = _get_wizard_prepared_spells(self.db, uid, gid)
+
+        spell_lookup = {s["id"]: s for s in char_var.WIZARD_SPELLS}
+        cantrips     = char_var.WIZARD_CANTRIPS
+        preparable   = [
+            spell_lookup[sid]
+            for sid in known
+            if sid in spell_lookup and sid not in cantrips
+            and spell_lookup[sid]["level_req"] <= (level or 1)
+        ]
+
+        if not preparable:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=(
+                        "You have no preparable spells yet.\n"
+                        "Buy **Spell Scrolls** from the shop and use `/learn_spell` to unlock new ones."
+                    ),
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        cantrip_names = [
+            spell_lookup[sid]["name"] for sid in known
+            if sid in cantrips and sid in spell_lookup
+        ]
+        prepared_names = [p.replace("_", " ").title() for p in prepared] if prepared else ["*(none)*"]
+        embed = discord.Embed(
+            title="📖 Prepare Spells",
+            description=(
+                f"**Always ready (cantrips):** {', '.join(cantrip_names) or 'none'}\n\n"
+                f"**Currently prepared:** {', '.join(prepared_names)}\n"
+                f"**Max prepared:** {max_prep} *(INT {int_mod:+d} + Level {level}÷2)*\n\n"
+                "Select which spells to prepare for your next combat:"
+            ),
+            color=var.COLOR_CAMPAIGN,
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=PrepareSpellsView(self, uid, gid, preparable, prepared, max_prep),
+            ephemeral=True)
+
+    # ── /learn_spell ──────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="learn_spell",
+        description="Wizard only: consume a spell scroll from your inventory to learn that spell.")
+    async def learn_spell(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        rows = self.db.execute(
+            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if not rows or rows[0][0] != "wizard":
+            await interaction.response.send_message(
+                embed=self._err("Only Wizards can learn spells from scrolls."), ephemeral=True)
+            return
+
+        inv_rows  = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory "
+            "WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid))
+        all_items = self._all_char_items()
+        scrolls   = [
+            (iid, qty, next((i for i in all_items if i["id"] == iid), None))
+            for iid, qty in (inv_rows or [])
+        ]
+        scrolls = [(iid, qty, item) for iid, qty, item in scrolls
+                   if item and item.get("slot") == "spell_scroll"]
+
+        if not scrolls:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=(
+                        "You have no spell scrolls.\n"
+                        "Buy them from the **shop** — look for `📜 Scroll of …` items!"
+                    ),
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="📜 Learn a Spell",
+                description="Choose a scroll to study and permanently learn:",
+                color=var.COLOR_CAMPAIGN),
+            view=LearnSpellView(self, uid, gid, scrolls),
+            ephemeral=True)
+
     # ── /roll ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="roll", description="Roll dice. Examples: d20 · 2d6 · 1d8+3")
@@ -1391,13 +1830,112 @@ class DungeonMasterCog(commands.Cog):
                 "dead":               set(),
                 "hunters_mark_uids":  set(),
                 "helped_next_attack": {},
+                "subclass_used":        {},
+                "ward_hp":              {},
+                "beast_companion":      set(),
+                "beast_companion_item": {},   # {uid: item_dict or None}
+                "sacred_weapon_uids":   set(),
+                "portent_used":         set(),
+                "vow_of_enmity":        set(),
+                "guided_strike":        set(),
+                "superiority_die":      set(),
+                "warding_flare":        set(),
+                "arcane_distraction":   set(),
+                "natures_wrath_active": False,
+                # Fighter-specific
+                "sup_dice":             {},   # {uid: int} Battle Master dice remaining
+                "sup_die_type":         {},   # {uid: str} "1d8"|"1d10"|"1d12"
+                "bm_pending":           {},   # {uid: {type, die}} queued maneuver effect
+                "action_surge_uses":    {},   # {uid: int} charges remaining
+                "indomitable_uses":     {},   # {uid: int} charges remaining
+                "fighting_style":       {},   # {uid: str|None}
+                "shield_spell_ac":      set(),# EK Shield spell active this round
+                "fire_bolt_rnd":        {},   # {uid: int} last round Fire Bolt was cast (War Magic)
+                "eldritch_strike_rnd":  {},   # {uid: int} Eldritch Strike triggers this round
+                "survivor_uids":        set(),# Champion Lv18 Survivor
+                "sharpshooter_stance":  set(),# Sharpshooter -5/+10 stance active this round
+                "alert_uids":           set(),# Alert feat — always-first on initiative
+                "protection_uids":      set(),# Protection fighting style — reduce ally dmg
+                "bm_riposte_set":       set(),# BM Riposte pending this round
+                "enemy_ac_penalty":     0,    # BM Trip: enemy AC reduced
+                "enemy_atk_penalty":    0,    # BM Disarm: enemy ATK reduced
+                # Ranger-specific
+                "favored_enemy":        {},   # {uid: str|None} favored enemy type
+                "ensnaring_uids":       set(),# Ensnaring Strike armed (next ranged hit restrain)
+                "hail_uids":            set(),# Hail of Thorns armed (next ranged hit +1d10)
+                "vanish_uids":          set(),# Vanish active this round (half dmg from next hit)
+                "beast_protect_uids":   set(),# Beast Guard active this round (half dmg from next hit)
+                # Wizard-specific
+                "wizard_prepared":      {},   # {uid: list[str]} spells prepared for this combat
+                "counterspell_uids":    set(),# Counterspell cast — enemy skips attack this round
+                "misty_step_uids":      set(),# Misty Step — half dmg from next hit this round
             }
             for uid, name in participants:
-                run_state["features_used"][uid] = set()
+                run_state["features_used"][uid]  = set()
+                run_state["subclass_used"][uid]  = set()
                 stats = self._get_char_combat_stats(uid, gid)
                 hp = stats["max_hp"] if stats else 10
                 run_state["player_hp"][uid]     = hp
-                run_state["player_max_hp"][uid]  = hp
+                run_state["player_max_hp"][uid] = hp
+                if stats:
+                    char_class = stats["char_class"]
+                    level      = stats["level"]
+                    sc  = _get_subclass(self.db, uid, gid, char_class)
+                    fs  = _get_fighting_style(self.db, uid, gid, char_class)
+                    run_state["fighting_style"][uid]  = fs
+                    run_state["favored_enemy"][uid]   = _get_favored_enemy(self.db, uid, gid)
+
+                    if sc == "abjuration":
+                        int_mod = stats["mods"]["intelligence"]
+                        run_state["ward_hp"][uid] = max(1, int_mod + level)
+                    elif sc == "beast_master":
+                        run_state["beast_companion"].add(uid)
+                        # Best-to-worst: baby_dragon > bear > eagle > wolf (wolf is free fallback)
+                        _comp_ids = ["baby_dragon_companion", "bear_companion",
+                                     "eagle_companion",       "wolf_companion"]
+                        _comp_item = None
+                        for _cid in _comp_ids:
+                            _crows = self.db.execute(
+                                "SELECT 1 FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=?",
+                                (uid, gid, _cid))
+                            if _crows:
+                                _comp_item = self._find_item(_cid)
+                                break
+                        run_state["beast_companion_item"][uid] = _comp_item
+                    elif sc == "light":
+                        run_state["warding_flare"].add(uid)
+                    elif sc == "champion" and level >= 18:
+                        run_state["survivor_uids"].add(uid)
+
+                    if sc == "battle_master" and level >= 3:
+                        n_dice  = 4 + (1 if level >= 7 else 0) + (1 if level >= 10 else 0) + (1 if level >= 15 else 0)
+                        die_type = "1d12" if level >= 15 else ("1d10" if level >= 10 else "1d8")
+                        run_state["sup_dice"][uid]    = n_dice
+                        run_state["sup_die_type"][uid] = die_type
+
+                    if char_class == "fighter":
+                        surge_uses = 2 if level >= 17 else 1
+                        run_state["action_surge_uses"][uid] = surge_uses
+                        indom_uses = (3 if level >= 17 else 2 if level >= 13 else 1) if level >= 9 else 0
+                        run_state["indomitable_uses"][uid]  = indom_uses
+
+                    if fs == "protection":
+                        run_state["protection_uids"].add(uid)
+
+                    if char_class == "wizard":
+                        _prep = _get_wizard_prepared_spells(self.db, uid, gid)
+                        # Always include cantrips; fallback to starting spells if nothing prepared
+                        _cantrips = list(char_var.WIZARD_CANTRIPS)
+                        if not _prep:
+                            _prep = list(char_var.WIZARD_STARTING_SPELLS)
+                        for _c in _cantrips:
+                            if _c not in _prep:
+                                _prep = [_c] + _prep
+                        run_state["wizard_prepared"][uid] = _prep
+
+                    feat = _get_human_feat(self.db, uid, gid)
+                    if feat == "alert":
+                        run_state["alert_uids"].add(uid)
             self._runs[run_id] = run_state
 
             # Intro
@@ -1624,6 +2162,42 @@ class DungeonMasterCog(commands.Cog):
         while e_hp > 0:
             rnd += 1
 
+            # ── Per-round state reset ─────────────────────────────────────────
+            run["sharpshooter_stance"] = set()
+            run["bm_riposte_set"]      = set()
+            run["shield_spell_ac"]     = set()
+            run["bm_pending"]          = {}
+            run["enemy_ac_penalty"]    = 0
+            run["enemy_atk_penalty"]   = 0
+            run["vanish_uids"]         = set()
+            run["beast_protect_uids"]  = set()
+            run["counterspell_uids"]   = set()
+            run["misty_step_uids"]     = set()
+
+            # ── Champion Survivor (Lv18) — regain HP at round start ───────────
+            if rnd > 1:
+                surv_lines: list[str] = []
+                for s_uid, s_name in run["participants"]:
+                    if s_uid not in run.get("survivor_uids", set()):
+                        continue
+                    if run["player_hp"].get(s_uid, 0) <= 0:
+                        continue
+                    s_max = run["player_max_hp"].get(s_uid, 1)
+                    s_hp  = run["player_hp"].get(s_uid, 0)
+                    if s_hp <= s_max // 2:
+                        s_stats = self._get_char_combat_stats(s_uid, gid)
+                        con_mod = s_stats["mods"]["constitution"] if s_stats else 0
+                        regain  = max(1, 5 + con_mod)
+                        run["player_hp"][s_uid] = min(s_max, s_hp + regain)
+                        surv_lines.append(f"💚 **{s_name}** Survivor — regains **{regain} HP**")
+                if surv_lines:
+                    await channel.send(embed=discord.Embed(
+                        title="💚 Champion Survivor",
+                        description="\n".join(surv_lines),
+                        color=var.COLOR_WIN,
+                    ))
+                    await asyncio.sleep(1)
+
             # ── Death saving throws ───────────────────────────────────────────
             downed = run.setdefault("downed", {})
             dead   = run.setdefault("dead",   set())
@@ -1707,6 +2281,17 @@ class DungeonMasterCog(commands.Cog):
                             else:
                                 dmg     = dmg1
                                 hit_txt = f"**{dmg} dmg**"
+                            ef_sc = _get_subclass(self.db, t_uid, gid, t_stat["char_class"])
+                            ef_notes = ""
+                            if t_uid in run.get("raging_uids", set()) and ef_sc == "totem_warrior":
+                                dmg = max(1, dmg // 2)
+                                hit_txt += " *(Bear — half dmg)*"
+                            ef_ward = run.get("ward_hp", {}).get(t_uid, 0)
+                            if ef_ward > 0:
+                                ef_abs = min(ef_ward, dmg)
+                                dmg   -= ef_abs
+                                run["ward_hp"][t_uid] = ef_ward - ef_abs
+                                hit_txt += f" *(Ward absorbed {ef_abs})*"
                             run["player_hp"][t_uid] = max(0, run["player_hp"][t_uid] - dmg)
                             ko_txt = ""
                             if run["player_hp"][t_uid] <= 0:
@@ -1904,12 +2489,67 @@ class DungeonMasterCog(commands.Cog):
                     run["log"].append({"type": "feature", "uid": uid, "name": name,
                                        "feature": fid, "round": rnd})
 
+                elif fid == "ensnaring_strike":
+                    run.setdefault("ensnaring_uids", set()).add(uid)
+                    round_lines.append(f"🌿 **{name}** arms **Ensnaring Strike** *(next ranged hit restrains — enemy ATK −2)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "hail_of_thorns":
+                    run.setdefault("hail_uids", set()).add(uid)
+                    round_lines.append(f"🌪️ **{name}** primes **Hail of Thorns** *(next ranged hit +1d10 piercing)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "vanish":
+                    run.setdefault("vanish_uids", set()).add(uid)
+                    round_lines.append(f"👁️ **{name}** Vanishes into shadow *(half damage from next hit this round)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "beast_protect":
+                    t_stats_bp = self._get_char_combat_stats(uid, gid)
+                    if t_stats_bp and t_stats_bp["level"] >= 7:
+                        run.setdefault("beast_protect_uids", set()).add(uid)
+                        round_lines.append(f"🛡️ **{name}**'s beast intercepts *(half damage from next hit this round)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "round": rnd})
+                    else:
+                        round_lines.append(f"🛡️ **{name}** tried Beast Guard but isn't Lv 7+ yet!")
+
+                elif fid == "shield_spell":
+                    run["shield_spell_ac"].add(uid)
+                    round_lines.append(f"🛡️ **{name}** Shield! +5 AC until next turn *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "misty_step":
+                    run.setdefault("misty_step_uids", set()).add(uid)
+                    round_lines.append(f"💨 **{name}** Misty Step — teleports away *(half damage from next hit)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "counterspell":
+                    run.setdefault("counterspell_uids", set()).add(uid)
+                    round_lines.append(f"🚫 **{name}** Counterspell! **{enemy['name']}** is disrupted — skips their attack this round!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
                 elif fid in ("lay_on_hands", "healing_word"):
                     t_uid    = bonus.get("target_uid", uid)
                     # Paladin Lay on Hands uses CHA; Cleric uses WIS
                     heal_mod = cha if (fid == "lay_on_hands" and stats and stats["char_class"] == "paladin") else wis
                     heal     = max(1, random.randint(1, 8) + heal_mod) if fid == "lay_on_hands" \
                                else max(1, random.randint(1, 4) + wis)
+                    if fid == "healing_word" and stats:
+                        sc_heal = _get_subclass(self.db, uid, gid, stats["char_class"])
+                        if sc_heal == "life":
+                            heal += 3
+                            life_tag = " *(+3 Life)*"
+                        else:
+                            life_tag = ""
+                    else:
+                        life_tag = ""
                     max_hp = run["player_max_hp"].get(t_uid, 999)
                     old_hp = run["player_hp"].get(t_uid, 0)
                     actual = min(max_hp, old_hp + heal) - old_hp
@@ -1922,9 +2562,153 @@ class DungeonMasterCog(commands.Cog):
                     feat_lbl = "Lay on Hands" if fid == "lay_on_hands" else "Healing Word"
                     emoji    = "✨" if fid == "lay_on_hands" else "🙏"
                     who      = "themselves" if t_uid == uid else f"**{t_name}**"
-                    round_lines.append(f"{emoji} **{name}** {feat_lbl} on {who} → **+{actual} HP** *(bonus)*")
+                    round_lines.append(f"{emoji} **{name}** {feat_lbl} on {who} → **+{actual} HP**{life_tag} *(bonus)*")
                     run["log"].append({"type": "feature", "uid": uid, "name": name,
                                        "feature": fid, "target": t_uid, "heal": actual, "round": rnd})
+
+                elif fid == "frenzy_attack":
+                    if uid not in run.get("raging_uids", set()):
+                        round_lines.append(f"🔥 **{name}** tried Frenzy but isn't raging!")
+                    elif stats:
+                        fr = random.randint(1, 20)
+                        ft = fr + stats["atk_bonus"]
+                        if fr == 20 or ft >= enemy["ac"]:
+                            fd1 = _roll(stats["dmg_expr"])
+                            if fr == 20:
+                                fd2 = _roll(stats["dmg_expr"])
+                                fdmg = (fd1 + fd2) * 2
+                                round_lines.append(f"🔥 **{name}** Frenzy ✨CRIT! → **{fdmg} dmg** *(rage ×2)*")
+                            else:
+                                fdmg = fd1 * 2
+                                round_lines.append(f"🔥 **{name}** Frenzy attack → **{fdmg} dmg** *(rage ×2)*")
+                            e_hp = max(0, e_hp - fdmg)
+                            last_hitter = (uid, name)
+                        else:
+                            round_lines.append(f"🔥 **{name}** Frenzy attack missed! (rolled {fr})")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "round": rnd})
+
+                elif fid == "eldritch_spell":
+                    es_dmg = random.randint(1, 8)
+                    e_hp   = max(0, e_hp - es_dmg)
+                    last_hitter = (uid, name)
+                    round_lines.append(f"🔮 **{name}** War Magic — Booming Blade → **{es_dmg} force dmg** *(auto-hit)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "dmg": es_dmg, "round": rnd})
+
+                elif fid == "mage_hand":
+                    run.setdefault("arcane_distraction", set()).add(uid)
+                    round_lines.append(f"🎩 **{name}** Mage Hand distracts **{enemy['name']}** — disadvantage on their next attack!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "guided_strike":
+                    run.setdefault("guided_strike", set()).add(uid)
+                    round_lines.append(f"✝️ **{name}** channels Guided Strike — +10 to next attack roll!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "sacred_weapon":
+                    run.setdefault("sacred_weapon_uids", set()).add(uid)
+                    cha_mod = stats["mods"]["charisma"] if stats else 0
+                    round_lines.append(f"✨ **{name}** Sacred Weapon — +{cha_mod} to all attack rolls this combat!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "natures_wrath":
+                    run["natures_wrath_active"] = True
+                    round_lines.append(f"🌿 **{name}** Nature's Wrath — **{enemy['name']}** is restrained! *(−2 ATK next round)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "vow_of_enmity":
+                    run.setdefault("vow_of_enmity", set()).add(uid)
+                    round_lines.append(f"⚡ **{name}** Vow of Enmity — advantage on all attacks this combat!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "superiority_die":
+                    run.setdefault("superiority_die", set()).add(uid)
+                    round_lines.append(f"⚔️ **{name}** Superiority Die readied — +1d8 to next attack!")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                # ── EK: Shield spell ──────────────────────────────────────────
+                elif fid == "ek_shield":
+                    run["shield_spell_ac"].add(uid)
+                    round_lines.append(f"🛡️ **{name}** Shield! +5 AC until next turn *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                # ── EK: War Magic bonus weapon attack ─────────────────────────
+                elif fid == "war_magic_atk" and stats:
+                    main_act = view.actions.get(uid)
+                    fire_bolted = (isinstance(main_act, dict)
+                                   and main_act.get("feature_id") == "fire_bolt")
+                    if not fire_bolted:
+                        round_lines.append(
+                            f"⚔️ **{name}** War Magic Strike — no spell cast this round *(fizzles)*")
+                    else:
+                        wm_r = random.randint(1, 20)
+                        wm_t = wm_r + stats["atk_bonus"]
+                        if wm_r == 20 or wm_t >= enemy["ac"]:
+                            wd1 = _roll(stats["dmg_expr"])
+                            if wm_r == 20:
+                                wd2   = _roll(stats["dmg_expr"])
+                                wdmg  = wd1 + wd2
+                                wm_txt = f"✨CRIT {wd1}+{wd2}=**{wdmg}**"
+                            else:
+                                wdmg   = wd1
+                                wm_txt = f"**{wdmg}**"
+                            e_hp = max(0, e_hp - wdmg)
+                            last_hitter = (uid, name)
+                            round_lines.append(
+                                f"⚔️ **{name}** War Magic Strike → {wm_txt} dmg *(bonus)*")
+                        else:
+                            round_lines.append(
+                                f"⚔️ **{name}** War Magic Strike missed! (rolled {wm_r}) *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                # ── Sharpshooter stance ───────────────────────────────────────
+                elif fid == "sharpshooter_stance":
+                    run["sharpshooter_stance"].add(uid)
+                    round_lines.append(
+                        f"🎯 **{name}** Sharpshooter Stance — next ranged attack: −5 to hit, +10 dmg *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                # ── Battle Master maneuvers ───────────────────────────────────
+                elif fid in ("bm_precision", "bm_trip", "bm_disarm", "bm_riposte", "bm_menacing"):
+                    if run.get("sup_dice", {}).get(uid, 0) <= 0:
+                        round_lines.append(f"🎲 **{name}** — no Superiority Dice left!")
+                    else:
+                        die_type = run.get("sup_die_type", {}).get(uid, "1d8")
+                        die_val  = _sup_die_roll(die_type)
+                        run["sup_dice"][uid] -= 1
+                        if fid == "bm_precision":
+                            run.setdefault("bm_pending", {})[uid] = {"type": "precision", "die": die_val}
+                            round_lines.append(
+                                f"🎯 **{name}** Precision Attack — +{die_val} to ATK roll *(sup die {die_type})*")
+                        elif fid == "bm_trip":
+                            run.setdefault("bm_pending", {})[uid] = {"type": "trip", "die": die_val}
+                            round_lines.append(
+                                f"🦵 **{name}** Trip Attack readied — +{die_val} dmg + trip on hit *(sup die {die_type})*")
+                        elif fid == "bm_disarm":
+                            run.setdefault("bm_pending", {})[uid] = {"type": "disarm", "die": die_val}
+                            round_lines.append(
+                                f"🔓 **{name}** Disarming Strike readied — +{die_val} dmg + disarm on hit *(sup die {die_type})*")
+                        elif fid == "bm_menacing":
+                            run.setdefault("bm_pending", {})[uid] = {"type": "menacing", "die": die_val}
+                            round_lines.append(
+                                f"😤 **{name}** Menacing Attack readied — +{die_val} dmg + taunt on hit *(sup die {die_type})*")
+                        elif fid == "bm_riposte":
+                            run["bm_riposte_set"].add(uid)
+                            run.setdefault("bm_pending", {})[uid] = {"type": "riposte", "die": die_val}
+                            round_lines.append(
+                                f"🔄 **{name}** Riposte readied — counter +{die_val} dmg if enemy misses! *(sup die {die_type})*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "die": die_val, "round": rnd})
 
             # ── Process main actions ───────────────────────────────────────
             for uid, name in run["participants"]:
@@ -2009,50 +2793,259 @@ class DungeonMasterCog(commands.Cog):
                         rage_txt   = " 💢*(rage ×2)*" if is_raging else ""
                         help_txt   = f" 🤝*(+{help_bonus})*" if help_bonus else ""
 
+                        subclass           = _get_subclass(self.db, uid, gid, char_class)
+                        crit_thresh        = (18 if level >= 15 else 19) if subclass == "champion" else 20
+                        hunter_slayer_used = False
+                        cha_mod            = stats["mods"]["charisma"]
+                        is_ranged          = stats.get("is_ranged", False)
+                        handed             = stats.get("handed", 1)
+                        fs                 = run.get("fighting_style", {}).get(uid)
+                        p_feat             = _get_human_feat(self.db, uid, gid)
+                        dwarf_tr           = _get_dwarf_trait(self.db, uid, gid)
+                        fe_type            = run.get("favored_enemy", {}).get(uid)
+                        fe_add             = 2 if fe_type and _enemy_matches_type(enemy["name"], fe_type) else 0
+                        any_crit           = False
+
                         total_dmg  = 0
                         first_roll = first_total = first_crit = 0
+                        first_ann  = ""
                         hit_parts: list[str] = []
                         for i in range(n_atk):
                             roll  = random.randint(1, 20)
                             bonus = help_bonus if i == 0 else 0
+                            atk_ann: list[str] = []
+
+                            if uid in run.get("vow_of_enmity", set()):
+                                roll2b = random.randint(1, 20)
+                                if roll2b > roll:
+                                    roll = roll2b
+                                    atk_ann.append("*(Vow of Enmity)*")
+
+                            if subclass == "divination" and uid not in run.get("portent_used", set()) and i == 0:
+                                roll2  = random.randint(1, 20)
+                                roll   = max(roll, roll2)
+                                run.setdefault("portent_used", set()).add(uid)
+                                atk_ann.append("*(Portent)*")
+
+                            if subclass == "assassin" and surprise and rnd == 1:
+                                crit = True
+                            else:
+                                crit = roll >= crit_thresh
+
                             total = roll + stats["atk_bonus"] + bonus
-                            crit  = roll == 20
+
+                            if subclass == "illusion" and rnd == 1 and i == 0:
+                                total += 4
+                                atk_ann.append("*(+4 Illusion)*")
+
+                            if subclass == "knowledge":
+                                total += 2
+                                atk_ann.append("*(+2 Knowledge)*")
+
+                            if uid in run.get("guided_strike", set()) and i == 0:
+                                total += 10
+                                atk_ann.append("*(+10 Guided Strike!)*")
+                                run["guided_strike"].discard(uid)
+
+                            if uid in run.get("sacred_weapon_uids", set()):
+                                total += cha_mod
+                                atk_ann.append("*(Sacred Weapon)*")
+
+                            # Fighting style: Archery +2 ranged ATK
+                            if fs == "archery" and is_ranged:
+                                total += 2
+                                atk_ann.append("*(+2 Archery)*")
+
+                            # Dwarf Battle-Born: +1 melee ATK
+                            if dwarf_tr == "battle_born" and not is_ranged:
+                                total += 1
+                                atk_ann.append("*(+1 Battle-Born)*")
+
+                            # BM Precision: +die to first attack roll
+                            bm_pend = run.get("bm_pending", {}).get(uid)
+                            if bm_pend and bm_pend["type"] == "precision" and i == 0:
+                                total += bm_pend["die"]
+                                atk_ann.append(f"*(+{bm_pend['die']} Precision)*")
+                                del run["bm_pending"][uid]
+                                bm_pend = None
+
+                            # Sharpshooter: -5 to hit, +10 dmg on hit (ranged only)
+                            ss_active = (uid in run.get("sharpshooter_stance", set())
+                                         and is_ranged and i == 0)
+                            if ss_active:
+                                total -= 5
+                                atk_ann.append("*(-5 Sharpshooter)*")
+                                run["sharpshooter_stance"].discard(uid)
+
                             if i == 0:
-                                first_roll, first_total, first_crit = roll, total, crit
-                            if crit or total >= enemy["ac"]:
-                                dmg1     = _roll(stats["dmg_expr"])
+                                first_roll  = roll
+                                first_total = total
+                                first_crit  = crit
+                                first_ann   = " ".join(atk_ann)
+
+                            eff_ac = enemy["ac"] - run.get("enemy_ac_penalty", 0)
+                            if crit or total >= eff_ac:
+                                # Damage roll — GWF rerolls 1s and 2s
+                                if fs == "great_weapon_fighting" and not is_ranged:
+                                    dmg1 = _roll_gwf(stats["dmg_expr"])
+                                else:
+                                    dmg1 = _roll(stats["dmg_expr"])
                                 mark_add = random.randint(1, 6) if is_marked else 0
                                 ism_add  = random.randint(1, 8) if imp_smite else 0
+                                sup_add  = 0
+                                if uid in run.get("superiority_die", set()) and i == 0:
+                                    sup_add = random.randint(1, 8)
+                                    run["superiority_die"].discard(uid)
+                                cs_add = 0
+                                if subclass == "hunter" and e_hp < e_max and not hunter_slayer_used:
+                                    cs_add = random.randint(1, 8)
+                                    hunter_slayer_used = True
+                                # Dueling: +2 dmg for one-handed melee
+                                duel_add = (2 if fs == "dueling" and not is_ranged
+                                               and handed == 1 else 0)
+                                # Sharpshooter +10 on hit
+                                ss_dmg = 10 if ss_active else 0
+                                # BM on-hit effects
+                                bm_pend = run.get("bm_pending", {}).get(uid)
+                                bm_die  = 0
+                                bm_note = ""
+                                if bm_pend and bm_pend["type"] in ("trip", "disarm", "menacing") and i == 0:
+                                    bm_die  = bm_pend["die"]
+                                    if bm_pend["type"] == "trip":
+                                        run["enemy_ac_penalty"] = max(run.get("enemy_ac_penalty",0), 2)
+                                        bm_note = f"+{bm_die}🦵*(trip)*"
+                                    elif bm_pend["type"] == "disarm":
+                                        run["enemy_atk_penalty"] = max(run.get("enemy_atk_penalty",0), 2)
+                                        bm_note = f"+{bm_die}🔓*(disarm)*"
+                                    elif bm_pend["type"] == "menacing":
+                                        run.setdefault("taunt_targets", set()).add(uid)
+                                        bm_note = f"+{bm_die}😤*(taunt)*"
+                                    del run["bm_pending"][uid]
+                                # Hail of Thorns: +1d10 on first ranged hit
+                                hail_add = 0
+                                if uid in run.get("hail_uids", set()) and is_ranged and i == 0:
+                                    hail_add = random.randint(1, 10)
+                                    run["hail_uids"].discard(uid)
+                                # Ensnaring Strike: restrain on first ranged hit
+                                ensnare_txt = ""
+                                if uid in run.get("ensnaring_uids", set()) and is_ranged and i == 0:
+                                    run["enemy_atk_penalty"] = max(run.get("enemy_atk_penalty", 0), 2)
+                                    run["ensnaring_uids"].discard(uid)
+                                    ensnare_txt = "🌿*(restrained!)*"
                                 if crit:
-                                    dmg2      = _roll(stats["dmg_expr"])
+                                    if fs == "great_weapon_fighting" and not is_ranged:
+                                        dmg2 = _roll_gwf(stats["dmg_expr"])
+                                    else:
+                                        dmg2      = _roll(stats["dmg_expr"])
                                     mark_add2 = random.randint(1, 6) if is_marked else 0
                                     ism_add2  = random.randint(1, 8) if imp_smite else 0
-                                    dmg       = dmg1 + dmg2 + mark_add + mark_add2 + ism_add + ism_add2
+                                    dmg       = (dmg1 + dmg2 + mark_add + mark_add2
+                                                 + ism_add + ism_add2 + sup_add + cs_add
+                                                 + duel_add + ss_dmg + bm_die + fe_add + hail_add)
+                                    any_crit  = True
                                 else:
-                                    dmg = dmg1 + mark_add + ism_add
+                                    dmg = (dmg1 + mark_add + ism_add + sup_add + cs_add
+                                           + duel_add + ss_dmg + bm_die + fe_add + hail_add)
                                 if is_raging:
                                     dmg *= 2
                                 e_hp = max(0, e_hp - dmg)
                                 total_dmg += dmg
                                 last_hitter = (uid, name)
-                                extras = (f"+{mark_add}🎯" if mark_add else "") + (f"+{ism_add}✝️" if ism_add else "")
+                                extras = (
+                                    (f"+{mark_add}🎯" if mark_add else "")
+                                    + (f"+{ism_add}✝️" if ism_add else "")
+                                    + (f"+{sup_add}⚔️" if sup_add else "")
+                                    + (f"+{cs_add}💥*(Colossus)*" if cs_add else "")
+                                    + (f"+{duel_add}⚔️*(duel)*" if duel_add else "")
+                                    + (f"+{ss_dmg}🎯*(SS)*" if ss_dmg else "")
+                                    + (f"+{fe_add}🏹*(favored)*" if fe_add else "")
+                                    + (f"+{hail_add}🌪️*(thorns)*" if hail_add else "")
+                                    + (ensnare_txt if ensnare_txt else "")
+                                    + (bm_note if bm_note else "")
+                                )
                                 hit_parts.append(f"✨CRIT **{dmg}**{extras}" if crit else f"**{dmg}**{extras}")
+
+                                if uid in run.get("beast_companion", set()) and i == 0:
+                                    _comp    = run.get("beast_companion_item", {}).get(uid)
+                                    if _comp:
+                                        _b_dmg  = _comp.get("beast_dmg",     "1d6+2")
+                                        _b_amod = _comp.get("beast_atk_mod", -2)
+                                        _b_emj  = _comp.get("emoji",         "🐾")
+                                        _b_nm   = _comp.get("beast_name",    "Beast")
+                                    else:
+                                        _b_dmg  = "1d6+2"
+                                        _b_amod = -2
+                                        _b_emj  = "🐺"
+                                        _b_nm   = "Wolf"
+                                    b_atk = stats["atk_bonus"] + _b_amod
+                                    br    = random.randint(1, 20)
+                                    bt    = br + b_atk
+                                    if br == 20 or bt >= enemy["ac"]:
+                                        bd   = _roll(_b_dmg)
+                                        if br == 20:
+                                            bd += _roll(_b_dmg)
+                                        e_hp = max(0, e_hp - bd)
+                                        total_dmg += bd
+                                        crit_tag = " ✨CRIT!" if br == 20 else ""
+                                        hit_parts.append(f"{_b_emj} {_b_nm}{crit_tag} **{bd}**")
+                                    else:
+                                        hit_parts.append(f"{_b_emj} {_b_nm} miss")
+
+                                # GWM: auto bonus attack after crit or kill
+                                if (any_crit or e_hp <= 0) and p_feat == "great_weapon_master" and not is_ranged:
+                                    gwm_r = random.randint(1, 20)
+                                    gwm_t = gwm_r + stats["atk_bonus"]
+                                    if gwm_r == 20 or gwm_t >= enemy["ac"]:
+                                        gd1  = _roll(stats["dmg_expr"])
+                                        if gwm_r == 20:
+                                            gd2  = _roll(stats["dmg_expr"])
+                                            gdmg = gd1 + gd2
+                                            hit_parts.append(f"💥GWM ✨CRIT **{gdmg}**")
+                                        else:
+                                            gdmg = gd1
+                                            hit_parts.append(f"💥GWM **{gdmg}**")
+                                        e_hp = max(0, e_hp - gdmg)
+                                        total_dmg += gdmg
+                                        last_hitter = (uid, name)
+                                    else:
+                                        hit_parts.append(f"💥GWM miss")
+                                    any_crit = False  # only trigger once
                             else:
                                 hit_parts.append("miss")
                             if e_hp <= 0:
                                 break
 
-                        if n_atk == 1:
+                        # TWF: auto offhand attack for two_weapon_fighting + melee
+                        if fs == "two_weapon_fighting" and not is_ranged and e_hp > 0:
+                            twf_r = random.randint(1, 20)
+                            twf_t = twf_r + stats["atk_bonus"]
+                            if twf_r == 20 or twf_t >= enemy["ac"]:
+                                td1  = _roll(stats["dmg_expr"])
+                                if twf_r == 20:
+                                    td2  = _roll(stats["dmg_expr"])
+                                    tdmg = td1 + td2
+                                    hit_parts.append(f"⚔️Offhand ✨CRIT **{tdmg}**")
+                                else:
+                                    tdmg = td1
+                                    hit_parts.append(f"⚔️Offhand **{tdmg}**")
+                                e_hp = max(0, e_hp - tdmg)
+                                total_dmg += tdmg
+                                last_hitter = (uid, name)
+                            else:
+                                hit_parts.append("⚔️Offhand miss")
+
+                        ann_sfx = (f" {first_ann}" if first_ann else "")
+                        if n_atk == 1 and fs != "two_weapon_fighting":
                             result = hit_parts[0] if hit_parts else "miss"
                             if result == "miss":
                                 round_lines.append(
-                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}** vs AC {enemy['ac']} → MISS")
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → MISS")
                                 run["log"].append({"type": "attack", "uid": uid, "name": name,
                                     "roll": first_roll, "total": first_total, "dmg": 0,
                                     "hit": False, "crit": False, "round": rnd, "enemy": enemy["name"]})
                             else:
                                 round_lines.append(
-                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}** vs AC {enemy['ac']} → {result}{rage_txt}")
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → {result}{rage_txt}")
                                 run["log"].append({"type": "attack", "uid": uid, "name": name,
                                     "roll": first_roll, "total": first_total, "dmg": total_dmg,
                                     "hit": True, "crit": first_crit, "round": rnd, "enemy": enemy["name"]})
@@ -2071,24 +3064,45 @@ class DungeonMasterCog(commands.Cog):
                     stats = self._get_char_combat_stats(uid, gid)
                     level = stats["level"] if stats else 1
                     wis   = stats["mods"]["wisdom"] if stats else 0
-                    run["features_used"].setdefault(uid, set()).add(fid)
+                    # Action Surge uses its own counter; everything else uses features_used
+                    if fid == "action_surge":
+                        run.setdefault("action_surge_uses", {})[uid] = max(
+                            0, run["action_surge_uses"].get(uid, 0) - 1)
+                    else:
+                        run["features_used"].setdefault(uid, set()).add(fid)
 
                     if fid == "action_surge" and stats:
                         surge_n    = max(2, _n_attacks(stats["char_class"], stats["level"]))
                         surge_hits: list[str] = []
+                        fs_surge   = run.get("fighting_style", {}).get(uid)
+                        is_ranged_s = stats.get("is_ranged", False)
+                        subclass_s  = _get_subclass(self.db, uid, gid, stats["char_class"])
                         for _ in range(surge_n):
                             r = random.randint(1, 20)
                             t = r + stats["atk_bonus"]
+                            if fs_surge == "archery" and is_ranged_s:
+                                t += 2
                             c = r == 20
                             if c or t >= enemy["ac"]:
                                 d1 = _roll(stats["dmg_expr"])
                                 if c:
                                     d2 = _roll(stats["dmg_expr"])
                                     d  = d1 + d2
-                                    surge_hits.append(f"✨CRIT {d1}+{d2}=**{d}**")
+                                    # EK Arcane Charge: +1d6 force per attack at Lv15+
+                                    if subclass_s == "eldritch_knight" and level >= 15:
+                                        ac_bonus = random.randint(1, 6)
+                                        d += ac_bonus
+                                        surge_hits.append(f"✨CRIT {d1}+{d2}+{ac_bonus}⚡=**{d}**")
+                                    else:
+                                        surge_hits.append(f"✨CRIT {d1}+{d2}=**{d}**")
                                 else:
                                     d = d1
-                                    surge_hits.append(f"**{d}**")
+                                    if subclass_s == "eldritch_knight" and level >= 15:
+                                        ac_bonus = random.randint(1, 6)
+                                        d += ac_bonus
+                                        surge_hits.append(f"**{d}**(+{ac_bonus}⚡)")
+                                    else:
+                                        surge_hits.append(f"**{d}**")
                                 if uid in run.get("raging_uids", set()):
                                     d *= 2
                                 e_hp = max(0, e_hp - d)
@@ -2099,6 +3113,23 @@ class DungeonMasterCog(commands.Cog):
                             f"⚡ **{name}** Action Surge ×{surge_n}! → {' | '.join(surge_hits)}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "fire_bolt" and stats:
+                        fb_dice = 1 if level < 5 else (2 if level < 11 else (3 if level < 17 else 4))
+                        fb_dmg  = sum(random.randint(1, 10) for _ in range(fb_dice))
+                        e_hp    = max(0, e_hp - fb_dmg)
+                        last_hitter = (uid, name)
+                        run.setdefault("fire_bolt_rnd", {})[uid] = rnd
+                        es_note = ""
+                        if level >= 10:
+                            run.setdefault("eldritch_strike_rnd", {})[uid] = rnd
+                            es_note = " *(Eldritch Strike active!)*"
+                        round_lines.append(
+                            f"🔥 **{name}** Fire Bolt ({fb_dice}d10) → **{fb_dmg} fire dmg** *(auto-hit)*{es_note}")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": fb_dmg, "round": rnd})
                         if e_hp <= 0:
                             break
 
@@ -2140,11 +3171,18 @@ class DungeonMasterCog(commands.Cog):
                     elif fid == "magic_missile" and stats:
                         n_bolts   = min(6, 3 + (level - 1) // 3)
                         total_dmg = sum(random.randint(1, 4) + 1 for _ in range(n_bolts))
+                        mm_sc = _get_subclass(self.db, uid, gid, stats["char_class"])
+                        sculpt_add = 0
+                        sculpt_txt = ""
+                        if mm_sc == "evocation":
+                            sculpt_add = random.randint(1, 4)
+                            total_dmg += sculpt_add
+                            sculpt_txt = f" *(+{sculpt_add} Sculpt)*"
                         e_hp      = max(0, e_hp - total_dmg)
                         last_hitter = (uid, name)
                         bolt_s = "bolts" if n_bolts != 1 else "bolt"
                         round_lines.append(
-                            f"✨ **{name}** Magic Missile — {n_bolts} {bolt_s} → **{total_dmg} dmg** *(auto-hit)*")
+                            f"✨ **{name}** Magic Missile — {n_bolts} {bolt_s} → **{total_dmg} dmg** *(auto-hit)*{sculpt_txt}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": total_dmg, "round": rnd})
                         if e_hp <= 0:
@@ -2180,8 +3218,135 @@ class DungeonMasterCog(commands.Cog):
                         if e_hp <= 0:
                             break
 
+                    elif fid == "cure_wounds_rng" and stats:
+                        wis_cw  = stats["mods"]["wisdom"]
+                        heal    = max(1, random.randint(1, 8) + wis_cw)
+                        max_hp  = run["player_max_hp"].get(uid, 999)
+                        old_hp  = run["player_hp"].get(uid, 0)
+                        actual  = min(max_hp, old_hp + heal) - old_hp
+                        run["player_hp"][uid] = old_hp + actual
+                        round_lines.append(f"💚 **{name}** Cure Wounds → **+{actual} HP** *(action)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "heal": actual, "round": rnd})
+
+                    elif fid == "burning_hands" and stats:
+                        bh_dice = 3 + (level - 1) // 4
+                        bh_dmg  = sum(random.randint(1, 6) for _ in range(bh_dice))
+                        bh_sc   = _get_subclass(self.db, uid, gid, stats["char_class"])
+                        bh_sculpt = 0
+                        if bh_sc == "evocation":
+                            bh_sculpt = random.randint(1, 4)
+                            bh_dmg   += bh_sculpt
+                        e_hp = max(0, e_hp - bh_dmg)
+                        last_hitter = (uid, name)
+                        sculpt_t = f" *(+{bh_sculpt} Sculpt)*" if bh_sculpt else ""
+                        round_lines.append(
+                            f"🔥 **{name}** Burning Hands ({bh_dice}d6) → **{bh_dmg} fire dmg** *(auto-hit)*{sculpt_t}")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": bh_dmg, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "thunderwave" and stats:
+                        int_mod = stats["mods"]["intelligence"]
+                        tw_dmg  = sum(random.randint(1, 8) for _ in range(2)) + int_mod
+                        tw_dmg  = max(1, tw_dmg)
+                        run["enemy_atk_penalty"] = max(run.get("enemy_atk_penalty", 0), 2)
+                        e_hp = max(0, e_hp - tw_dmg)
+                        last_hitter = (uid, name)
+                        round_lines.append(
+                            f"🌊 **{name}** Thunderwave → **{tw_dmg} thunder dmg** *(auto-hit)* · "
+                            f"**{enemy['name']}** is pushed back! *(ATK −2 next round)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": tw_dmg, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "scorching_ray" and stats:
+                        sr_hits: list[str] = []
+                        sr_total = 0
+                        for _ in range(3):
+                            sr_r = random.randint(1, 20)
+                            sr_t = sr_r + stats["atk_bonus"]
+                            if sr_r == 20 or sr_t >= enemy["ac"]:
+                                sr_d1 = sum(random.randint(1, 6) for _ in range(2))
+                                if sr_r == 20:
+                                    sr_d2 = sum(random.randint(1, 6) for _ in range(2))
+                                    sr_d  = sr_d1 + sr_d2
+                                    sr_hits.append(f"✨CRIT **{sr_d}**")
+                                else:
+                                    sr_d  = sr_d1
+                                    sr_hits.append(f"**{sr_d}**")
+                                e_hp = max(0, e_hp - sr_d)
+                                sr_total += sr_d
+                                last_hitter = (uid, name)
+                            else:
+                                sr_hits.append("miss")
+                        round_lines.append(
+                            f"☀️ **{name}** Scorching Ray → {' | '.join(sr_hits)} *(total {sr_total} fire)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": sr_total, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "fireball" and stats:
+                        fb_dmg = sum(random.randint(1, 6) for _ in range(8))
+                        fb_sc  = _get_subclass(self.db, uid, gid, stats["char_class"])
+                        fb_bonus = 0
+                        if fb_sc == "evocation":
+                            fb_bonus = max(0, stats["mods"]["intelligence"])
+                            fb_dmg  += fb_bonus
+                        e_hp = max(0, e_hp - fb_dmg)
+                        last_hitter = (uid, name)
+                        evoc_t = f" *(+{fb_bonus} Evocation)*" if fb_bonus else ""
+                        round_lines.append(
+                            f"💥 **{name}** FIREBALL! (8d6) → **{fb_dmg} fire dmg** *(auto-hit)*{evoc_t}")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": fb_dmg, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "volley" and stats:
+                        if level < 11:
+                            round_lines.append(f"🏹 **{name}** Volley requires Lv 11+!")
+                        else:
+                            vol_hits: list[str] = []
+                            vol_fs = run.get("fighting_style", {}).get(uid)
+                            vol_fe = run.get("favored_enemy", {}).get(uid)
+                            vol_fe_add = 2 if vol_fe and _enemy_matches_type(enemy["name"], vol_fe) else 0
+                            is_marked_v = uid in run.get("hunters_mark_uids", set())
+                            for _ in range(2):
+                                vr = random.randint(1, 20)
+                                vt = vr + stats["atk_bonus"]
+                                if vol_fs == "archery":
+                                    vt += 2
+                                if vr == 20 or vt >= enemy["ac"]:
+                                    vd1 = _roll(stats["dmg_expr"])
+                                    v_mark = random.randint(1, 6) if is_marked_v else 0
+                                    if vr == 20:
+                                        vd2  = _roll(stats["dmg_expr"])
+                                        v_mark2 = random.randint(1, 6) if is_marked_v else 0
+                                        vdmg = vd1 + vd2 + v_mark + v_mark2 + vol_fe_add
+                                        vol_hits.append(f"✨CRIT **{vdmg}**")
+                                    else:
+                                        vdmg = vd1 + v_mark + vol_fe_add
+                                        vol_hits.append(f"**{vdmg}**")
+                                    e_hp = max(0, e_hp - vdmg)
+                                    last_hitter = (uid, name)
+                                else:
+                                    vol_hits.append("miss")
+                            round_lines.append(f"🏹 **{name}** Volley! → {' | '.join(vol_hits)}")
+                            run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                               "feature": fid, "round": rnd})
+                            if e_hp <= 0:
+                                break
+
             # ── Enemy retaliates (not on surprise round 1) ─────────────────
-            if not enemy_first and e_hp > 0 and not (surprise and rnd == 1):
+            _counterspelled = bool(run.get("counterspell_uids"))
+            run["counterspell_uids"] = set()
+            if _counterspelled:
+                round_lines.append(f"🚫 **{enemy['name']}** is disrupted — no retaliation this round!")
+            if not enemy_first and e_hp > 0 and not (surprise and rnd == 1) and not _counterspelled:
                 non_fled = [uid for uid in active
                             if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
                 if non_fled:
@@ -2191,10 +3356,51 @@ class DungeonMasterCog(commands.Cog):
                     target_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
                     stats       = self._get_char_combat_stats(target_uid, gid)
                     if stats:
+                        e_atk_bonus = enemy["atk_bonus"]
+                        ret_notes: list[str] = []
+
+                        if run.get("natures_wrath_active"):
+                            e_atk_bonus -= 2
+                            run["natures_wrath_active"] = False
+                            ret_notes.append("*(Restrained −2)*")
+
+                        # BM Disarm penalty
+                        e_atk_pen = run.get("enemy_atk_penalty", 0)
+                        if e_atk_pen:
+                            e_atk_bonus -= e_atk_pen
+                            ret_notes.append(f"*(Disarmed −{e_atk_pen})*")
+
+                        # EK Eldritch Strike: enemy -2 ATK if fire bolt hit this round
+                        if run.get("eldritch_strike_rnd", {}).get(target_uid) == rnd:
+                            e_atk_bonus -= 2
+                            ret_notes.append("*(Eldritch Strike −2)*")
+
                         roll      = random.randint(1, 20)
-                        total_atk = roll + enemy["atk_bonus"]
-                        in_dodge  = target_uid in dodgers or target_uid in cunning_dodgers
-                        dodge_ac  = stats["ac"] + (2 if in_dodge else 0)
+                        total_atk = roll + e_atk_bonus
+
+                        t_sc = _get_subclass(self.db, target_uid, gid, stats["char_class"])
+
+                        if target_uid in run.get("arcane_distraction", set()):
+                            roll2d = random.randint(1, 20)
+                            roll   = min(roll, roll2d)
+                            total_atk = roll + e_atk_bonus
+                            run["arcane_distraction"].discard(target_uid)
+                            ret_notes.append("*(Mage Hand disadv)*")
+
+                        if target_uid in run.get("warding_flare", set()):
+                            roll2w = random.randint(1, 20)
+                            roll   = min(roll, roll2w)
+                            total_atk = roll + e_atk_bonus
+                            run["warding_flare"].discard(target_uid)
+                            ret_notes.append("*(Warding Flare!)*")
+
+                        in_dodge = target_uid in dodgers or target_uid in cunning_dodgers
+                        # EK Shield: +5 AC temporarily
+                        ek_ac    = 5 if target_uid in run.get("shield_spell_ac", set()) else 0
+                        dodge_ac = stats["ac"] + (2 if in_dodge else 0) + ek_ac
+                        if ek_ac:
+                            ret_notes.append("*(Shield +5 AC)*")
+                        note_sfx = (" " + " ".join(ret_notes)) if ret_notes else ""
                         if roll == 20 or total_atk >= dodge_ac:
                             dmg1 = _roll(enemy["dmg"])
                             if roll == 20:
@@ -2204,25 +3410,101 @@ class DungeonMasterCog(commands.Cog):
                                 dmg  = dmg1
                             if in_dodge:
                                 dmg = max(1, dmg // 2)
+                            if target_uid in run.get("vanish_uids", set()):
+                                dmg = max(1, dmg // 2)
+                                run["vanish_uids"].discard(target_uid)
+                                ret_notes.append("*(Vanish — half dmg)*")
+                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            if target_uid in run.get("misty_step_uids", set()):
+                                dmg = max(1, dmg // 2)
+                                run["misty_step_uids"].discard(target_uid)
+                                ret_notes.append("*(Misty Step — half dmg)*")
+                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            if target_uid in run.get("beast_protect_uids", set()):
+                                dmg = max(1, dmg // 2)
+                                run["beast_protect_uids"].discard(target_uid)
+                                ret_notes.append("*(Beast Guard — half dmg)*")
+                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            if target_uid in run.get("raging_uids", set()) and t_sc == "totem_warrior":
+                                dmg = max(1, dmg // 2)
+                                ret_notes.append("*(Bear — half dmg)*")
+                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            # Protection fighting style: other fighter with shield reduces dmg
+                            prot_users = [pu for pu in active
+                                          if pu != target_uid and pu in run.get("protection_uids", set())
+                                          and run["player_hp"].get(pu, 0) > 0]
+                            if prot_users:
+                                prot_red = min(3, dmg)
+                                dmg     -= prot_red
+                                ret_notes.append(f"*(Protection −{prot_red})*")
+                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            ward = run.get("ward_hp", {}).get(target_uid, 0)
+                            ward_abs = 0
+                            if ward > 0:
+                                ward_abs = min(ward, dmg)
+                                dmg     -= ward_abs
+                                run["ward_hp"][target_uid] = ward - ward_abs
                             run["player_hp"][target_uid] = max(0, run["player_hp"][target_uid] - dmg)
                             dodge_txt = " *(half dmg — dodged)*" if in_dodge else ""
+                            ward_txt  = f" *(Ward absorbed {ward_abs})*" if ward_abs else ""
                             if roll == 20:
                                 round_lines.append(
-                                    f"💥 **{enemy['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}")
+                                    f"💥 **{enemy['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}{ward_txt}{note_sfx}")
                             else:
                                 round_lines.append(
-                                    f"💥 **{enemy['name']}** hits **{target_name}** → {dmg} dmg{dodge_txt}")
+                                    f"💥 **{enemy['name']}** hits **{target_name}** → {dmg} dmg{dodge_txt}{ward_txt}{note_sfx}")
                             run["log"].append({
                                 "type": "enemy_hit", "enemy": enemy["name"],
                                 "target": target_uid, "target_name": target_name,
                                 "dmg": dmg, "round": rnd,
                             })
                             if run["player_hp"][target_uid] <= 0:
-                                run.setdefault("downed", {})[target_uid] = {"successes": 0, "failures": 0}
-                                round_lines.append(
-                                    f"💀 **{target_name}** goes down! *(death saves begin next round)*")
+                                # Indomitable: Fighter saves vs death
+                                t_stats_i   = stats
+                                indom_left  = run.get("indomitable_uses", {}).get(target_uid, 0)
+                                if (t_stats_i and t_stats_i["char_class"] == "fighter"
+                                        and indom_left > 0):
+                                    con_mod  = t_stats_i["mods"]["constitution"]
+                                    isave    = random.randint(1, 20) + con_mod
+                                    run["indomitable_uses"][target_uid] -= 1
+                                    if isave >= 15:
+                                        run["player_hp"][target_uid] = 1
+                                        round_lines.append(
+                                            f"💪 **{target_name}** Indomitable! CON save {isave} ≥ 15 — survives at 1 HP!")
+                                    else:
+                                        run.setdefault("downed", {})[target_uid] = {"successes": 0, "failures": 0}
+                                        round_lines.append(
+                                            f"💪 **{target_name}** Indomitable failed (save {isave}) — goes down!")
+                                else:
+                                    run.setdefault("downed", {})[target_uid] = {"successes": 0, "failures": 0}
+                                    round_lines.append(
+                                        f"💀 **{target_name}** goes down! *(death saves begin next round)*")
                         else:
-                            round_lines.append(f"💨 **{enemy['name']}** attacks **{target_name}** — MISS!")
+                            round_lines.append(f"💨 **{enemy['name']}** attacks **{target_name}** — MISS!{note_sfx}")
+                            # BM Riposte: counter-attack on miss
+                            if target_uid in run.get("bm_riposte_set", set()):
+                                rip_pend = run.get("bm_pending", {}).get(target_uid, {})
+                                rip_die  = rip_pend.get("die", 0) if rip_pend.get("type") == "riposte" else 0
+                                rip_r    = random.randint(1, 20)
+                                t_stat_r = stats
+                                rip_t    = rip_r + (t_stat_r["atk_bonus"] if t_stat_r else 0)
+                                if rip_r == 20 or rip_t >= enemy["ac"]:
+                                    rd1  = _roll(t_stat_r["dmg_expr"] if t_stat_r else "1d6")
+                                    if rip_r == 20:
+                                        rd2  = _roll(t_stat_r["dmg_expr"] if t_stat_r else "1d6")
+                                        rdmg = rd1 + rd2 + rip_die
+                                        round_lines.append(
+                                            f"🔄 **{target_name}** Riposte ✨CRIT! → **{rdmg} dmg** (+{rip_die} die)")
+                                    else:
+                                        rdmg = rd1 + rip_die
+                                        round_lines.append(
+                                            f"🔄 **{target_name}** Riposte → **{rdmg} dmg** (+{rip_die} die)")
+                                    e_hp = max(0, e_hp - rdmg)
+                                    last_hitter = (target_uid, target_name)
+                                else:
+                                    round_lines.append(f"🔄 **{target_name}** Riposte missed! (rolled {rip_r})")
+                                run["bm_riposte_set"].discard(target_uid)
+                                run.get("bm_pending", {}).pop(target_uid, None)
 
             # ── Round result ───────────────────────────────────────────────
             still_active = [uid for uid, _ in run["participants"]

@@ -537,13 +537,15 @@ class CharacterCog(commands.Cog):
             (char_class, uid, gid),
         )
 
-        # Grant starting equipment (only adds missing items — won't duplicate).
+        # Grant starting equipment — weapons auto-equipped, everything else unequipped.
         for item_id in c.get("start_items", []):
+            item_def   = self._item(item_id)
+            auto_equip = 1 if (item_def and item_def.get("slot") == "weapon") else 0
             self.db.execute(
                 """INSERT INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped)
-                   VALUES (?, ?, ?, 1, 0)
+                   VALUES (?, ?, ?, 1, ?)
                    ON CONFLICT(user_id, guild_id, item_id) DO NOTHING""",
-                (uid, gid, item_id),
+                (uid, gid, item_id, auto_equip),
             )
 
         self._recompute_hp(uid, gid)

@@ -1,25 +1,31 @@
+from pathlib import Path
 from utils.config_loader import get_bot_token, load_config
+import importlib.util as _ilu
 
 BOT_TOKEN   = get_bot_token()
 config      = load_config()
 GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
-# ============================================================================
-# CURRENCY  (shared coins — same balance the casino/bank cogs use via ForgeDB)
-# ============================================================================
-
 CURRENCY_NAME   = config.get("currency_name",   "coins")
 CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
+
+# ── Load structured game data from DungeonMaster_data/ ──────────────────────
+def _load(name: str, path: Path):
+    spec = _ilu.spec_from_file_location(name, path)
+    mod  = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+_data_root = Path(__file__).parent.parent / "DungeonMaster_data"
+_dm_data   = _load("dm_data", _data_root / "data.py")
 
 # ============================================================================
 # ABILITY SCORES
 # ============================================================================
 
-# The six D&D ability scores, in display order.
 ABILITIES = ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"]
 
-# Short labels shown on the character sheet.
 ABILITY_ABBR = {
     "strength":     "STR",
     "dexterity":    "DEX",
@@ -29,89 +35,105 @@ ABILITY_ABBR = {
     "charisma":     "CHA",
 }
 
-# Scores are rolled 4d6-drop-lowest at creation. Set ROLL_METHOD = "array" to
-# hand out the standard array instead (no randomness).
-ROLL_METHOD    = "roll"                       # "roll" | "array"
-STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]      # used only when ROLL_METHOD == "array"
+ROLL_METHOD    = "roll"
+STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]
 
 # ============================================================================
-# RACES — racial ability modifiers are added at read time, never baked into
-# the stored base scores (so re-picking a race never double-applies).
-# Add more races in a content pack later; these are the standalone defaults.
+# RACES — Fighter/Human come from DungeonMaster_data; others stay inline until
+# they get their own data files.
 # ============================================================================
 
-RACES = [
-    {"id": "human",    "name": "Human",     "emoji": "🧑",
-     "mods": {"strength": 1, "dexterity": 1, "constitution": 1, "intelligence": 1, "wisdom": 1, "charisma": 1}},
-    {"id": "elf",      "name": "Elf",       "emoji": "🧝",
-     "mods": {"dexterity": 2, "intelligence": 1}},
-    {"id": "dwarf",    "name": "Dwarf",     "emoji": "🧔",
-     "mods": {"constitution": 2, "strength": 1}},
-    {"id": "halfling", "name": "Halfling",  "emoji": "🧒",
+_OTHER_RACES = [
+    {"id": "halfling", "name": "Halfling", "emoji": "🧒",
      "mods": {"dexterity": 2, "charisma": 1}},
-    {"id": "half_orc", "name": "Half-Orc",  "emoji": "👹",
+    {"id": "half_orc", "name": "Half-Orc", "emoji": "👹",
      "mods": {"strength": 2, "constitution": 1}},
-    {"id": "tiefling", "name": "Tiefling",  "emoji": "😈",
+    {"id": "tiefling", "name": "Tiefling", "emoji": "😈",
      "mods": {"charisma": 2, "intelligence": 1}},
 ]
 
+RACES = _dm_data.RACES + _OTHER_RACES
+
 # ============================================================================
-# CLASSES
-#   hit_die     = die size for HP / hit dice (6, 8, 10, 12)
-#   armor       = flat AC bonus from starting armor (AC = 10 + DEX mod + armor)
-#   primary     = key ability (used later for attack/skill checks)
-#   start_items = item ids granted the first time this class is set
+# CLASSES — Fighter comes from DungeonMaster_data; others stay inline.
 # ============================================================================
 
-CLASSES = [
-    {"id": "fighter",   "name": "Fighter",   "emoji": "⚔️", "hit_die": 10, "armor": 6, "primary": "strength",     "start_items": ["longsword", "shield"],        "weapon_profs": ["simple", "martial"]},
-    {"id": "barbarian", "name": "Barbarian", "emoji": "🪓", "hit_die": 12, "armor": 2, "primary": "strength",     "start_items": ["greataxe"],                   "weapon_profs": ["simple", "martial"]},
-    {"id": "rogue",     "name": "Rogue",     "emoji": "🗡️", "hit_die": 8,  "armor": 1, "primary": "dexterity",    "start_items": ["dagger", "leather_armor"],    "weapon_profs": ["simple", "longsword", "shortsword", "rapier"]},
-    {"id": "ranger",    "name": "Ranger",    "emoji": "🏹", "hit_die": 10, "armor": 1, "primary": "dexterity",    "start_items": ["shortbow", "leather_armor"],  "weapon_profs": ["simple", "martial"]},
-    {"id": "wizard",    "name": "Wizard",    "emoji": "🪄", "hit_die": 6,  "armor": 0, "primary": "intelligence", "start_items": ["quarterstaff", "spellbook"],  "weapon_profs": ["dagger", "quarterstaff"]},
-    {"id": "cleric",    "name": "Cleric",    "emoji": "✨", "hit_die": 8,  "armor": 4, "primary": "wisdom",       "start_items": ["mace", "shield"],             "weapon_profs": ["simple"]},
+_OTHER_CLASSES = [
+    {"id": "barbarian", "name": "Barbarian", "emoji": "🪓", "hit_die": 12, "armor": 2,
+     "primary": "strength",  "start_items": ["greataxe"],               "weapon_profs": ["simple", "martial"]},
+    {"id": "rogue",     "name": "Rogue",     "emoji": "🗡️", "hit_die": 8,  "armor": 1,
+     "primary": "dexterity", "start_items": ["dagger", "leather_armor"],"weapon_profs": ["simple", "longsword", "shortsword", "rapier"]},
+    {"id": "cleric",    "name": "Cleric",    "emoji": "✨", "hit_die": 8,  "armor": 4,
+     "primary": "wisdom",    "start_items": ["mace", "shield"],          "weapon_profs": ["simple"]},
 ]
 
+CLASSES = _dm_data.CLASSES + _OTHER_CLASSES
+
 # ============================================================================
-# ITEMS — minimal starter catalogue so the backpack has names to show.
-# Loot/weapon packs will extend this registry later.
+# ITEMS — unchanged; shop, recipes, and scribe depend on this list.
 # ============================================================================
 
 ITEMS = [
-    # weapon_type: "simple" or "martial" — used for proficiency checks.
-    # ability: which ability score drives the attack roll.
-    {"id": "longsword",     "name": "Longsword",     "slot": "weapon",     "weapon_type": "martial", "ability": "strength"},
-    {"id": "greataxe",      "name": "Greataxe",      "slot": "weapon",     "weapon_type": "martial", "ability": "strength"},
-    {"id": "dagger",        "name": "Dagger",        "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity"},
-    {"id": "shortbow",      "name": "Shortbow",      "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity"},
-    {"id": "quarterstaff",  "name": "Quarterstaff",  "slot": "weapon",     "weapon_type": "simple",  "ability": "strength"},
-    {"id": "mace",          "name": "Mace",          "slot": "weapon",     "weapon_type": "simple",  "ability": "strength"},
-    {"id": "shield",        "name": "Shield",        "slot": "offhand"},
+    {"id": "longsword",     "name": "Longsword",     "slot": "weapon",     "weapon_type": "martial", "ability": "strength",     "dmg": "1d8",  "handed": 1},
+    {"id": "shortsword",    "name": "Shortsword",    "slot": "weapon",     "weapon_type": "martial", "ability": "dexterity",    "dmg": "1d6",  "handed": 1},
+    {"id": "greataxe",      "name": "Greataxe",      "slot": "weapon",     "weapon_type": "martial", "ability": "strength",     "dmg": "1d12", "handed": 2},
+    {"id": "greatsword",    "name": "Greatsword",    "slot": "weapon",     "weapon_type": "martial", "ability": "strength",     "dmg": "2d6",  "handed": 2},
+    {"id": "handaxe",       "name": "Handaxe",       "slot": "weapon",     "weapon_type": "simple",  "ability": "strength",     "dmg": "1d6",  "handed": 1},
+    {"id": "dagger",        "name": "Dagger",        "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity",    "dmg": "1d4",  "handed": 1},
+    {"id": "shortbow",      "name": "Shortbow",      "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity",    "dmg": "1d6",  "handed": 2, "ranged": True},
+    {"id": "longbow",       "name": "Longbow",       "slot": "weapon",     "weapon_type": "martial", "ability": "dexterity",    "dmg": "1d8",  "handed": 2, "ranged": True},
+    {"id": "quarterstaff",  "name": "Quarterstaff",  "slot": "weapon",     "weapon_type": "simple",  "ability": "strength",     "dmg": "1d8",  "handed": 1},
+    {"id": "mace",          "name": "Mace",          "slot": "weapon",     "weapon_type": "simple",  "ability": "strength",     "dmg": "1d6",  "handed": 1},
+    {"id": "rapier",        "name": "Rapier",        "slot": "weapon",     "weapon_type": "martial", "ability": "dexterity",    "dmg": "1d8",  "handed": 1},
+    {"id": "shield",        "name": "Shield",        "slot": "offhand",    "ac_bonus": 2},
     {"id": "leather_armor", "name": "Leather Armor", "slot": "armor"},
+    {"id": "chain_mail",    "name": "Chain Mail",    "slot": "armor",      "ac_bonus": 4},
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
-    # Consumables — tiered healing potions, usable in combat (🧪) and via /backpack_use.
-    {"id": "small_health_potion", "name": "Small Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "1d4+1",  "tier": "common",   "sell": 8},
-    {"id": "health_potion",       "name": "Health Potion",       "emoji": "🧪", "slot": "consumable", "heal_expr": "2d4+2",  "tier": "uncommon", "sell": 20},
-    {"id": "large_health_potion", "name": "Large Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "4d4+4",  "tier": "rare",     "sell": 45},
-    # Crafting materials — dropped during campaign encounters.
+    {"id": "small_health_potion", "name": "Small Health Potion", "emoji": "🧪",
+     "slot": "consumable", "heal_expr": "1d4+1",  "tier": "common",   "sell": 8},
+    {"id": "health_potion",       "name": "Health Potion",       "emoji": "🧪",
+     "slot": "consumable", "heal_expr": "2d4+2",  "tier": "uncommon", "sell": 20},
+    {"id": "large_health_potion", "name": "Large Health Potion", "emoji": "🧪",
+     "slot": "consumable", "heal_expr": "4d4+4",  "tier": "rare",     "sell": 45},
     {"id": "herb",          "name": "Herb",          "emoji": "🌿", "slot": "material", "tier": "common",   "sell": 3},
     {"id": "leather_scrap", "name": "Leather Scrap", "emoji": "🪶", "slot": "material", "tier": "uncommon", "sell": 5},
     {"id": "arcane_shard",  "name": "Arcane Shard",  "emoji": "💎", "slot": "material", "tier": "rare",     "sell": 15},
-    # Recipe scrolls — consumed via /learn_recipe to unlock crafting recipes.
-    {"id": "recipe_hp_medium", "name": "Recipe: Health Potion",       "emoji": "📜", "slot": "recipe", "unlocks": "health_potion",       "sell": 60},
-    {"id": "recipe_hp_large",  "name": "Recipe: Large Health Potion", "emoji": "📜", "slot": "recipe", "unlocks": "large_health_potion",  "sell": 150},
-    # Shop / misc
+    {"id": "recipe_hp_medium", "name": "Recipe: Health Potion",       "emoji": "📜",
+     "slot": "recipe", "unlocks": "health_potion",       "sell": 60},
+    {"id": "recipe_hp_large",  "name": "Recipe: Large Health Potion", "emoji": "📜",
+     "slot": "recipe", "unlocks": "large_health_potion",  "sell": 150},
     {"id": "reroll_token",      "name": "Character Reroll Token", "slot": "misc"},
-    # DLC items — registered by DND_DLC cogs; listed here so the inventory has a name for them.
     {"id": "boar_tusk_charm",   "name": "Boar Tusk Charm",        "slot": "misc"},
+    # Beast Master companions — bought from shop, auto-used by Beast Master rangers.
+    # best-to-worst checked at combat init; wolf fallback is free (no item needed).
+    {"id": "wolf_companion",         "name": "Wolf Companion",         "emoji": "🐺",
+     "slot": "companion", "beast_name": "Wolf",        "beast_dmg": "1d6+2", "beast_atk_mod": -2,
+     "tier": "common",    "sell": 50},
+    {"id": "eagle_companion",        "name": "Eagle Companion",        "emoji": "🦅",
+     "slot": "companion", "beast_name": "Eagle",       "beast_dmg": "1d4+3", "beast_atk_mod":  0,
+     "tier": "uncommon",  "sell": 110},
+    {"id": "bear_companion",         "name": "Bear Companion",         "emoji": "🐻",
+     "slot": "companion", "beast_name": "Bear",        "beast_dmg": "1d8+3", "beast_atk_mod": -1,
+     "tier": "rare",      "sell": 200},
+    {"id": "baby_dragon_companion",  "name": "Baby Dragon Companion",  "emoji": "🐉",
+     "slot": "companion", "beast_name": "Baby Dragon", "beast_dmg": "2d6+4", "beast_atk_mod":  0,
+     "tier": "legendary", "sell": 750},
+    # Wizard spell scrolls — consumed by /learn_spell to permanently teach the spell.
+    {"id": "scroll_misty_step",    "name": "Scroll of Misty Step",    "emoji": "📜",
+     "slot": "spell_scroll", "teaches": "misty_step",    "tier": "rare",  "sell": 140},
+    {"id": "scroll_scorching_ray", "name": "Scroll of Scorching Ray",  "emoji": "📜",
+     "slot": "spell_scroll", "teaches": "scorching_ray",  "tier": "rare",  "sell": 110},
+    {"id": "scroll_fireball",      "name": "Scroll of Fireball",       "emoji": "📜",
+     "slot": "spell_scroll", "teaches": "fireball",        "tier": "epic",  "sell": 280},
+    {"id": "scroll_counterspell",  "name": "Scroll of Counterspell",   "emoji": "📜",
+     "slot": "spell_scroll", "teaches": "counterspell",    "tier": "epic",  "sell": 220},
 ]
 
 # ============================================================================
-# LEVELING — XP needed to *be* a given level (5e thresholds). Index = level.
-# Level-ups happen later through campaigns; for now /level just shows progress.
+# LEVELING
 # ============================================================================
 
-REST_COST = 10   # coins charged for a full HP restore via /rest
+REST_COST = 10
 
 XP_THRESHOLDS = [
     0, 0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
@@ -120,33 +142,11 @@ XP_THRESHOLDS = [
 MAX_LEVEL = 20
 
 # ============================================================================
-# CLASS FEATURES — keyed by class id, sorted by level.
+# CLASS FEATURES — Fighter from data file; others stay inline.
 # ============================================================================
 
 CLASS_FEATURES = {
-    "fighter": [
-        {"level":  1, "name": "Fighting Style",          "desc": "Pick a weapon-style bonus (archery, defence, dueling, etc.)"},
-        {"level":  1, "name": "Second Wind",              "desc": "Bonus action: regain 1d10+level HP once per short rest"},
-        {"level":  2, "name": "Action Surge",             "desc": "Take one extra action on your turn, once per short rest"},
-        {"level":  3, "name": "Martial Archetype",        "desc": "Choose a subclass: Champion, Battle Master, Eldritch Knight"},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  5, "name": "Extra Attack",             "desc": "Attack twice when you take the Attack action"},
-        {"level":  6, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  7, "name": "Archetype Feature",        "desc": "Gain your subclass's Lv 7 feature"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  9, "name": "Indomitable",              "desc": "Reroll one failed saving throw, once per long rest"},
-        {"level": 10, "name": "Archetype Feature",        "desc": "Gain your subclass's Lv 10 feature"},
-        {"level": 11, "name": "Extra Attack (2)",         "desc": "Attack three times with the Attack action"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 13, "name": "Indomitable (2×)",         "desc": "Use Indomitable twice per long rest"},
-        {"level": 14, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 15, "name": "Archetype Feature",        "desc": "Gain your subclass's Lv 15 feature"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 17, "name": "Action Surge (2×)",        "desc": "Two extra actions per short rest; Indomitable 3× per long rest"},
-        {"level": 18, "name": "Archetype Feature",        "desc": "Gain your subclass's Lv 18 feature"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Extra Attack (3)",         "desc": "Attack four times with the Attack action"},
-    ],
+    **_dm_data.CLASS_FEATURES,
     "barbarian": [
         {"level":  1, "name": "Rage",                    "desc": "Bonus action: STR adv, bonus STR dmg, resistance to B/P/S damage"},
         {"level":  1, "name": "Unarmored Defense",       "desc": "AC = 10 + DEX mod + CON mod when wearing no armor"},
@@ -196,46 +196,6 @@ CLASS_FEATURES = {
         {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
         {"level": 20, "name": "Stroke of Luck",          "desc": "Once per long rest: turn a miss into a hit, or treat a roll as 20"},
     ],
-    "ranger": [
-        {"level":  1, "name": "Favored Enemy",           "desc": "+2 dmg and adv on tracking vs. a chosen creature type"},
-        {"level":  1, "name": "Natural Explorer",        "desc": "Choose a terrain: ignore difficult terrain, double prof on related skills"},
-        {"level":  2, "name": "Fighting Style",          "desc": "Pick a weapon-style bonus (archery, defence, two-weapon, etc.)"},
-        {"level":  2, "name": "Spellcasting",            "desc": "WIS-based spellcasting; learn 2 ranger spells"},
-        {"level":  3, "name": "Ranger Archetype",        "desc": "Choose a subclass: Hunter, Beast Master"},
-        {"level":  3, "name": "Primeval Awareness",      "desc": "Spend a spell slot to sense creature types within 1–6 miles"},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  5, "name": "Extra Attack",            "desc": "Attack twice with the Attack action"},
-        {"level":  6, "name": "Favored Enemy (2)",       "desc": "Choose a second favored enemy; learn 2 extra languages"},
-        {"level":  7, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 7 feature"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  8, "name": "Land's Stride",           "desc": "Ignore nonmagical difficult terrain; adv vs. impeding plants"},
-        {"level": 10, "name": "Natural Explorer (2)",    "desc": "Choose a second favored terrain; Hide in Plain Sight"},
-        {"level": 10, "name": "Hide in Plain Sight",     "desc": "Spend 1 min to camouflage: +10 Stealth while stationary"},
-        {"level": 11, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 11 feature"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 13, "name": "Favored Enemy (3)",       "desc": "Choose a third favored enemy"},
-        {"level": 14, "name": "Vanish",                  "desc": "Hide as a bonus action; can't be tracked by non-magical means"},
-        {"level": 15, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 15 feature"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 18, "name": "Feral Senses",            "desc": "No disadv attacking invisible creatures; sense hidden within 30 ft"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Foe Slayer",              "desc": "Once per turn: add WIS mod to attack or dmg roll vs. favored enemy"},
-    ],
-    "wizard": [
-        {"level":  1, "name": "Spellcasting",            "desc": "INT-based spellcasting; copy spells into your spellbook"},
-        {"level":  1, "name": "Arcane Recovery",         "desc": "Once per day (short rest): recover spell slots ≤ half wizard level"},
-        {"level":  2, "name": "Arcane Tradition",        "desc": "Choose a school subclass: Evocation, Abjuration, Illusion, etc."},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  6, "name": "Arcane Tradition Feature","desc": "Gain your school's Lv 6 feature"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 10, "name": "Arcane Tradition Feature","desc": "Gain your school's Lv 10 feature"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 14, "name": "Arcane Tradition Feature","desc": "Gain your school's Lv 14 feature"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 18, "name": "Spell Mastery",           "desc": "Choose one Lv 1 and one Lv 2 spell: cast them without slots"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Signature Spell",         "desc": "Two Lv 3 spells castable once per short rest without a slot"},
-    ],
     "cleric": [
         {"level":  1, "name": "Spellcasting",            "desc": "WIS-based spellcasting; domain spells always prepared"},
         {"level":  1, "name": "Divine Domain",           "desc": "Choose a domain subclass: Life, Light, Knowledge, War, etc."},
@@ -262,194 +222,149 @@ CLASS_FEATURES = {
 }
 
 # ============================================================================
-# RACE TRAITS — passive racial abilities (separate from ability score bonuses).
+# RACE TRAITS — Human from data file; others stay inline.
 # ============================================================================
 
 RACE_TRAITS = {
-    "human": [
-        {"name": "Versatile",          "desc": "+1 to all six ability scores at character creation."},
-        {"name": "Extra Language",     "desc": "Know one additional language of your choice."},
-        {"name": "Adaptable",          "desc": "One additional skill proficiency of your choice."},
-    ],
-    "elf": [
-        {"name": "Darkvision",         "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Keen Senses",        "desc": "Proficiency in the Perception skill."},
-        {"name": "Fey Ancestry",       "desc": "Advantage on saves vs. charm; immune to magical sleep effects."},
-        {"name": "Trance",             "desc": "4 hours of meditation replaces 8 hours of sleep for a long rest."},
-    ],
-    "dwarf": [
-        {"name": "Darkvision",         "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Dwarven Resilience", "desc": "Advantage on saves vs. poison; resistance to poison damage."},
-        {"name": "Stonecunning",       "desc": "Double proficiency bonus on History checks related to stonework."},
-        {"name": "Tool Proficiency",   "desc": "Proficiency with one artisan tool (smith's, brewer's, or mason's tools)."},
-    ],
+    **_dm_data.RACE_TRAITS,
     "halfling": [
         {"name": "Lucky",              "desc": "Reroll 1s on attack rolls, ability checks, and saving throws."},
         {"name": "Brave",              "desc": "Advantage on saving throws against being frightened."},
         {"name": "Halfling Nimbleness","desc": "Move through the space of any creature larger than you."},
     ],
     "half_orc": [
-        {"name": "Darkvision",         "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Menacing",           "desc": "Proficiency in the Intimidation skill."},
+        {"name": "Darkvision",          "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
+        {"name": "Menacing",            "desc": "Proficiency in the Intimidation skill."},
         {"name": "Relentless Endurance","desc": "Drop to 1 HP instead of 0 once per long rest (not while already at 0)."},
-        {"name": "Savage Attacks",     "desc": "On a melee critical hit, roll one additional weapon damage die."},
+        {"name": "Savage Attacks",      "desc": "On a melee critical hit, roll one additional weapon damage die."},
     ],
     "tiefling": [
-        {"name": "Darkvision",         "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Hellish Resistance", "desc": "Resistance to fire damage."},
-        {"name": "Infernal Legacy",    "desc": "Thaumaturgy cantrip; Hellish Rebuke 1×/day at Lv 3; Darkness 1×/day at Lv 5."},
+        {"name": "Darkvision",       "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
+        {"name": "Hellish Resistance","desc": "Resistance to fire damage."},
+        {"name": "Infernal Legacy",  "desc": "Thaumaturgy cantrip; Hellish Rebuke 1×/day at Lv 3; Darkness 1×/day at Lv 5."},
     ],
 }
 
 # ============================================================================
-# COMBAT FEATURES — active abilities usable in combat.
-#
-# action_type: "action"  → uses the main action slot (replaces Attack)
-#              "bonus"   → uses the bonus action slot (can combine with Attack)
-# once_per:    "combat"  → one use per combat encounter; None → unlimited
+# COMBAT FEATURES — Fighter from data file; others stay inline.
 # ============================================================================
 
 COMBAT_FEATURES = {
-    "fighter": [
-        {"id": "second_wind",  "name": "Second Wind",  "label": "🌬️ Second Wind",
-         "action_type": "bonus",
-         "level_req": 1, "once_per": "combat", "desc": "Heal 1d10 + level HP (bonus action)"},
-        {"id": "action_surge", "name": "Action Surge", "label": "⚡ Action Surge",
-         "action_type": "action",
-         "level_req": 2, "once_per": "combat", "desc": "Attack twice this round (main action)"},
-    ],
+    **_dm_data.COMBAT_FEATURES,
     "barbarian": [
         {"id": "rage", "name": "Rage", "label": "💢 Rage",
-         "action_type": "bonus",
-         "level_req": 1, "once_per": "combat", "desc": "Enter rage — ×2 damage all combat (bonus action)"},
+         "action_type": "bonus", "level_req": 1, "once_per": "combat",
+         "desc": "Enter rage — ×2 damage all combat (bonus action)"},
     ],
     "rogue": [
-        {"id": "sneak_attack",  "name": "Sneak Attack",   "label": "🗡️ Sneak Attack",
-         "action_type": "action",
-         "level_req": 1, "once_per": None, "desc": "Attack + 1d6 per 2 levels bonus damage (main action)"},
-        {"id": "cunning_action","name": "Cunning Action", "label": "🕵️ Cunning Action",
-         "action_type": "bonus",
-         "level_req": 2, "once_per": None, "desc": "Dodge as a bonus action — halve enemy damage this round"},
-    ],
-    "ranger": [
-        {"id": "hunters_mark", "name": "Hunter's Mark", "label": "🎯 Hunter's Mark",
-         "action_type": "bonus",
-         "level_req": 1, "once_per": "combat", "desc": "+1d6 to all your attacks for rest of combat (bonus action)"},
+        {"id": "sneak_attack",   "name": "Sneak Attack",   "label": "🗡️ Sneak Attack",
+         "action_type": "action", "level_req": 1, "once_per": None,
+         "desc": "Attack + 1d6 per 2 levels bonus damage (main action)"},
+        {"id": "cunning_action", "name": "Cunning Action", "label": "🕵️ Cunning Action",
+         "action_type": "bonus",  "level_req": 2, "once_per": None,
+         "desc": "Dodge as a bonus action — halve enemy damage this round"},
     ],
     "cleric": [
         {"id": "sacred_flame", "name": "Sacred Flame", "label": "🔥 Sacred Flame",
-         "action_type": "action",
-         "level_req": 1, "once_per": None, "desc": "Radiant blast — 1d8 + WIS, auto-hit (main action)"},
+         "action_type": "action", "level_req": 1, "once_per": None,
+         "desc": "Radiant blast — 1d8 + WIS, auto-hit (main action)"},
         {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
-         "action_type": "bonus",
-         "level_req": 1, "once_per": "combat", "desc": "Restore 1d8 + WIS HP to yourself or an ally (bonus action)"},
+         "action_type": "bonus",  "level_req": 1, "once_per": "combat",
+         "desc": "Restore 1d8 + WIS HP to yourself or an ally (bonus action)"},
         {"id": "healing_word", "name": "Healing Word",  "label": "🙏 Healing Word",
-         "action_type": "bonus",
-         "level_req": 2, "once_per": None, "desc": "Heal yourself or an ally 1d4 + WIS HP (bonus action)"},
-    ],
-    "wizard": [
-        {"id": "magic_missile", "name": "Magic Missile", "label": "✨ Magic Missile",
-         "action_type": "action",
-         "level_req": 1, "once_per": None, "desc": "Auto-hit — bolts deal 1d4+1 each, scales with level (main action)"},
+         "action_type": "bonus",  "level_req": 2, "once_per": None,
+         "desc": "Heal yourself or an ally 1d4 + WIS HP (bonus action)"},
     ],
     "paladin": [
         {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
-         "action_type": "bonus",
-         "level_req": 1, "once_per": "combat", "desc": "Restore 1d8 + CHA HP to yourself or an ally (bonus action)"},
+         "action_type": "bonus",  "level_req": 1, "once_per": "combat",
+         "desc": "Restore 1d8 + CHA HP to yourself or an ally (bonus action)"},
         {"id": "divine_smite", "name": "Divine Smite",  "label": "⚡ Divine Smite",
-         "action_type": "action",
-         "level_req": 2, "once_per": None, "desc": "Attack + 2d8 radiant damage; crits deal 4d8 (main action)"},
+         "action_type": "action", "level_req": 2, "once_per": None,
+         "desc": "Attack + 2d8 radiant damage; crits deal 4d8 (main action)"},
     ],
 }
 
 # ============================================================================
-# LEVEL-UP CHOICES — interactive subclass/archetype prompts on level-up.
-# key: (class_id, level) triggers the choice when that level is reached.
+# SUBCLASS COMBAT FEATURES — Fighter subclasses from data file; others inline.
+# ============================================================================
+
+SUBCLASS_COMBAT_FEATURES = {
+    **_dm_data.SUBCLASS_COMBAT_FEATURES,
+    "berserker": [
+        {"id": "frenzy_attack", "name": "Frenzy", "label": "🔥 Frenzy",
+         "action_type": "bonus", "level_req": 3, "once_per": "combat",
+         "desc": "Extra melee attack while raging — rage damage applies (once per combat)"},
+    ],
+    "totem_warrior":    [],
+    "thief":            [],
+    "assassin":         [],
+    "arcane_trickster": [
+        {"id": "mage_hand", "name": "Mage Hand", "label": "🎩 Mage Hand",
+         "action_type": "bonus", "level_req": 3, "once_per": "combat",
+         "desc": "Distract the enemy — they attack with disadvantage next hit (once per combat)"},
+    ],
+    "life":         [],
+    "light":        [],
+    "knowledge":    [],
+    "war": [
+        {"id": "guided_strike", "name": "Guided Strike", "label": "✝️ Guided Strike",
+         "action_type": "bonus", "level_req": 1, "once_per": "combat",
+         "desc": "+10 to your next attack roll (once per combat)"},
+    ],
+    "devotion": [
+        {"id": "sacred_weapon", "name": "Sacred Weapon", "label": "✨ Sacred Weapon",
+         "action_type": "bonus", "level_req": 3, "once_per": "combat",
+         "desc": "Add CHA mod to all attack rolls for the rest of combat (once per combat)"},
+    ],
+    "ancients": [
+        {"id": "natures_wrath", "name": "Nature's Wrath", "label": "🌿 Nature's Wrath",
+         "action_type": "bonus", "level_req": 3, "once_per": "combat",
+         "desc": "Restrain the enemy — they attack at −2 next round (once per combat)"},
+    ],
+    "vengeance": [
+        {"id": "vow_of_enmity", "name": "Vow of Enmity", "label": "⚡ Vow of Enmity",
+         "action_type": "bonus", "level_req": 3, "once_per": "combat",
+         "desc": "Advantage on all attacks this combat (once per combat)"},
+    ],
+}
+
+# ============================================================================
+# LEVEL-UP CHOICES — Fighter+Human from data file; others inline.
 # ============================================================================
 
 LEVEL_UP_CHOICES = {
-    ("fighter", 3): {
-        "key":    "subclass",
-        "prompt": "Choose your Martial Archetype:",
-        "options": [
-            {"id": "champion",        "label": "Champion",
-             "desc": "Superior Athlete; expanded crit range (19–20)"},
-            {"id": "battle_master",   "label": "Battle Master",
-             "desc": "Tactical maneuvers — Trip, Disarm, Riposte using Superiority Dice"},
-            {"id": "eldritch_knight", "label": "Eldritch Knight",
-             "desc": "Blend martial training with INT-based wizard spells"},
-        ],
-    },
+    **_dm_data.LEVEL_UP_CHOICES,
     ("barbarian", 3): {
-        "key":    "subclass",
-        "prompt": "Choose your Primal Path:",
+        "key": "subclass", "prompt": "Choose your Primal Path:",
         "options": [
-            {"id": "berserker",    "label": "Berserker",
-             "desc": "Frenzy — extra melee attack as bonus action while raging"},
-            {"id": "totem_warrior","label": "Totem Warrior",
-             "desc": "Spirit totems — Bear (resistance), Eagle (mobility), Wolf (pack)"},
+            {"id": "berserker",    "label": "Berserker",    "desc": "Frenzy — extra melee attack as bonus action while raging"},
+            {"id": "totem_warrior","label": "Totem Warrior","desc": "Spirit totems — Bear (resistance), Eagle (mobility), Wolf (pack)"},
         ],
     },
     ("rogue", 3): {
-        "key":    "subclass",
-        "prompt": "Choose your Roguish Archetype:",
+        "key": "subclass", "prompt": "Choose your Roguish Archetype:",
         "options": [
-            {"id": "thief",           "label": "Thief",
-             "desc": "Fast Hands — bonus-action item use and object interaction"},
-            {"id": "assassin",        "label": "Assassin",
-             "desc": "Crit on surprised creatures; create convincing false identities"},
-            {"id": "arcane_trickster","label": "Arcane Trickster",
-             "desc": "INT-based wizard spells; Mage Hand Legerdemain pickpocket"},
-        ],
-    },
-    ("ranger", 3): {
-        "key":    "subclass",
-        "prompt": "Choose your Ranger Archetype:",
-        "options": [
-            {"id": "hunter",      "label": "Hunter",
-             "desc": "Colossus Slayer, Horde Breaker, or Giant Killer (choose at Lv 3)"},
-            {"id": "beast_master","label": "Beast Master",
-             "desc": "Bond with a beast companion that fights alongside you"},
-        ],
-    },
-    ("wizard", 2): {
-        "key":    "subclass",
-        "prompt": "Choose your Arcane Tradition:",
-        "options": [
-            {"id": "evocation", "label": "Evocation",
-             "desc": "Sculpt Spells — shape blasts to protect allies inside the area"},
-            {"id": "abjuration","label": "Abjuration",
-             "desc": "Arcane Ward — absorb damage with a shield of magical force"},
-            {"id": "illusion",  "label": "Illusion",
-             "desc": "Malleable Illusions you can reshape after casting"},
-            {"id": "divination","label": "Divination",
-             "desc": "Portent — replace any roll with predetermined dice once per day"},
+            {"id": "thief",           "label": "Thief",           "desc": "Fast Hands — bonus-action item use and object interaction"},
+            {"id": "assassin",        "label": "Assassin",        "desc": "Crit on surprised creatures; create convincing false identities"},
+            {"id": "arcane_trickster","label": "Arcane Trickster","desc": "INT-based wizard spells; Mage Hand Legerdemain pickpocket"},
         ],
     },
     ("cleric", 1): {
-        "key":    "subclass",
-        "prompt": "Choose your Divine Domain:",
+        "key": "subclass", "prompt": "Choose your Divine Domain:",
         "options": [
-            {"id": "life",     "label": "Life",
-             "desc": "Heals restore extra HP — Disciple of Life"},
-            {"id": "light",    "label": "Light",
-             "desc": "Warding Flare — impose disadvantage on an incoming attack"},
-            {"id": "knowledge","label": "Knowledge",
-             "desc": "Extra languages, tool proficiencies, and arcane insight"},
-            {"id": "war",      "label": "War",
-             "desc": "Guided Strike +10 to hit; War God's Blessing reaction"},
+            {"id": "life",     "label": "Life",     "desc": "Heals restore extra HP — Disciple of Life"},
+            {"id": "light",    "label": "Light",    "desc": "Warding Flare — impose disadvantage on an incoming attack"},
+            {"id": "knowledge","label": "Knowledge","desc": "Extra languages, tool proficiencies, and arcane insight"},
+            {"id": "war",      "label": "War",      "desc": "Guided Strike +10 to hit; War God's Blessing reaction"},
         ],
     },
     ("paladin", 3): {
-        "key":    "subclass",
-        "prompt": "Choose your Sacred Oath:",
+        "key": "subclass", "prompt": "Choose your Sacred Oath:",
         "options": [
-            {"id": "devotion", "label": "Oath of Devotion",
-             "desc": "Sacred Weapon; Turn the Unholy — channel radiant energy"},
-            {"id": "ancients", "label": "Oath of the Ancients",
-             "desc": "Nature's Wrath; Turn the Faithless — preserve the ancient light"},
-            {"id": "vengeance","label": "Oath of Vengeance",
-             "desc": "Vow of Enmity — advantage on attacks against one chosen foe"},
+            {"id": "devotion", "label": "Oath of Devotion",    "desc": "Sacred Weapon; Turn the Unholy — channel radiant energy"},
+            {"id": "ancients", "label": "Oath of the Ancients","desc": "Nature's Wrath; Turn the Faithless — preserve the ancient light"},
+            {"id": "vengeance","label": "Oath of Vengeance",   "desc": "Vow of Enmity — advantage on attacks against one chosen foe"},
         ],
     },
 }
@@ -458,7 +373,12 @@ LEVEL_UP_CHOICES = {
 # EMBED COLORS
 # ============================================================================
 
-COLOR_DND   = 0x8E44AD  # purple — D&D theme
-COLOR_INFO  = 0x5865F2  # blurple
-COLOR_WIN   = 0x57F287  # green
-COLOR_ERROR = 0xED4245  # red
+COLOR_DND   = 0x8E44AD
+COLOR_INFO  = 0x5865F2
+COLOR_WIN   = 0x57F287
+COLOR_ERROR = 0xED4245
+
+# ── Wizard spell data (re-exported from data.py for engine access) ────────────
+WIZARD_CANTRIPS:        set[str]   = _dm_data.WIZARD_CANTRIPS
+WIZARD_STARTING_SPELLS: list[str]  = _dm_data.WIZARD_STARTING_SPELLS
+WIZARD_SPELLS:          list[dict] = _dm_data.WIZARD_SPELLS
