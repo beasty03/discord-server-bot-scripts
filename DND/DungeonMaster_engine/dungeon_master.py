@@ -1514,14 +1514,30 @@ class DungeonMasterCog(commands.Cog):
                 break
 
         if not choice_info:
+            # Show all choices already stored so the player can see what they picked
+            all_choice_rows = self.db.execute(
+                "SELECT choice_key, choice_val FROM dnd_character_choices "
+                "WHERE user_id=? AND guild_id=? AND choice_key LIKE ?",
+                (uid, gid, f"{char_class}_%"))
+            made_lines = []
+            for ck, cv in (all_choice_rows or []):
+                label_key = ck.replace(f"{char_class}_", "").replace("_", " ").title()
+                # Try to find a human-readable label from LEVEL_UP_CHOICES options
+                for lvl2 in range(1, (level or 1) + 1):
+                    info2 = char_var.LEVEL_UP_CHOICES.get((char_class, lvl2))
+                    if info2 and f"{char_class}_{info2['key']}" == ck:
+                        opt = next((o for o in info2["options"] if o["id"] == cv), None)
+                        if opt:
+                            cv = opt["label"]
+                        break
+                made_lines.append(f"• **{label_key}:** {cv}")
+            desc = f"No pending choices for your **{char_class.capitalize()}** at level {level}."
+            if made_lines:
+                desc += "\n\n**Your current selections:**\n" + "\n".join(made_lines)
+            else:
+                desc += "\nLevel up further to unlock choices."
             await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=(
-                        f"No pending choices for your **{char_class.capitalize()}** "
-                        f"at level {level}. All selections are already made, or you need "
-                        f"to level up further to unlock the next one."
-                    ),
-                    color=var.COLOR_INFO),
+                embed=discord.Embed(description=desc, color=var.COLOR_INFO),
                 ephemeral=True)
             return
 
