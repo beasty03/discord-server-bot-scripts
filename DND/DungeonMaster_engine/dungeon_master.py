@@ -1496,36 +1496,31 @@ class DungeonMasterCog(commands.Cog):
                 embed=self._err("Set your class first with `/class`."), ephemeral=True)
             return
 
-        # Find the choice entry for this class at or below the character's current level
+        # Find the first unchosen choice at or below the character's current level
         choice_info: dict | None = None
+        choice_key:  str  | None = None
         for lvl in range(1, (level or 1) + 1):
             info = char_var.LEVEL_UP_CHOICES.get((char_class, lvl))
-            if info:
+            if not info:
+                continue
+            key = f"{char_class}_{info['key']}"
+            already = self.db.execute(
+                "SELECT choice_val FROM dnd_character_choices "
+                "WHERE user_id=? AND guild_id=? AND choice_key=?",
+                (uid, gid, key))
+            if not already:
                 choice_info = info
+                choice_key  = key
                 break
 
         if not choice_info:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    description=f"**{char_class.capitalize()}** doesn't have a subclass choice yet "
-                                f"(you need to reach the required level first).",
-                    color=var.COLOR_INFO),
-                ephemeral=True)
-            return
-
-        choice_key = f"{char_class}_{choice_info['key']}"
-        existing = self.db.execute(
-            "SELECT choice_val FROM dnd_character_choices "
-            "WHERE user_id=? AND guild_id=? AND choice_key=?",
-            (uid, gid, choice_key))
-        if existing:
-            chosen_id  = existing[0][0]
-            chosen_lbl = next(
-                (o["label"] for o in choice_info["options"] if o["id"] == chosen_id),
-                chosen_id)
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=f"You already chose **{chosen_lbl}**.",
+                    description=(
+                        f"No pending choices for your **{char_class.capitalize()}** "
+                        f"at level {level}. All selections are already made, or you need "
+                        f"to level up further to unlock the next one."
+                    ),
                     color=var.COLOR_INFO),
                 ephemeral=True)
             return
