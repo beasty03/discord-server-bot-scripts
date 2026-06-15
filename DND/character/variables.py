@@ -111,7 +111,7 @@ ITEMS = [
 # Level-ups happen later through campaigns; for now /level just shows progress.
 # ============================================================================
 
-REST_COST = 50   # coins charged for a full HP restore via /rest
+REST_COST = 10   # coins charged for a full HP restore via /rest
 
 XP_THRESHOLDS = [
     0, 0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
