@@ -1698,6 +1698,103 @@ class DungeonMasterCog(commands.Cog):
             view=LearnSpellView(self, uid, gid, scrolls),
             ephemeral=True)
 
+    # ── /companion ────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="companion",
+        description="View your Beast Master companion's stats, or give them a name.")
+    @app_commands.describe(name="Give your companion a custom name (leave empty to just view)")
+    async def companion(self, interaction: discord.Interaction, name: str | None = None):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        rows = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if not rows:
+            await interaction.response.send_message(
+                embed=self._err("You don't have a character yet."), ephemeral=True)
+            return
+        char_class, level = rows[0]
+        if char_class != "ranger":
+            await interaction.response.send_message(
+                embed=self._err("Only Rangers have animal companions."), ephemeral=True)
+            return
+        sc = _get_subclass(self.db, uid, gid, "ranger")
+        if sc != "beast_master":
+            await interaction.response.send_message(
+                embed=self._err(
+                    "Only **Beast Master** Rangers have a companion.\n"
+                    "Choose your archetype at level 3 with `/subclass`."),
+                ephemeral=True)
+            return
+
+        # Find best companion item owned (wolf is guaranteed fallback)
+        comp_ids  = ["baby_dragon_companion", "bear_companion", "eagle_companion", "wolf_companion"]
+        comp_item = None
+        for cid in comp_ids:
+            inv = self.db.execute(
+                "SELECT qty FROM dnd_inventory "
+                "WHERE user_id=? AND guild_id=? AND item_id=? AND qty>0",
+                (uid, gid, cid))
+            if inv:
+                comp_item = self._find_item(cid)
+                break
+        if not comp_item:
+            comp_item = self._find_item("wolf_companion")  # free fallback
+
+        # Save name if provided
+        if name:
+            name = name.strip()[:32]
+            self.db.execute(
+                "INSERT OR REPLACE INTO dnd_character_choices "
+                "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+                (uid, gid, "companion_name", name))
+
+        name_row     = self.db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, gid, "companion_name"))
+        custom_name  = name_row[0][0] if name_row else None
+
+        beast_name   = comp_item.get("beast_name",    "Wolf")
+        beast_dmg    = comp_item.get("beast_dmg",     "1d6+2")
+        beast_amod   = comp_item.get("beast_atk_mod", -2)
+        emoji        = comp_item.get("emoji",          "🐾")
+
+        stats        = self._get_char_combat_stats(uid, gid)
+        atk_bonus    = ((stats["atk_bonus"] if stats else 0) + beast_amod)
+        display_name = custom_name or beast_name
+
+        _flavor = {
+            "Wolf":        "A loyal pack hunter that fights at your side every round.",
+            "Eagle":       "A keen-eyed raptor that strikes fast with deadly talons.",
+            "Bear":        "A powerful grizzly that hits hard and takes hits harder.",
+            "Baby Dragon": "A fierce dragonling whose breath sends enemies running.",
+        }
+        _tier_label = {
+            "Wolf": "Common", "Eagle": "Uncommon", "Bear": "Rare", "Baby Dragon": "Legendary"
+        }
+
+        embed = discord.Embed(
+            title=f"{emoji} {display_name}",
+            description=(
+                f"*{beast_name}* · {_tier_label.get(beast_name, '')} companion\n"
+                f"{_flavor.get(beast_name, '')}"
+            ),
+            color=var.COLOR_WIN,
+        )
+        embed.add_field(name="⚔️ Damage",    value=beast_dmg,          inline=True)
+        embed.add_field(name="🎯 ATK Bonus", value=f"{atk_bonus:+d}",  inline=True)
+        embed.add_field(name="🧑 Owner",     value=interaction.user.display_name, inline=True)
+        if name:
+            embed.set_footer(text=f"✅ Name set to '{display_name}'!")
+        elif not custom_name:
+            embed.set_footer(text=f"Tip: /companion name:Rex to give {beast_name} a personal name.")
+        else:
+            embed.set_footer(text=f"Use /companion name:… to rename {display_name}.")
+        await interaction.response.send_message(embed=embed)
+
     # ── /roll ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="roll", description="Roll dice. Examples: d20 · 2d6 · 1d8+3")
@@ -3006,6 +3103,12 @@ class DungeonMasterCog(commands.Cog):
                                         _b_amod = -2
                                         _b_emj  = "🐺"
                                         _b_nm   = "Wolf"
+                                    _cn_row = self.db.execute(
+                                        "SELECT choice_val FROM dnd_character_choices "
+                                        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+                                        (uid, gid, "companion_name"))
+                                    if _cn_row:
+                                        _b_nm = _cn_row[0][0]
                                     b_atk = stats["atk_bonus"] + _b_amod
                                     br    = random.randint(1, 20)
                                     bt    = br + b_atk
