@@ -4,7 +4,7 @@ from discord import app_commands
 import logging
 import random
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import importlib.util as _ilu
@@ -187,9 +187,17 @@ class DeleteConfirmView(discord.ui.View):
             "DELETE FROM dnd_characters WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
         self._cog.db.execute(
             "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
+        self._cog.db.execute(
+            """INSERT INTO dnd_character_cooldowns (user_id, guild_id, deleted_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(user_id, guild_id) DO UPDATE SET deleted_at=excluded.deleted_at""",
+            (self._uid, self._gid, datetime.utcnow().isoformat()))
         await interaction.response.edit_message(
             embed=discord.Embed(
-                description=f"🗑️ **{self._char_name}** has been deleted. Use `/name` to create a new character.",
+                description=(
+                    f"🗑️ **{self._char_name}** has been deleted.\n"
+                    f"You can create a new character in **7 days**."
+                ),
                 color=var.COLOR_ERROR),
             view=None)
         self.stop()
@@ -246,6 +254,14 @@ class CharacterCog(commands.Cog):
                 qty       INTEGER DEFAULT 1,
                 equipped  INTEGER DEFAULT 0,
                 PRIMARY KEY (user_id, guild_id, item_id)
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS dnd_character_cooldowns (
+                user_id    TEXT NOT NULL,
+                guild_id   TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, guild_id)
             )
         """)
 
@@ -310,6 +326,27 @@ class CharacterCog(commands.Cog):
                 ephemeral=True,
             )
             return
+
+        # Weekly cooldown — bypassed by a Reroll Token (shop item, coming later)
+        cd_rows = self.db.execute(
+            "SELECT deleted_at FROM dnd_character_cooldowns WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if cd_rows:
+            deleted_at  = datetime.fromisoformat(cd_rows[0][0])
+            cooldown_end = deleted_at + timedelta(days=7)
+            remaining   = cooldown_end - datetime.utcnow()
+            if remaining.total_seconds() > 0:
+                days  = remaining.days
+                hours = remaining.seconds // 3600
+                time_txt = f"{days}d {hours}h" if days > 0 else f"{hours}h"
+                await interaction.response.send_message(
+                    embed=self._err(
+                        f"You can only create a new character once per week.\n"
+                        f"Try again in **{time_txt}**.\n\n"
+                        f"*Character Reroll Tokens will bypass this — coming to the shop!*"
+                    ),
+                    ephemeral=True)
+                return
 
         choose_embed = discord.Embed(
             title=f"✨ Creating **{name}**",

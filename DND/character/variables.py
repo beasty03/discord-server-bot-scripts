@@ -90,7 +90,9 @@ ITEMS = [
     {"id": "leather_armor", "name": "Leather Armor", "slot": "armor"},
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
     # Consumables — usable in combat via the 🧪 Item button.
-    {"id": "health_potion", "name": "Health Potion", "slot": "consumable", "heal_expr": "2d4+2"},
+    {"id": "health_potion",  "name": "Health Potion",          "slot": "consumable", "heal_expr": "2d4+2"},
+    # Shop items (effect handled in /name cooldown check — shop not yet built).
+    {"id": "reroll_token",   "name": "Character Reroll Token", "slot": "misc"},
 ]
 
 # ============================================================================
