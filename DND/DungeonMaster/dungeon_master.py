@@ -164,11 +164,12 @@ class TargetSelectView(discord.ui.View):
     """Second step of item use — pick which party member to target."""
 
     def __init__(self, combat_view: "CombatView", uid: str, item_id: str,
-                 active_members: list[tuple[str, str]]):
+                 active_members: list[tuple[str, str]], is_bonus: bool = False):
         super().__init__(timeout=30)
-        self._cv      = combat_view
-        self._uid     = uid
-        self._item_id = item_id
+        self._cv       = combat_view
+        self._uid      = uid
+        self._item_id  = item_id
+        self._is_bonus = is_bonus
 
         options = [
             discord.SelectOption(
@@ -183,9 +184,13 @@ class TargetSelectView(discord.ui.View):
 
     async def _on_target(self, interaction: discord.Interaction):
         target_uid = interaction.data["values"][0]
-        self._cv.actions[self._uid] = {"action": "use_item", "item_id": self._item_id, "target_uid": target_uid}
-        if all(v is not None for v in self._cv.actions.values()):
-            self._cv._done.set()
+        payload = {"action": "use_item", "item_id": self._item_id, "target_uid": target_uid}
+        if self._is_bonus:
+            self._cv.bonus_actions[self._uid] = payload
+        else:
+            self._cv.actions[self._uid] = payload
+            if all(v is not None for v in self._cv.actions.values()):
+                self._cv._done.set()
         await interaction.response.edit_message(
             embed=discord.Embed(description="🧪 Item use locked in!", color=0x57F287), view=None)
         self.stop()
@@ -362,11 +367,12 @@ class _ItemPickView(discord.ui.View):
     """Ephemeral first step: which consumable?"""
 
     def __init__(self, combat_view: CombatView, uid: str,
-                 all_members: list[tuple[str, str]], options: list):
+                 all_members: list[tuple[str, str]], options: list, is_bonus: bool = False):
         super().__init__(timeout=30)
         self._cv          = combat_view
         self._uid         = uid
         self._all_members = all_members
+        self._is_bonus    = is_bonus
         sel = discord.ui.Select(placeholder="Choose an item…", options=options)
         sel.callback = self._on_item
         self.add_item(sel)
@@ -375,7 +381,7 @@ class _ItemPickView(discord.ui.View):
         item_id = interaction.data["values"][0]
         await interaction.response.edit_message(
             embed=discord.Embed(description="🧪 Who should receive it?", color=var.COLOR_INFO),
-            view=TargetSelectView(self._cv, self._uid, item_id, self._all_members),
+            view=TargetSelectView(self._cv, self._uid, item_id, self._all_members, self._is_bonus),
         )
         self.stop()
 
@@ -406,8 +412,69 @@ class _FeaturePickView(discord.ui.View):
         self.stop()
 
 
+class LevelUpView(discord.ui.View):
+    """One-time subclass / archetype picker shown after leveling up."""
+
+    def __init__(self, uid: str, options: list[dict], timeout: float = 120.0):
+        super().__init__(timeout=timeout)
+        self._uid   = uid
+        self.chosen: str | None = None
+        self._done  = asyncio.Event()
+
+        select_options = [
+            discord.SelectOption(
+                label=o["label"],
+                value=o["id"],
+                description=o.get("desc", "")[:100],
+            )
+            for o in options
+        ]
+        self._select = discord.ui.Select(
+            placeholder="Choose your specialization…",
+            min_values=1,
+            max_values=1,
+            options=select_options,
+        )
+        self._select.callback = self._on_pick
+        self.add_item(self._select)
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        if str(interaction.user.id) != self._uid:
+            await interaction.response.send_message(
+                "This choice isn't yours to make.", ephemeral=True)
+            return
+        self.chosen = self._select.values[0]
+        for item in self.children:
+            item.disabled = True
+        label = next(
+            (o.label for o in self._select.options if o.value == self.chosen), self.chosen)
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description=f"✅ You chose **{label}**.",
+                color=var.COLOR_WIN,
+            ),
+            view=self,
+        )
+        self._done.set()
+        self.stop()
+
+    async def wait_for_choice(self) -> str | None:
+        try:
+            await asyncio.wait_for(self._done.wait(), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            pass
+        return self.chosen
+
+
 class _BonusPickView(discord.ui.View):
-    """Ephemeral: pick which bonus-action class feature to use."""
+    """Ephemeral: pick a bonus action — class feature OR general utility (Flee/Item/Help/Taunt)."""
+
+    _UTILITY = [
+        discord.SelectOption(label="🏃 Flee",  value="__flee__",  description="Escape the battle (main action still fires)"),
+        discord.SelectOption(label="🧪 Item",  value="__item__",  description="Use a consumable and still act"),
+        discord.SelectOption(label="🤝 Help",  value="__help__",  description="Aid an ally — stabilize or +4 to hit"),
+        discord.SelectOption(label="🗣️ Taunt", value="__taunt__", description="Force the enemy to target you next hit"),
+    ]
 
     def __init__(self, combat_view: "CombatView", uid: str,
                  features: list[dict], all_members: list[tuple[str, str]]):
@@ -419,18 +486,63 @@ class _BonusPickView(discord.ui.View):
             discord.SelectOption(label=f["label"], value=f["id"], description=f["desc"][:100])
             for f in features
         ]
+        options.extend(self._UTILITY[: 25 - len(options)])
         sel = discord.ui.Select(placeholder="Choose a bonus action…", options=options)
         sel.callback = self._on_pick
         self.add_item(sel)
 
     async def _on_pick(self, interaction: discord.Interaction):
-        fid = interaction.data["values"][0]
-        if fid in ("lay_on_hands", "healing_word"):
+        val = interaction.data["values"][0]
+        if val == "__flee__":
+            self._cv.bonus_actions[self._uid] = {"action": "flee"}
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="🏃 Flee locked in!", color=var.COLOR_WIN), view=None)
+        elif val == "__taunt__":
+            self._cv.bonus_actions[self._uid] = {"action": "taunt"}
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="🗣️ Taunt locked in!", color=var.COLOR_WIN), view=None)
+        elif val == "__item__":
+            rows = self._cv._cog.db.execute(
+                "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+                (self._uid, self._cv._gid))
+            all_items   = self._cv._cog._all_char_items()
+            consumables = [
+                (iid, qty) for iid, qty in rows
+                if next((i for i in all_items if i["id"] == iid and i.get("slot") == "consumable"), None)
+            ]
+            if not consumables:
+                await interaction.response.edit_message(
+                    embed=discord.Embed(description="No usable items in your pack!", color=var.COLOR_ERROR), view=None)
+                self.stop()
+                return
+            opts = [
+                discord.SelectOption(
+                    label=f"{next((i for i in all_items if i['id']==iid),{}).get('name',iid)} ×{qty}",
+                    description=f"Heals {next((i for i in all_items if i['id']==iid),{}).get('heal_expr','?')} HP",
+                    value=iid,
+                )
+                for iid, qty in consumables
+            ]
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="🧪 Pick an item:", color=var.COLOR_INFO),
+                view=_ItemPickView(self._cv, self._uid, self._all_members, opts, is_bonus=True))
+        elif val == "__help__":
+            targets = [(u, n) for u, n in self._cv._participants
+                       if u != self._uid and u not in self._cv._run.get("dead", set())]
+            if not targets:
+                await interaction.response.edit_message(
+                    embed=discord.Embed(description="No allies to help!", color=var.COLOR_ERROR), view=None)
+                self.stop()
+                return
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="🤝 Who do you help?", color=var.COLOR_INFO),
+                view=_HelpTargetView(self._cv, self._uid, targets, self._cv._run, is_bonus=True))
+        elif val in ("lay_on_hands", "healing_word"):
             await interaction.response.edit_message(
                 embed=discord.Embed(description="✨ Who receives it?", color=var.COLOR_INFO),
-                view=_BonusTargetView(self._cv, self._uid, fid, self._all_members))
+                view=_BonusTargetView(self._cv, self._uid, val, self._all_members))
         else:
-            self._cv.bonus_actions[self._uid] = {"action": "bonus_feature", "feature_id": fid}
+            self._cv.bonus_actions[self._uid] = {"action": "bonus_feature", "feature_id": val}
             await interaction.response.edit_message(
                 embed=discord.Embed(description="✨ Bonus action locked in!", color=var.COLOR_WIN), view=None)
         self.stop()
@@ -469,10 +581,11 @@ class _HelpTargetView(discord.ui.View):
     """Ephemeral: pick which ally to Help (stabilize if downed, or +4 to hit)."""
 
     def __init__(self, combat_view: "CombatView", uid: str,
-                 targets: list[tuple[str, str]], run: dict):
+                 targets: list[tuple[str, str]], run: dict, is_bonus: bool = False):
         super().__init__(timeout=30)
-        self._cv  = combat_view
-        self._uid = uid
+        self._cv       = combat_view
+        self._uid      = uid
+        self._is_bonus = is_bonus
         hp = run["player_hp"]
         options = [
             discord.SelectOption(
@@ -486,10 +599,14 @@ class _HelpTargetView(discord.ui.View):
 
     async def _on_target(self, interaction: discord.Interaction):
         target_uid = interaction.data["values"][0]
-        self._cv.actions[self._uid] = {"action": "help", "target_uid": target_uid}
-        self._cv._check_done()
+        payload = {"action": "help", "target_uid": target_uid}
+        if self._is_bonus:
+            self._cv.bonus_actions[self._uid] = payload
+        else:
+            self._cv.actions[self._uid] = payload
+            self._cv._check_done()
         await interaction.response.edit_message(
-            embed=discord.Embed(description="🤝 Help action locked in!", color=var.COLOR_WIN), view=None)
+            embed=discord.Embed(description="🤝 Help locked in!", color=var.COLOR_WIN), view=None)
         self.stop()
 
 
@@ -735,6 +852,15 @@ class DungeonMasterCog(commands.Cog):
                 created_at    TEXT NOT NULL
             )
         """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS dnd_character_choices (
+                user_id    TEXT NOT NULL,
+                guild_id   TEXT NOT NULL,
+                choice_key TEXT NOT NULL,
+                choice_val TEXT NOT NULL,
+                PRIMARY KEY (user_id, guild_id, choice_key)
+            )
+        """)
 
     # ── DLC registration (called from DND_DLC cog setup functions) ────────────
 
@@ -902,23 +1028,122 @@ class DungeonMasterCog(commands.Cog):
                 color=var.COLOR_WIN,
             ))
 
-    def _give_rewards(self, uid: str, gid: str, display_name: str, gold: int, xp: int) -> int:
+    def _give_rewards(self, uid: str, gid: str, display_name: str,
+                      gold: int, xp: int) -> tuple[int, int]:
+        """Return (new_level, old_level) after applying rewards."""
         self.db.ensure_user(uid, gid, display_name)
         if gold > 0:
             self.db.update_balance(uid, gid, gold, "campaign_reward")
         rows = self.db.execute(
             "SELECT level, xp FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
         if not rows:
-            return 1
+            return 1, 1
         current_level, current_xp = rows[0]
+        old_level = current_level or 1
         new_xp    = (current_xp or 0) + xp
-        new_level = current_level or 1
+        new_level = old_level
         while new_level < char_var.MAX_LEVEL and new_xp >= char_var.XP_THRESHOLDS[new_level + 1]:
             new_level += 1
+
+        leveled_up = new_level > old_level
+        if leveled_up:
+            old_stats = self._get_char_combat_stats(uid, gid)
         self.db.execute(
             "UPDATE dnd_characters SET xp=?, level=? WHERE user_id=? AND guild_id=?",
             (new_xp, new_level, uid, gid))
-        return new_level
+        if leveled_up and old_stats:
+            new_stats = self._get_char_combat_stats(uid, gid)
+            if new_stats:
+                hp_gain = new_stats["max_hp"] - old_stats["max_hp"]
+                if hp_gain > 0:
+                    new_hp = min(new_stats["max_hp"], old_stats["current_hp"] + hp_gain)
+                    self.db.execute(
+                        "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
+                        (new_hp, uid, gid))
+        return new_level, old_level
+
+    async def _handle_levelup(
+        self,
+        channel: discord.TextChannel,
+        uid: str,
+        name: str,
+        char_class: str,
+        old_level: int,
+        new_level: int,
+        gid: str,
+    ):
+        """Post a level-up embed and handle any subclass/archetype choice prompts."""
+        # Collect features gained across all gained levels.
+        # CLASS_FEATURES is {class: [{"level": N, "name": "...", "desc": "..."}, ...]}
+        all_feats = char_var.CLASS_FEATURES.get(char_class, [])
+        gained_features: list[str] = [
+            f["name"]
+            for f in all_feats
+            if old_level < f["level"] <= new_level
+        ]
+
+        desc_lines = [f"🎉 **{name}** reached **Level {new_level}**!"]
+        if gained_features:
+            desc_lines.append("\n**New features:**\n" + "\n".join(f"• **{f}**" for f in gained_features))
+
+        embed = discord.Embed(
+            title=f"⬆️ Level Up!",
+            description="\n".join(desc_lines),
+            color=var.COLOR_WIN,
+        )
+        embed.set_footer(text=f"Class: {char_class.capitalize()} · Level {new_level}")
+
+        # Check whether any level gained triggers a subclass choice
+        choice_info: dict | None = None
+        for lvl in range(old_level + 1, new_level + 1):
+            info = char_var.LEVEL_UP_CHOICES.get((char_class, lvl))
+            if info:
+                choice_info = info
+                break  # handle one choice at a time (multiple level-ups are rare)
+
+        if choice_info:
+            choice_key = f"{char_class}_{choice_info['key']}"
+            # Skip if already chosen (e.g. multi-level-up edge case)
+            existing = self.db.execute(
+                "SELECT choice_val FROM dnd_character_choices "
+                "WHERE user_id=? AND guild_id=? AND choice_key=?",
+                (uid, gid, choice_key))
+            if not existing:
+                embed.add_field(
+                    name="🔮 Choice Required",
+                    value=choice_info["prompt"],
+                    inline=False,
+                )
+                view = LevelUpView(uid, choice_info["options"], timeout=120.0)
+                msg  = await channel.send(
+                    content=f"<@{uid}>",
+                    embed=embed,
+                    view=view,
+                )
+                chosen = await view.wait_for_choice()
+                if chosen:
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO dnd_character_choices "
+                        "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+                        (uid, gid, choice_key, chosen))
+                else:
+                    # Timed out — edit message to show warning
+                    for item in view.children:
+                        item.disabled = True
+                    timeout_embed = discord.Embed(
+                        description=(
+                            f"⏰ **{name}** didn't choose in time.\n"
+                            "Use `/sheet` to check your character — your choice can be set later."
+                        ),
+                        color=var.COLOR_ERROR,
+                    )
+                    try:
+                        await msg.edit(embed=timeout_embed, view=view)
+                    except Exception:
+                        pass
+                return
+        # No choice needed — just post the level-up embed
+        await channel.send(content=f"<@{uid}>", embed=embed)
 
     def _save_run_log(self, run_id: str, gid: str, campaign: dict,
                       participants: list, success: bool, run_log: list):
@@ -932,6 +1157,78 @@ class DungeonMasterCog(commands.Cog):
              1 if success else 0,
              json.dumps(run_log),
              datetime.utcnow().isoformat()))
+
+    # ── /roll ─────────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="subclass",
+        description="Choose your subclass / archetype if you haven't picked one yet.")
+    async def subclass(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        rows = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if not rows:
+            await interaction.response.send_message(
+                embed=self._err("You don't have a character yet."), ephemeral=True)
+            return
+
+        char_class, level = rows[0]
+        if not char_class:
+            await interaction.response.send_message(
+                embed=self._err("Set your class first with `/class`."), ephemeral=True)
+            return
+
+        # Find the choice entry for this class at or below the character's current level
+        choice_info: dict | None = None
+        for lvl in range(1, (level or 1) + 1):
+            info = char_var.LEVEL_UP_CHOICES.get((char_class, lvl))
+            if info:
+                choice_info = info
+                break
+
+        if not choice_info:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"**{char_class.capitalize()}** doesn't have a subclass choice yet "
+                                f"(you need to reach the required level first).",
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        choice_key = f"{char_class}_{choice_info['key']}"
+        existing = self.db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, gid, choice_key))
+        if existing:
+            chosen_id  = existing[0][0]
+            chosen_lbl = next(
+                (o["label"] for o in choice_info["options"] if o["id"] == chosen_id),
+                chosen_id)
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"You already chose **{chosen_lbl}**.",
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔮 Subclass Choice",
+            description=choice_info["prompt"],
+            color=var.COLOR_INFO,
+        )
+        embed.set_footer(text=f"{char_class.capitalize()} · Level {level}")
+        view = LevelUpView(uid, choice_info["options"], timeout=120.0)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        chosen = await view.wait_for_choice()
+        if chosen:
+            self.db.execute(
+                "INSERT OR REPLACE INTO dnd_character_choices "
+                "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+                (uid, gid, choice_key, chosen))
 
     # ── /roll ─────────────────────────────────────────────────────────────────
 
@@ -1143,19 +1440,21 @@ class DungeonMasterCog(commands.Cog):
                      and uid not in run.get("dead", set())
                      and run["player_hp"].get(uid, 0) > 0]
 
+            levelups: list = []  # (uid, name, char_class, old_level, new_level)
             if success and alive:
                 total_gold = random.randint(campaign["reward_gold_min"], campaign["reward_gold_max"])
                 gold_each  = max(1, total_gold // max(1, len(alive)))
                 xp_each    = campaign["reward_xp"]
                 lines      = []
                 for uid, name in alive:
-                    lvl_rows  = self.db.execute(
-                        "SELECT level FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
-                    old_level = lvl_rows[0][0] if lvl_rows else 1
-                    new_level = self._give_rewards(uid, gid, name, gold_each, xp_each)
-                    lvl_up    = f"  🎉 **Level {new_level}!**" if new_level > old_level else ""
+                    new_level, old_level = self._give_rewards(uid, gid, name, gold_each, xp_each)
+                    lvl_up = f"  🎉 **Level {new_level}!**" if new_level > old_level else ""
                     lines.append(
                         f"• **{name}** — +{gold_each:,} {var.CURRENCY_SYMBOL}  ·  +{xp_each:,} XP{lvl_up}")
+                    if new_level > old_level:
+                        stats = self._get_char_combat_stats(uid, gid)
+                        char_class = stats["char_class"] if stats else "unknown"
+                        levelups.append((uid, name, char_class, old_level, new_level))
                 result_embed = discord.Embed(
                     title=f"✅ {campaign['name']} — Victory!",
                     description="\n".join(lines),
@@ -1173,6 +1472,13 @@ class DungeonMasterCog(commands.Cog):
             result_embed.set_footer(text=var.SERVER_NAME)
             await interaction.channel.send(embed=result_embed)
             self._save_run_log(run_id, gid, campaign, participants, success, run["log"])
+
+            # Fire level-up notifications / subclass prompts after the result embed
+            if success:
+                for lu_uid, lu_name, lu_class, lu_old, lu_new in levelups:
+                    await self._handle_levelup(
+                        interaction.channel,
+                        lu_uid, lu_name, lu_class, lu_old, lu_new, gid)
 
         finally:
             self._clear_run(run_id)
@@ -1216,6 +1522,7 @@ class DungeonMasterCog(commands.Cog):
                         if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
         name_map     = {uid: name for uid, name in run["participants"]}
 
+        enemy_surprise = encounter.get("enemy_surprise", False)
         if surprise:
             enemy_first = False
             await channel.send(embed=discord.Embed(
@@ -1224,6 +1531,46 @@ class DungeonMasterCog(commands.Cog):
                 color=var.COLOR_WIN,
             ))
             await asyncio.sleep(1)
+        elif enemy_surprise:
+            enemy_first = False  # after the ambush, players rally and fight normally
+            await channel.send(embed=discord.Embed(
+                title="⚡ Ambush! You've been caught off-guard!",
+                description=f"**{enemy['name']}** strikes before you can react — free hit!",
+                color=var.COLOR_ERROR,
+            ))
+            await asyncio.sleep(1)
+            if active_init:
+                t_uid  = random.choice(active_init)
+                t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+                t_stat = self._get_char_combat_stats(t_uid, gid)
+                if t_stat:
+                    e_roll = random.randint(1, 20)
+                    e_tot  = e_roll + enemy["atk_bonus"]
+                    if e_roll == 20 or e_tot >= t_stat["ac"]:
+                        dmg1 = _roll(enemy["dmg"])
+                        if e_roll == 20:
+                            dmg2 = _roll(enemy["dmg"])
+                            dmg  = dmg1 + dmg2
+                            atk_txt = f"✨ CRIT! {dmg1}+{dmg2} = **{dmg} dmg**"
+                        else:
+                            dmg = dmg1
+                            atk_txt = f"**{dmg} dmg**"
+                        run["player_hp"][t_uid] = max(0, run["player_hp"].get(t_uid, 0) - dmg)
+                        if run["player_hp"][t_uid] <= 0:
+                            run.setdefault("downed", {})[t_uid] = {"successes": 0, "failures": 0}
+                            atk_txt += f"\n💀 **{t_name}** goes down!"
+                        run["log"].append({"type": "enemy_hit", "enemy": enemy["name"],
+                            "target": t_uid, "target_name": t_name, "dmg": dmg, "round": 0})
+                    else:
+                        atk_txt = "MISS!"
+                    await channel.send(embed=discord.Embed(
+                        description=f"💥 **{enemy['name']}** ambushes **{t_name}** → {atk_txt}",
+                        color=var.COLOR_ERROR,
+                    ))
+                    await asyncio.sleep(1)
+                active_init = [u for u in active_init if run["player_hp"].get(u, 0) > 0]
+                if not active_init:
+                    return "defeat"
         else:
             init_view    = InitiativeRollView(active_init, name_map, self, gid)
             init_msg     = await channel.send(embed=init_view.build_embed(), view=init_view)
@@ -1343,7 +1690,9 @@ class DungeonMasterCog(commands.Cog):
             # ── Enemy strikes first if it won initiative ───────────────────
             if enemy_first and e_hp > 0:
                 if active:
-                    t_uid  = random.choice(active)
+                    taunt_first = [u for u in run.get("taunt_targets", set()) if u in active]
+                    t_uid  = random.choice(taunt_first) if taunt_first else random.choice(active)
+                    run["taunt_targets"] = set()
                     t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
                     t_stat = self._get_char_combat_stats(t_uid, gid)
                     if t_stat:
@@ -1425,7 +1774,7 @@ class DungeonMasterCog(commands.Cog):
                 color=var.COLOR_COMBAT,
             )
             status.set_footer(
-                text=f"⏱️ {var.ROUND_TIMEOUT}s — ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus Action · 🧪 Item")
+                text=f"⏱️ {var.ROUND_TIMEOUT}s — ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class · ✨ Bonus (Flee/Item/Help/Taunt + class) · 🧪 Item")
 
             view = CombatView(active, self, gid, run["participants"], run)
             msg  = await channel.send(embed=status, view=view)
@@ -1455,11 +1804,76 @@ class DungeonMasterCog(commands.Cog):
                 bonus = view.bonus_actions.get(uid)
                 if not bonus:
                     continue
-                fid   = bonus.get("feature_id")
-                stats = self._get_char_combat_stats(uid, gid)
-                level = stats["level"] if stats else 1
-                wis   = stats["mods"]["wisdom"]   if stats else 0
-                cha   = stats["mods"]["charisma"] if stats else 0
+                bonus_act = bonus.get("action")
+                fid       = bonus.get("feature_id")
+                stats     = self._get_char_combat_stats(uid, gid)
+                level     = stats["level"] if stats else 1
+                wis       = stats["mods"]["wisdom"]   if stats else 0
+                cha       = stats["mods"]["charisma"] if stats else 0
+
+                # ── Utility bonus actions ─────────────────────────────────────
+                if bonus_act == "flee":
+                    run["fled"].add(uid)
+                    round_lines.append(f"🏃 **{name}** breaks away! *(bonus — flees the battle)*")
+                    run["log"].append({"type": "flee", "uid": uid, "name": name, "round": rnd})
+                    continue
+
+                elif bonus_act == "help":
+                    t_uid  = bonus.get("target_uid", uid)
+                    t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+                    if t_uid in run.get("downed", {}):
+                        wis_mod = stats["mods"]["wisdom"] if stats else 0
+                        roll    = random.randint(1, 20) + wis_mod
+                        if roll >= 10:
+                            run["player_hp"][t_uid] = 1
+                            del run["downed"][t_uid]
+                            round_lines.append(
+                                f"🤝 **{name}** stabilizes **{t_name}** (Medicine {roll}) → 1 HP! *(bonus)*")
+                        else:
+                            round_lines.append(
+                                f"🤝 **{name}** tries to stabilize **{t_name}** (Medicine {roll}) — failed *(bonus)*")
+                    else:
+                        run.setdefault("helped_next_attack", {})[t_uid] = 4
+                        round_lines.append(f"🤝 **{name}** helps **{t_name}** — +4 to hit! *(bonus)*")
+                    run["log"].append({"type": "help", "uid": uid, "target": t_uid, "round": rnd})
+                    continue
+
+                elif bonus_act == "use_item":
+                    item_id    = bonus.get("item_id")
+                    target_uid = bonus.get("target_uid", uid)
+                    item       = self._find_item(item_id) if item_id else None
+                    if item and item.get("heal_expr") and target_uid in run["player_hp"]:
+                        heal   = _roll(item["heal_expr"])
+                        max_hp = run["player_max_hp"].get(target_uid, 999)
+                        old_hp = run["player_hp"].get(target_uid, 0)
+                        actual = min(max_hp, old_hp + heal) - old_hp
+                        run["player_hp"][target_uid] = old_hp + actual
+                        if target_uid in run.get("downed", {}) and run["player_hp"][target_uid] > 0:
+                            del run["downed"][target_uid]
+                            rev = next((n for u, n in run["participants"] if u == target_uid), target_uid)
+                            round_lines.append(f"💉 **{rev}** is back on their feet!")
+                        t_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
+                        self.db.execute(
+                            "UPDATE dnd_inventory SET qty=qty-1 WHERE user_id=? AND guild_id=? AND item_id=?",
+                            (uid, gid, item_id))
+                        self.db.execute(
+                            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+                            (uid, gid, item_id))
+                        target_txt = "themselves" if target_uid == uid else f"**{t_name}**"
+                        round_lines.append(
+                            f"🧪 **{name}** uses a {item['name']} on {target_txt} → +{actual} HP *(bonus)*")
+                        run["log"].append({"type": "item_use", "uid": uid, "name": name,
+                            "item": item_id, "target": target_uid, "heal": actual, "round": rnd})
+                    continue
+
+                elif bonus_act == "taunt":
+                    run.setdefault("taunt_targets", set()).add(uid)
+                    round_lines.append(f"🗣️ **{name}** taunts **{enemy['name']}** — they'll focus on you!")
+                    run["log"].append({"type": "bonus", "uid": uid, "name": name,
+                                       "action": "taunt", "round": rnd})
+                    continue
+
+                # ── Class feature bonus actions ───────────────────────────────
                 run["features_used"].setdefault(uid, set()).add(fid)
 
                 if fid == "second_wind":
@@ -1517,6 +1931,8 @@ class DungeonMasterCog(commands.Cog):
                 if uid not in active:
                     continue
                 action = view.actions.get(uid, "dodge")
+                if uid in run["fled"]:
+                    continue  # already fled via bonus action
 
                 if action == "flee":
                     run["fled"].add(uid)
@@ -1658,7 +2074,7 @@ class DungeonMasterCog(commands.Cog):
                     run["features_used"].setdefault(uid, set()).add(fid)
 
                     if fid == "action_surge" and stats:
-                        surge_n    = _n_attacks(stats["char_class"], stats["level"])
+                        surge_n    = max(2, _n_attacks(stats["char_class"], stats["level"]))
                         surge_hits: list[str] = []
                         for _ in range(surge_n):
                             r = random.randint(1, 20)
@@ -1769,7 +2185,9 @@ class DungeonMasterCog(commands.Cog):
                 non_fled = [uid for uid in active
                             if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
                 if non_fled:
-                    target_uid  = random.choice(non_fled)
+                    taunt_now   = [u for u in run.get("taunt_targets", set()) if u in non_fled]
+                    target_uid  = random.choice(taunt_now) if taunt_now else random.choice(non_fled)
+                    run["taunt_targets"] = set()
                     target_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
                     stats       = self._get_char_combat_stats(target_uid, gid)
                     if stats:

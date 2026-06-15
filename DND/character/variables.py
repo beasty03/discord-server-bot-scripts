@@ -363,6 +363,98 @@ COMBAT_FEATURES = {
 }
 
 # ============================================================================
+# LEVEL-UP CHOICES — interactive subclass/archetype prompts on level-up.
+# key: (class_id, level) triggers the choice when that level is reached.
+# ============================================================================
+
+LEVEL_UP_CHOICES = {
+    ("fighter", 3): {
+        "key":    "subclass",
+        "prompt": "Choose your Martial Archetype:",
+        "options": [
+            {"id": "champion",        "label": "Champion",
+             "desc": "Superior Athlete; expanded crit range (19–20)"},
+            {"id": "battle_master",   "label": "Battle Master",
+             "desc": "Tactical maneuvers — Trip, Disarm, Riposte using Superiority Dice"},
+            {"id": "eldritch_knight", "label": "Eldritch Knight",
+             "desc": "Blend martial training with INT-based wizard spells"},
+        ],
+    },
+    ("barbarian", 3): {
+        "key":    "subclass",
+        "prompt": "Choose your Primal Path:",
+        "options": [
+            {"id": "berserker",    "label": "Berserker",
+             "desc": "Frenzy — extra melee attack as bonus action while raging"},
+            {"id": "totem_warrior","label": "Totem Warrior",
+             "desc": "Spirit totems — Bear (resistance), Eagle (mobility), Wolf (pack)"},
+        ],
+    },
+    ("rogue", 3): {
+        "key":    "subclass",
+        "prompt": "Choose your Roguish Archetype:",
+        "options": [
+            {"id": "thief",           "label": "Thief",
+             "desc": "Fast Hands — bonus-action item use and object interaction"},
+            {"id": "assassin",        "label": "Assassin",
+             "desc": "Crit on surprised creatures; create convincing false identities"},
+            {"id": "arcane_trickster","label": "Arcane Trickster",
+             "desc": "INT-based wizard spells; Mage Hand Legerdemain pickpocket"},
+        ],
+    },
+    ("ranger", 3): {
+        "key":    "subclass",
+        "prompt": "Choose your Ranger Archetype:",
+        "options": [
+            {"id": "hunter",      "label": "Hunter",
+             "desc": "Colossus Slayer, Horde Breaker, or Giant Killer (choose at Lv 3)"},
+            {"id": "beast_master","label": "Beast Master",
+             "desc": "Bond with a beast companion that fights alongside you"},
+        ],
+    },
+    ("wizard", 2): {
+        "key":    "subclass",
+        "prompt": "Choose your Arcane Tradition:",
+        "options": [
+            {"id": "evocation", "label": "Evocation",
+             "desc": "Sculpt Spells — shape blasts to protect allies inside the area"},
+            {"id": "abjuration","label": "Abjuration",
+             "desc": "Arcane Ward — absorb damage with a shield of magical force"},
+            {"id": "illusion",  "label": "Illusion",
+             "desc": "Malleable Illusions you can reshape after casting"},
+            {"id": "divination","label": "Divination",
+             "desc": "Portent — replace any roll with predetermined dice once per day"},
+        ],
+    },
+    ("cleric", 1): {
+        "key":    "subclass",
+        "prompt": "Choose your Divine Domain:",
+        "options": [
+            {"id": "life",     "label": "Life",
+             "desc": "Heals restore extra HP — Disciple of Life"},
+            {"id": "light",    "label": "Light",
+             "desc": "Warding Flare — impose disadvantage on an incoming attack"},
+            {"id": "knowledge","label": "Knowledge",
+             "desc": "Extra languages, tool proficiencies, and arcane insight"},
+            {"id": "war",      "label": "War",
+             "desc": "Guided Strike +10 to hit; War God's Blessing reaction"},
+        ],
+    },
+    ("paladin", 3): {
+        "key":    "subclass",
+        "prompt": "Choose your Sacred Oath:",
+        "options": [
+            {"id": "devotion", "label": "Oath of Devotion",
+             "desc": "Sacred Weapon; Turn the Unholy — channel radiant energy"},
+            {"id": "ancients", "label": "Oath of the Ancients",
+             "desc": "Nature's Wrath; Turn the Faithless — preserve the ancient light"},
+            {"id": "vengeance","label": "Oath of Vengeance",
+             "desc": "Vow of Enmity — advantage on attacks against one chosen foe"},
+        ],
+    },
+}
+
+# ============================================================================
 # EMBED COLORS
 # ============================================================================
 
