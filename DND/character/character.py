@@ -20,11 +20,25 @@ log = logging.getLogger("launcher")
 # REGISTRY LOOKUPS
 # ============================================================================
 
-def _get_race(rid):
-    return next((r for r in var.RACES if r["id"] == rid), None)
+def _get_race(rid, extra=None):
+    return next((r for r in var.RACES + (extra or []) if r["id"] == rid), None)
 
-def _get_class(cid):
-    return next((c for c in var.CLASSES if c["id"] == cid), None)
+def _get_class(cid, extra=None):
+    return next((c for c in var.CLASSES + (extra or []) if c["id"] == cid), None)
+
+def _race_traits(rid, extra_races=None):
+    base = var.RACE_TRAITS.get(rid)
+    if base is not None:
+        return base
+    race = _get_race(rid, extra_races)
+    return race.get("traits", []) if race else []
+
+def _class_features(cid, extra_classes=None):
+    base = var.CLASS_FEATURES.get(cid)
+    if base is not None:
+        return base
+    klass = _get_class(cid, extra_classes)
+    return klass.get("features", []) if klass else []
 
 def _get_item(iid):
     return next((i for i in var.ITEMS if i["id"] == iid), None)
@@ -58,10 +72,10 @@ def _ability_mod(score: int) -> int:
 def _prof_bonus(level: int) -> int:
     return 2 + (level - 1) // 4
 
-def _derive(char: dict) -> dict:
+def _derive(char: dict, extra_races=None, extra_classes=None) -> dict:
     """Compute final scores, modifiers, AC, max HP, etc. from stored base data."""
-    race  = _get_race(char["race"]) if char["race"] else None
-    klass = _get_class(char["char_class"]) if char["char_class"] else None
+    race  = _get_race(char["race"], extra_races) if char["race"] else None
+    klass = _get_class(char["char_class"], extra_classes) if char["char_class"] else None
 
     finals = {}
     for ab in var.ABILITIES:
@@ -95,9 +109,6 @@ def _derive(char: dict) -> dict:
 # ============================================================================
 # APP-COMMAND CHOICES (built from the registry)
 # ============================================================================
-
-_RACE_CHOICES  = [app_commands.Choice(name=r["name"], value=r["id"]) for r in var.RACES]
-_CLASS_CHOICES = [app_commands.Choice(name=c["name"], value=c["id"]) for c in var.CLASSES]
 
 # ============================================================================
 # CREATION VIEWS
@@ -280,8 +291,17 @@ _CHAR_COLS = [
 class CharacterCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.db  = ForgeDB.get()
+        self.bot          = bot
+        self.db           = ForgeDB.get()
+        self._extra_items: list[dict] = []
+
+    def register_item(self, data: dict):
+        if not any(i["id"] == data["id"] for i in self._extra_items):
+            self._extra_items.append(data)
+            log.info("Character: registered DLC item '%s'", data["id"])
+
+    def _item(self, iid: str) -> dict | None:
+        return next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)
 
     async def cog_load(self):
         self.db.execute("""
@@ -325,6 +345,17 @@ class CharacterCog(commands.Cog):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _extra_races(self) -> list:
+        dm = self.bot.cogs.get("DungeonMasterCog")
+        return dm._extra_races if dm else []
+
+    def _extra_classes(self) -> list:
+        dm = self.bot.cogs.get("DungeonMasterCog")
+        return dm._extra_classes if dm else []
+
+    def _derive_char(self, char: dict) -> dict:
+        return _derive(char, self._extra_races(), self._extra_classes())
+
     def _fetch_char(self, uid: str, gid: str) -> dict | None:
         rows = self.db.execute(
             f"SELECT {', '.join(_CHAR_COLS)} FROM dnd_characters WHERE user_id = ? AND guild_id = ?",
@@ -337,7 +368,7 @@ class CharacterCog(commands.Cog):
         char = self._fetch_char(uid, gid)
         if not char:
             return
-        max_hp = _derive(char)["max_hp"]
+        max_hp = self._derive_char(char)["max_hp"]
         self.db.execute(
             "UPDATE dnd_characters SET hp = ? WHERE user_id = ? AND guild_id = ?",
             (max_hp, uid, gid),
@@ -436,8 +467,7 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="race", description="Set your character's race.")
     @app_commands.describe(race="Which race to play")
-    @app_commands.choices(race=_RACE_CHOICES)
-    async def set_race(self, interaction: discord.Interaction, race: app_commands.Choice[str]):
+    async def set_race(self, interaction: discord.Interaction, race: str):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
@@ -445,10 +475,14 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
             return
 
-        r = _get_race(race.value)
+        r = _get_race(race, self._extra_races())
+        if not r:
+            await interaction.response.send_message(
+                embed=self._err("Unknown race. Use the autocomplete suggestions."), ephemeral=True)
+            return
         self.db.execute(
             "UPDATE dnd_characters SET race = ? WHERE user_id = ? AND guild_id = ?",
-            (race.value, uid, gid),
+            (race, uid, gid),
         )
         self._recompute_hp(uid, gid)
 
@@ -461,12 +495,20 @@ class CharacterCog(commands.Cog):
             ephemeral=True,
         )
 
+    @set_race.autocomplete("race")
+    async def race_autocomplete(self, interaction: discord.Interaction, current: str):
+        all_races = var.RACES + self._extra_races()
+        return [
+            app_commands.Choice(name=f"{r['emoji']} {r['name']}", value=r["id"])
+            for r in all_races
+            if current.lower() in r["name"].lower()
+        ][:25]
+
     # ── /class ──────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="class", description="Set your character's class.")
     @app_commands.describe(char_class="Which class to play")
-    @app_commands.choices(char_class=_CLASS_CHOICES)
-    async def set_class(self, interaction: discord.Interaction, char_class: app_commands.Choice[str]):
+    async def set_class(self, interaction: discord.Interaction, char_class: str):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
@@ -474,10 +516,14 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
             return
 
-        c = _get_class(char_class.value)
+        c = _get_class(char_class, self._extra_classes())
+        if not c:
+            await interaction.response.send_message(
+                embed=self._err("Unknown class. Use the autocomplete suggestions."), ephemeral=True)
+            return
         self.db.execute(
             "UPDATE dnd_characters SET char_class = ? WHERE user_id = ? AND guild_id = ?",
-            (char_class.value, uid, gid),
+            (char_class, uid, gid),
         )
 
         # Grant starting equipment (only adds missing items — won't duplicate).
@@ -491,7 +537,7 @@ class CharacterCog(commands.Cog):
 
         self._recompute_hp(uid, gid)
 
-        gear = ", ".join(_get_item(i)["name"] for i in c.get("start_items", []) if _get_item(i)) or "none"
+        gear = ", ".join(self._item(i)["name"] for i in c.get("start_items", []) if self._item(i)) or "none"
         await interaction.response.send_message(
             embed=discord.Embed(
                 description=(
@@ -502,6 +548,15 @@ class CharacterCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+    @set_class.autocomplete("char_class")
+    async def class_autocomplete(self, interaction: discord.Interaction, current: str):
+        all_classes = var.CLASSES + self._extra_classes()
+        return [
+            app_commands.Choice(name=f"{c['emoji']} {c['name']}", value=c["id"])
+            for c in all_classes
+            if current.lower() in c["name"].lower()
+        ][:25]
 
     # ── /sheet ──────────────────────────────────────────────────────────────────
 
@@ -519,9 +574,9 @@ class CharacterCog(commands.Cog):
                 embed=self._err(f"{who} have a character yet."), ephemeral=member is None)
             return
 
-        d = _derive(char)
-        race  = _get_race(char["race"])
-        klass = _get_class(char["char_class"])
+        d = self._derive_char(char)
+        race  = _get_race(char["race"], self._extra_races())
+        klass = _get_class(char["char_class"], self._extra_classes())
 
         self.db.ensure_user(uid, gid, target.display_name)
         coins = self.db.get_balance(uid, gid)
@@ -576,8 +631,8 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
             return
 
-        d     = _derive(char)
-        klass = _get_class(char["char_class"]) if char["char_class"] else None
+        d     = self._derive_char(char)
+        klass = _get_class(char["char_class"], self._extra_classes()) if char["char_class"] else None
 
         rows = self.db.execute(
             "SELECT item_id, qty, equipped FROM dnd_inventory WHERE user_id = ? AND guild_id = ?",
@@ -596,7 +651,7 @@ class CharacterCog(commands.Cog):
 
         lines = []
         for item_id, qty, equipped in rows:
-            item    = _get_item(item_id)
+            item    = self._item(item_id)
             label   = item["name"] if item else item_id
             qty_txt = f" ×{qty}" if qty and qty > 1 else ""
             eq_txt  = "  *(equipped)*" if equipped else ""
@@ -634,7 +689,7 @@ class CharacterCog(commands.Cog):
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
             return
 
-        d   = _derive(char)
+        d   = self._derive_char(char)
         lvl = d["level"]
         xp  = char["xp"] or 0
 
@@ -666,13 +721,12 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="class_upgrade", description="Browse class features by level.")
     @app_commands.describe(char_class="Class to browse (defaults to your current class)")
-    @app_commands.choices(char_class=_CLASS_CHOICES)
-    async def class_upgrade(self, interaction: discord.Interaction, char_class: app_commands.Choice[str] | None = None):
+    async def class_upgrade(self, interaction: discord.Interaction, char_class: str | None = None):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
         if char_class is not None:
-            cid = char_class.value
+            cid = char_class
         else:
             char = self._fetch_char(uid, gid)
             cid = char["char_class"] if char else None
@@ -684,8 +738,8 @@ class CharacterCog(commands.Cog):
             )
             return
 
-        c        = _get_class(cid)
-        features = var.CLASS_FEATURES.get(cid, [])
+        c        = _get_class(cid, self._extra_classes())
+        features = _class_features(cid, self._extra_classes())
 
         by_level = defaultdict(list)
         for f in features:
@@ -703,6 +757,15 @@ class CharacterCog(commands.Cog):
         )
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @class_upgrade.autocomplete("char_class")
+    async def class_upgrade_autocomplete(self, interaction: discord.Interaction, current: str):
+        all_classes = var.CLASSES + self._extra_classes()
+        return [
+            app_commands.Choice(name=f"{c['emoji']} {c['name']}", value=c["id"])
+            for c in all_classes
+            if current.lower() in c["name"].lower()
+        ][:25]
 
     # ── /sheet_delete ─────────────────────────────────────────────────────────────
 
@@ -735,13 +798,12 @@ class CharacterCog(commands.Cog):
 
     @app_commands.command(name="race_upgrade", description="Browse racial traits.")
     @app_commands.describe(race="Race to browse (defaults to your current race)")
-    @app_commands.choices(race=_RACE_CHOICES)
-    async def race_upgrade(self, interaction: discord.Interaction, race: app_commands.Choice[str] | None = None):
+    async def race_upgrade(self, interaction: discord.Interaction, race: str | None = None):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
         if race is not None:
-            rid = race.value
+            rid = race
         else:
             char = self._fetch_char(uid, gid)
             rid = char["race"] if char else None
@@ -753,8 +815,8 @@ class CharacterCog(commands.Cog):
             )
             return
 
-        r      = _get_race(rid)
-        traits = var.RACE_TRAITS.get(rid, [])
+        r      = _get_race(rid, self._extra_races())
+        traits = _race_traits(rid, self._extra_races())
         bonus  = ", ".join(f"+{v} {var.ABILITY_ABBR[k]}" for k, v in r["mods"].items())
 
         lines = [f"**{t['name']}** — {t['desc']}" for t in traits]
@@ -767,6 +829,15 @@ class CharacterCog(commands.Cog):
         embed.add_field(name="Ability Bonuses", value=f"`{bonus}`", inline=False)
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @race_upgrade.autocomplete("race")
+    async def race_upgrade_autocomplete(self, interaction: discord.Interaction, current: str):
+        all_races = var.RACES + self._extra_races()
+        return [
+            app_commands.Choice(name=f"{r['emoji']} {r['name']}", value=r["id"])
+            for r in all_races
+            if current.lower() in r["name"].lower()
+        ][:25]
 
 
 async def setup(bot: commands.Bot):

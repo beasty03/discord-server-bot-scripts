@@ -25,8 +25,8 @@ log = logging.getLogger("launcher")
 # HELPERS
 # ============================================================================
 
-def _item_name(item_id: str) -> str:
-    item = next((i for i in char_var.ITEMS if i["id"] == item_id), None)
+def _item_name(item_id: str, extra_items: list = ()) -> str:
+    item = next((i for i in list(char_var.ITEMS) + list(extra_items) if i["id"] == item_id), None)
     return item["name"] if item else item_id
 
 def _tier(data: dict) -> dict:
@@ -108,7 +108,7 @@ class BuyConfirmView(discord.ui.View):
                 if current + qty > max_q:
                     await interaction.response.edit_message(
                         embed=discord.Embed(
-                            description=f"You already have too many **{_item_name(b_item_id)}**.",
+                            description=f"You already have too many **{_item_name(b_item_id, self._cog._char_extra_items())}**.",
                             color=var.COLOR_ERROR),
                         view=None)
                     return
@@ -203,8 +203,9 @@ class ShopSelectView(discord.ui.View):
         is_bundle = listing.get("_is_bundle", False)
 
         if is_bundle:
+            extra      = self._cog._char_extra_items()
             item_lines = "\n".join(
-                f"• {_item_name(iid)} ×{qty}"
+                f"• {_item_name(iid, extra)} ×{qty}"
                 for iid, qty in listing["items"]
             )
             detail = f"{listing['description']}\n\n**Includes:**\n{item_lines}"
@@ -238,6 +239,10 @@ class ShopCog(commands.Cog):
         self.db   = ForgeDB.get()
         self._extra_items:   list[dict] = []
         self._extra_bundles: list[dict] = []
+
+    def _char_extra_items(self) -> list[dict]:
+        char_cog = self.bot.cogs.get("CharacterCog")
+        return char_cog._extra_items if char_cog else []
 
     async def cog_load(self):
         self.db.execute("""

@@ -229,9 +229,10 @@ class CombatView(discord.ui.View):
         rows = self._cog.db.execute(
             "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
             (uid, self._gid))
+        all_items   = self._cog._all_char_items()
         consumables = [
             (iid, qty) for iid, qty in rows
-            if next((i for i in char_var.ITEMS if i["id"] == iid and i.get("slot") == "consumable"), None)
+            if next((i for i in all_items if i["id"] == iid and i.get("slot") == "consumable"), None)
         ]
         if not consumables:
             await interaction.response.send_message(
@@ -239,7 +240,7 @@ class CombatView(discord.ui.View):
             return
         options = []
         for iid, qty in consumables:
-            item = next((i for i in char_var.ITEMS if i["id"] == iid), None)
+            item = next((i for i in all_items if i["id"] == iid), None)
             if item:
                 options.append(discord.SelectOption(
                     label=f"{item['name']} ×{qty}",
@@ -507,6 +508,13 @@ class DungeonMasterCog(commands.Cog):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _all_char_items(self) -> list[dict]:
+        char_cog = self.bot.cogs.get("CharacterCog")
+        return char_var.ITEMS + (char_cog._extra_items if char_cog else [])
+
+    def _find_item(self, item_id: str) -> dict | None:
+        return next((i for i in self._all_char_items() if i["id"] == item_id), None)
+
     @staticmethod
     def _err(msg: str) -> discord.Embed:
         return discord.Embed(description=msg, color=var.COLOR_ERROR)
@@ -611,7 +619,7 @@ class DungeonMasterCog(commands.Cog):
             (uid, gid))
         if not rows:
             return None
-        return next((i for i in char_var.ITEMS if i["id"] == rows[0][0]), None)
+        return self._find_item(rows[0][0])
 
     async def _drop_materials(self, channel: discord.TextChannel,
                               run: dict, gid: str, enemy: dict):
@@ -634,7 +642,7 @@ class DungeonMasterCog(commands.Cog):
                            VALUES (?,?,?,1,0)
                            ON CONFLICT(user_id,guild_id,item_id) DO UPDATE SET qty=qty+1""",
                         (uid, gid, drop["id"]))
-                    item_data = next((i for i in char_var.ITEMS if i["id"] == drop["id"]), None)
+                    item_data = self._find_item(drop["id"])
                     label = f"{item_data.get('emoji','📦')} {item_data['name']}" if item_data else drop["id"]
                     got.append(label)
             if got:
@@ -1088,7 +1096,7 @@ class DungeonMasterCog(commands.Cog):
                 elif isinstance(action, dict) and action.get("action") == "use_item":
                     item_id    = action["item_id"]
                     target_uid = action["target_uid"]
-                    item       = next((i for i in char_var.ITEMS if i["id"] == item_id), None)
+                    item       = self._find_item(item_id)
                     if item and item.get("heal_expr") and target_uid in run["player_hp"]:
                         heal       = _roll(item["heal_expr"])
                         max_hp     = run["player_max_hp"].get(target_uid, 999)

@@ -29,13 +29,13 @@ def _get_inv(db, uid: str, gid: str) -> dict[str, int]:
         (uid, gid))
     return {r[0]: r[1] for r in rows}
 
-def _item(item_id: str) -> dict | None:
-    return next((i for i in char_var.ITEMS if i["id"] == item_id), None)
+def _item(item_id: str, extra_items: list = ()) -> dict | None:
+    return next((i for i in list(char_var.ITEMS) + list(extra_items) if i["id"] == item_id), None)
 
-def _ing_label(inputs: list[tuple[str, int]]) -> str:
+def _ing_label(inputs: list[tuple[str, int]], extra_items: list = ()) -> str:
     parts = []
     for iid, qty in inputs:
-        d = _item(iid)
+        d = _item(iid, extra_items)
         emoji = d.get("emoji", "📦") if d else "📦"
         parts.append(f"{emoji} ×{qty}")
     return "  ·  ".join(parts)
@@ -139,9 +139,10 @@ class CraftSelectView(discord.ui.View):
         recipe = next(r for r in self._all if r["id"] == recipe_id)
         inv    = _get_inv(self._cog.db, self._uid, self._gid)
 
-        lines = []
+        extra  = self._cog._char_extra_items()
+        lines  = []
         for iid, qty in recipe["inputs"]:
-            d      = _item(iid)
+            d      = _item(iid, extra)
             emoji  = d.get("emoji", "📦") if d else "📦"
             name   = d["name"] if d else iid
             have   = inv.get(iid, 0)
@@ -149,7 +150,7 @@ class CraftSelectView(discord.ui.View):
             lines.append(f"{status} {emoji} **{name}** ×{qty} — you have: {have}")
 
         out_id, out_qty = recipe["output"]
-        out_d    = _item(out_id)
+        out_d    = _item(out_id, extra)
         out_name = out_d["name"] if out_d else out_id
 
         embed = discord.Embed(
@@ -173,9 +174,10 @@ class LearnSelectView(discord.ui.View):
         self._gid  = gid
         all_recipes = var.RECIPES + cog._extra_recipes
 
+        extra   = cog._char_extra_items()
         options = []
         for iid, qty in scrolls:
-            d = _item(iid)
+            d = _item(iid, extra)
             if not d:
                 continue
             recipe = next((r for r in all_recipes if r.get("unlock") == iid), None)
@@ -287,6 +289,10 @@ class RecipesCog(commands.Cog):
             (uid, gid, recipe_id))
         return True
 
+    def _char_extra_items(self) -> list[dict]:
+        char_cog = self.bot.cogs.get("CharacterCog")
+        return char_cog._extra_items if char_cog else []
+
     def _get_known_recipes(self, uid: str, gid: str) -> list[dict]:
         all_recipes = var.RECIPES + self._extra_recipes
         return [
@@ -326,7 +332,7 @@ class RecipesCog(commands.Cog):
                         f"  {r['description']}"
                     )
                 else:
-                    scroll_d    = _item(r.get("unlock", ""))
+                    scroll_d    = _item(r.get("unlock", ""), self._char_extra_items())
                     scroll_name = scroll_d["name"] if scroll_d else r.get("unlock", "?")
                     lines.append(
                         f"🔒 {r['emoji']} **{r['name']}**\n"
@@ -388,7 +394,7 @@ class RecipesCog(commands.Cog):
             (uid, gid))
         scrolls: list[tuple[str, int]] = []
         for iid, qty in rows:
-            d = _item(iid)
+            d = _item(iid, self._char_extra_items())
             if not d or d.get("slot") != "recipe":
                 continue
             recipe = next((r for r in all_recipes if r.get("unlock") == iid), None)
