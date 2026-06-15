@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import logging
 import random
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,16 @@ _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
 log = logging.getLogger("launcher")
+
+def _roll(expr: str) -> int:
+    expr = expr.strip().lower()
+    if expr.startswith("d"):
+        expr = "1" + expr
+    m = re.match(r'^(\d+)d(\d+)([+-]\d+)?$', expr)
+    if not m:
+        return 0
+    rolls = [random.randint(1, int(m.group(2))) for _ in range(max(1, int(m.group(1))))]
+    return max(1, sum(rolls) + (int(m.group(3)) if m.group(3) else 0))
 
 # ============================================================================
 # REGISTRY LOOKUPS
@@ -838,6 +849,195 @@ class CharacterCog(commands.Cog):
             for r in all_races
             if current.lower() in r["name"].lower()
         ][:25]
+
+    # ── /rest ─────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="rest", description=f"Fully restore your HP after a campaign. Costs coins.")
+    async def rest(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        char = self._fetch_char(uid, gid)
+        if not char:
+            await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
+            return
+
+        max_hp = self._derive_char(char)["max_hp"]
+        if char["hp"] >= max_hp:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"❤️ You're already at full HP ({max_hp}/{max_hp}).",
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        cost    = var.REST_COST
+        balance = self.db.get_balance(uid, gid)
+        if balance < cost:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=(
+                        f"Not enough {var.CURRENCY_SYMBOL}! Resting costs **{cost:,}** "
+                        f"but you only have **{balance:,}**."
+                    ),
+                    color=var.COLOR_ERROR),
+                ephemeral=True)
+            return
+
+        healed = max_hp - char["hp"]
+        self.db.execute(
+            "UPDATE dnd_characters SET hp = ? WHERE user_id = ? AND guild_id = ?",
+            (max_hp, uid, gid))
+        self.db.update_balance(uid, gid, -cost, "rest")
+        new_bal = self.db.get_balance(uid, gid)
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"🛏️ You rest and recover fully.\n"
+                    f"❤️ **+{healed} HP** → {max_hp}/{max_hp}\n"
+                    f"Paid **{cost:,}** {var.CURRENCY_SYMBOL}  ·  Balance: **{new_bal:,}**"
+                ),
+                color=var.COLOR_WIN),
+            ephemeral=True)
+
+    # ── /backpack_use ─────────────────────────────────────────────────────────
+
+    @app_commands.command(name="backpack_use", description="Use a consumable item from your backpack.")
+    @app_commands.describe(item="Item to use", target="Who to use it on (default: yourself)")
+    async def backpack_use(self, interaction: discord.Interaction,
+                           item: str, target: discord.Member | None = None):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        tgt  = target or interaction.user
+        t_uid = str(tgt.id)
+
+        rows = self.db.execute(
+            "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=?",
+            (uid, gid, item))
+        if not rows or rows[0][0] < 1:
+            await interaction.response.send_message(
+                embed=self._err("You don't have that item."), ephemeral=True)
+            return
+
+        item_data = self._item(item)
+        if not item_data or item_data.get("slot") != "consumable" or not item_data.get("heal_expr"):
+            await interaction.response.send_message(
+                embed=self._err("That item can't be used outside of combat."), ephemeral=True)
+            return
+
+        t_char = self._fetch_char(t_uid, gid)
+        if not t_char:
+            who = "That player doesn't" if tgt != interaction.user else "You don't"
+            await interaction.response.send_message(
+                embed=self._err(f"{who} have a character."), ephemeral=True)
+            return
+
+        max_hp = self._derive_char(t_char)["max_hp"]
+        old_hp = t_char["hp"]
+        heal   = _roll(item_data["heal_expr"])
+        new_hp = min(max_hp, old_hp + heal)
+        actual = new_hp - old_hp
+
+        self.db.execute(
+            "UPDATE dnd_inventory SET qty=qty-1 WHERE user_id=? AND guild_id=? AND item_id=?",
+            (uid, gid, item))
+        self.db.execute(
+            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+            (uid, gid, item))
+        self.db.execute(
+            "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
+            (new_hp, t_uid, gid))
+
+        emoji      = item_data.get("emoji", "🧪")
+        target_txt = "yourself" if tgt == interaction.user else f"**{tgt.display_name}**"
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"{emoji} Used **{item_data['name']}** on {target_txt} → "
+                    f"**+{actual} HP** ({new_hp}/{max_hp})"
+                ),
+                color=var.COLOR_WIN),
+            ephemeral=True)
+
+    @backpack_use.autocomplete("item")
+    async def _backpack_use_ac(self, interaction: discord.Interaction, current: str):
+        uid, gid = str(interaction.user.id), str(interaction.guild_id)
+        rows = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid)) or []
+        choices = []
+        for iid, qty in rows:
+            d = self._item(iid)
+            if not d or d.get("slot") != "consumable":
+                continue
+            label = f"{d.get('emoji','')} {d['name']}{f' ×{qty}' if qty > 1 else ''}"
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label.strip(), value=iid))
+        return choices[:25]
+
+    # ── /backpack_give ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="backpack_give", description="Give an item from your backpack to another player.")
+    @app_commands.describe(item="Item to give", qty="How many to give", target="Who to give it to")
+    async def backpack_give(self, interaction: discord.Interaction,
+                            item: str, target: discord.Member, qty: int = 1):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        t_uid = str(target.id)
+
+        if target == interaction.user:
+            await interaction.response.send_message(
+                embed=self._err("You can't give items to yourself."), ephemeral=True)
+            return
+        if qty < 1:
+            await interaction.response.send_message(
+                embed=self._err("Quantity must be at least 1."), ephemeral=True)
+            return
+
+        rows    = self.db.execute(
+            "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=?",
+            (uid, gid, item))
+        current = rows[0][0] if rows else 0
+        if current < qty:
+            have = f"You only have {current}." if current else "You don't have that item."
+            await interaction.response.send_message(embed=self._err(have), ephemeral=True)
+            return
+
+        item_data = self._item(item)
+        label     = item_data["name"] if item_data else item
+
+        self.db.execute(
+            "UPDATE dnd_inventory SET qty=qty-? WHERE user_id=? AND guild_id=? AND item_id=?",
+            (qty, uid, gid, item))
+        self.db.execute(
+            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+            (uid, gid, item))
+        self.db.execute(
+            """INSERT INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped)
+               VALUES (?, ?, ?, ?, 0)
+               ON CONFLICT(user_id, guild_id, item_id) DO UPDATE SET qty=qty+?""",
+            (t_uid, gid, item, qty, qty))
+
+        qty_txt = f"×{qty} " if qty > 1 else ""
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"🎒 Gave {qty_txt}**{label}** to **{target.display_name}**.",
+                color=var.COLOR_WIN))
+
+    @backpack_give.autocomplete("item")
+    async def _backpack_give_ac(self, interaction: discord.Interaction, current: str):
+        uid, gid = str(interaction.user.id), str(interaction.guild_id)
+        rows = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid)) or []
+        choices = []
+        for iid, qty in rows:
+            d     = self._item(iid)
+            label = f"{d['name']}{f' ×{qty}' if qty > 1 else ''}" if d else iid
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label, value=iid))
+        return choices[:25]
 
 
 async def setup(bot: commands.Bot):

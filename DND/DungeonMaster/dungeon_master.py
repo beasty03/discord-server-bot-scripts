@@ -1125,16 +1125,21 @@ class DungeonMasterCog(commands.Cog):
                         total = roll + stats["atk_bonus"]
                         crit  = roll == 20
                         if crit or total >= enemy["ac"]:
-                            dmg = _roll(stats["dmg_expr"])
+                            dmg1 = _roll(stats["dmg_expr"])
                             if crit:
-                                dmg += _roll(stats["dmg_expr"])  # double dice on crit
+                                dmg2 = _roll(stats["dmg_expr"])
+                                dmg  = dmg1 + dmg2
+                            else:
+                                dmg  = dmg1
                             e_hp = max(0, e_hp - dmg)
                             last_hitter = (uid, name)
-                            crit_txt  = " ✨ **CRITICAL HIT!**" if crit else ""
                             bonus_txt = f"{stats['atk_bonus']:+d}"
-                            round_lines.append(
-                                f"⚔️ **{name}** rolled {roll} {bonus_txt} = **{total}** vs AC {enemy['ac']} → "
-                                f"**HIT!** `{dmg}` dmg{crit_txt}")
+                            if crit:
+                                round_lines.append(
+                                    f"⚔️ **{name}** ✨ **CRIT!** — {dmg1} + {dmg2} = **{dmg} dmg**")
+                            else:
+                                round_lines.append(
+                                    f"⚔️ **{name}** rolled {roll} {bonus_txt} = **{total}** vs AC {enemy['ac']} → {dmg} dmg")
                             run["log"].append({
                                 "type": "attack", "uid": uid, "name": name,
                                 "roll": roll, "total": total, "dmg": dmg,
@@ -1167,14 +1172,22 @@ class DungeonMasterCog(commands.Cog):
                         total_atk = roll + enemy["atk_bonus"]
                         dodge_ac  = stats["ac"] + (2 if target_uid in dodgers else 0)
                         if roll == 20 or total_atk >= dodge_ac:
-                            dmg = _roll(enemy["dmg"])
+                            dmg1 = _roll(enemy["dmg"])
+                            if roll == 20:
+                                dmg2 = _roll(enemy["dmg"])
+                                dmg  = dmg1 + dmg2
+                            else:
+                                dmg  = dmg1
                             if target_uid in dodgers:
                                 dmg = max(1, dmg // 2)
                             run["player_hp"][target_uid] = max(0, run["player_hp"][target_uid] - dmg)
                             dodge_txt = " *(half dmg — dodged)*" if target_uid in dodgers else ""
-                            crit_txt  = " ✨ **CRIT!**" if roll == 20 else ""
-                            round_lines.append(
-                                f"💥 **{enemy['name']}** retaliates on **{target_name}** → `{dmg}` dmg{crit_txt}{dodge_txt}")
+                            if roll == 20:
+                                round_lines.append(
+                                    f"💥 **{enemy['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}")
+                            else:
+                                round_lines.append(
+                                    f"💥 **{enemy['name']}** hits **{target_name}** → {dmg} dmg{dodge_txt}")
                             run["log"].append({
                                 "type": "enemy_hit", "enemy": enemy["name"],
                                 "target": target_uid, "target_name": target_name,
