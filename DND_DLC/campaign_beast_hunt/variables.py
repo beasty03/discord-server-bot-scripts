@@ -10,6 +10,8 @@ CAMPAIGN = {
     "name":            "The Prowling Beast",
     "emoji":           "🐗",
     "min_level":       1,
+    "min_players":     1,
+    "max_players":     4,
     "difficulty":      "Easy",
     "intro":           (
         "Livestock have gone missing near the village. A massive beast was spotted "

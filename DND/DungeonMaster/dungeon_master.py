@@ -101,13 +101,97 @@ class SkillFlavorModal(discord.ui.Modal):
 # VIEWS
 # ============================================================================
 
+class InitiativeRollView(discord.ui.View):
+    """Each player clicks to roll their own initiative instead of an auto-roll."""
+
+    def __init__(self, active_uids: list[str], name_map: dict[str, str],
+                 cog: "DungeonMasterCog", gid: str):
+        super().__init__(timeout=var.ROUND_TIMEOUT)
+        self._active  = set(active_uids)
+        self._names   = name_map
+        self._cog     = cog
+        self._gid     = gid
+        self.rolls:   dict[str, tuple[int, int, int]] = {}  # uid → (d20, mod, total)
+        self._done    = asyncio.Event()
+
+    def build_embed(self) -> discord.Embed:
+        lines = []
+        for uid in self._active:
+            name = self._names.get(uid, uid)
+            if uid in self.rolls:
+                d20, mod, total = self.rolls[uid]
+                mod_txt = f" {mod:+d}" if mod != 0 else ""
+                lines.append(f"✅ **{name}** — {d20}{mod_txt} = **{total}**")
+            else:
+                lines.append(f"⏳ **{name}** — *waiting...*")
+        return discord.Embed(
+            title="🎲 Initiative — Click to Roll!",
+            description="\n".join(lines),
+            color=var.COLOR_COMBAT,
+        )
+
+    @discord.ui.button(label="🎲 Roll Initiative!", style=discord.ButtonStyle.primary)
+    async def roll_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self._active:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if uid in self.rolls:
+            await interaction.response.send_message("You already rolled!", ephemeral=True)
+            return
+        stats   = self._cog._get_char_combat_stats(uid, self._gid)
+        dex_mod = stats["mods"]["dexterity"] if stats else 0
+        d20     = random.randint(1, 20)
+        total   = d20 + dex_mod
+        self.rolls[uid] = (d20, dex_mod, total)
+        if set(self.rolls.keys()) >= self._active:
+            self._done.set()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+
+class TargetSelectView(discord.ui.View):
+    """Second step of item use — pick which party member to target."""
+
+    def __init__(self, combat_view: "CombatView", uid: str, item_id: str,
+                 active_members: list[tuple[str, str]]):
+        super().__init__(timeout=30)
+        self._cv      = combat_view
+        self._uid     = uid
+        self._item_id = item_id
+
+        options = [
+            discord.SelectOption(
+                label=f"{name}{' (you)' if m_uid == uid else ''}",
+                value=m_uid,
+            )
+            for m_uid, name in active_members
+        ]
+        sel = discord.ui.Select(placeholder="Who gets the potion?", options=options)
+        sel.callback = self._on_target
+        self.add_item(sel)
+
+    async def _on_target(self, interaction: discord.Interaction):
+        target_uid = interaction.data["values"][0]
+        self._cv.actions[self._uid] = {"action": "use_item", "item_id": self._item_id, "target_uid": target_uid}
+        if all(v is not None for v in self._cv.actions.values()):
+            self._cv._done.set()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="🧪 Item use locked in!", color=0x57F287), view=None)
+        self.stop()
+
+
 class CombatView(discord.ui.View):
     """One round of combat — each active participant picks an action."""
 
-    def __init__(self, active_uids: list[str]):
+    def __init__(self, active_uids: list[str], cog: "DungeonMasterCog",
+                 gid: str, participants: list[tuple[str, str]]):
         super().__init__(timeout=None)
-        self.actions: dict[str, str | None] = {uid: None for uid in active_uids}
-        self._done = asyncio.Event()
+        self.actions:      dict[str, str | dict | None] = {uid: None for uid in active_uids}
+        self._done         = asyncio.Event()
+        self._active_set   = set(active_uids)
+        self._cog          = cog
+        self._gid          = gid
+        self._participants = participants
 
     async def _record(self, interaction: discord.Interaction, action: str):
         uid = str(interaction.user.id)
@@ -116,21 +200,81 @@ class CombatView(discord.ui.View):
             return
         if self.actions[uid] is not None:
             await interaction.response.send_message(
-                f"Already locked in: **{self.actions[uid]}**.", ephemeral=True)
+                f"Already locked in: **{self.actions[uid] if isinstance(self.actions[uid], str) else 'item use'}**.",
+                ephemeral=True)
             return
         self.actions[uid] = action
         await interaction.response.send_message(f"✅ **{action.title()}** locked in!", ephemeral=True)
         if all(v is not None for v in self.actions.values()):
             self._done.set()
 
-    @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger,     row=0)
     async def attack(self, i: discord.Interaction, _): await self._record(i, "attack")
 
-    @discord.ui.button(label="🛡️ Dodge",  style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="🛡️ Dodge",  style=discord.ButtonStyle.secondary,  row=0)
     async def dodge(self, i: discord.Interaction, _): await self._record(i, "dodge")
 
-    @discord.ui.button(label="🏃 Flee",   style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="🏃 Flee",   style=discord.ButtonStyle.primary,    row=0)
     async def flee(self, i: discord.Interaction, _): await self._record(i, "flee")
+
+    @discord.ui.button(label="🧪 Item",   style=discord.ButtonStyle.secondary,  row=1)
+    async def use_item(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.actions:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if self.actions[uid] is not None:
+            await interaction.response.send_message("You've already chosen your action.", ephemeral=True)
+            return
+        rows = self._cog.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, self._gid))
+        consumables = [
+            (iid, qty) for iid, qty in rows
+            if next((i for i in char_var.ITEMS if i["id"] == iid and i.get("slot") == "consumable"), None)
+        ]
+        if not consumables:
+            await interaction.response.send_message(
+                "You have no usable items. (Buy potions from the shop!)", ephemeral=True)
+            return
+        options = []
+        for iid, qty in consumables:
+            item = next((i for i in char_var.ITEMS if i["id"] == iid), None)
+            if item:
+                options.append(discord.SelectOption(
+                    label=f"{item['name']} ×{qty}",
+                    description=f"Heals {item.get('heal_expr', '?')} HP",
+                    value=iid,
+                ))
+        active_members = [(uid2, name) for uid2, name in self._participants if uid2 in self._active_set]
+        view = _ItemPickView(self, uid, active_members, options)
+        await interaction.response.send_message(
+            embed=discord.Embed(description="🧪 Pick an item to use:", color=var.COLOR_INFO),
+            view=view,
+            ephemeral=True,
+        )
+
+
+class _ItemPickView(discord.ui.View):
+    """Ephemeral first step: which consumable?"""
+
+    def __init__(self, combat_view: CombatView, uid: str,
+                 active_members: list[tuple[str, str]], options: list):
+        super().__init__(timeout=30)
+        self._cv             = combat_view
+        self._uid            = uid
+        self._active_members = active_members
+        sel = discord.ui.Select(placeholder="Choose an item…", options=options)
+        sel.callback = self._on_item
+        self.add_item(sel)
+
+    async def _on_item(self, interaction: discord.Interaction):
+        item_id = interaction.data["values"][0]
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="🧪 Who should receive it?", color=var.COLOR_INFO),
+            view=TargetSelectView(self._cv, self._uid, item_id, self._active_members),
+        )
+        self.stop()
 
 
 class InteractionView(discord.ui.View):
@@ -220,24 +364,30 @@ class WanderJoinView(discord.ui.View):
     """Public join window posted in the channel for party members."""
 
     def __init__(self, cog: "DungeonMasterCog", campaign: dict,
-                 initiator_uid: str, initiator_name: str, party_members: set[str]):
+                 initiator_uid: str, initiator_name: str, party_members: list[str]):
         super().__init__(timeout=var.WANDER_JOIN_TIMEOUT)
         self.cog           = cog
         self.campaign      = campaign
         self.party_members = party_members
         self.joiners: list[tuple[str, str]] = [(initiator_uid, initiator_name)]
         self._joiner_set: set[str]          = {initiator_uid}
+        self._all_joined   = asyncio.Event()
+        # If the initiator is already the whole party, fire immediately
+        if len(self._joiner_set) >= len(self.party_members):
+            self._all_joined.set()
 
     def _build_embed(self) -> discord.Embed:
         c     = self.campaign
+        max_p = c.get("max_players", 4)
         names = ", ".join(n for _, n in self.joiners)
         embed = discord.Embed(
             title=f"{c['emoji']} {c['name']}  —  {c['difficulty']}",
             description=(
                 f"*{c['intro']}*\n\n"
                 f"**Min level:** {c['min_level']}  ·  "
+                f"**Players:** {c.get('min_players', 1)}–{max_p}  ·  "
                 f"**Reward:** up to {c['reward_gold_max']:,} {var.CURRENCY_SYMBOL}  ·  {c['reward_xp']:,} XP\n\n"
-                f"**Joining:** {names}\n\n"
+                f"**Joining ({len(self.joiners)}/{max_p}):** {names}\n\n"
                 f"⚔️ Click below to join! Window closes in **{var.WANDER_JOIN_TIMEOUT}s**."
             ),
             color=var.COLOR_CAMPAIGN,
@@ -247,13 +397,18 @@ class WanderJoinView(discord.ui.View):
 
     @discord.ui.button(label="⚔️ Join the quest", style=discord.ButtonStyle.success)
     async def join_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
-        uid = str(interaction.user.id)
-        gid = str(interaction.guild_id)
+        uid   = str(interaction.user.id)
+        gid   = str(interaction.guild_id)
+        max_p = self.campaign.get("max_players", 4)
         if uid not in self.party_members:
             await interaction.response.send_message("Only party members can join.", ephemeral=True)
             return
         if uid in self._joiner_set:
             await interaction.response.send_message("You're already joining!", ephemeral=True)
+            return
+        if len(self.joiners) >= max_p:
+            await interaction.response.send_message(
+                f"This campaign is full ({max_p}/{max_p} players).", ephemeral=True)
             return
         if self.cog._is_in_run(uid, gid):
             await interaction.response.send_message(
@@ -262,6 +417,8 @@ class WanderJoinView(discord.ui.View):
         self._joiner_set.add(uid)
         self.joiners.append((uid, interaction.user.display_name))
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
+        if self._joiner_set >= set(self.party_members):
+            self._all_joined.set()
 
 
 class CampaignSelectView(discord.ui.View):
@@ -278,7 +435,11 @@ class CampaignSelectView(discord.ui.View):
             discord.SelectOption(
                 label=f"{c['emoji']} {c['name']}",
                 value=c["id"],
-                description=f"{c['difficulty']} · Min Lv {c['min_level']} · {c['reward_xp']} XP",
+                description=(
+                    f"{c['difficulty']} · Lv {c['min_level']}+ · "
+                    f"👥 {c.get('min_players', 1)}-{c.get('max_players', 4)} · "
+                    f"{c['reward_xp']} XP"
+                ),
             )
             for c in campaigns
         ]
@@ -608,9 +769,12 @@ class DungeonMasterCog(commands.Cog):
     ):
         gid = str(interaction.guild_id)
         try:
-            # Wait for party join window
+            # Wait for party join window (closes early if everyone joins)
             if join_view is not None:
-                await asyncio.sleep(var.WANDER_JOIN_TIMEOUT)
+                try:
+                    await asyncio.wait_for(join_view._all_joined.wait(), timeout=var.WANDER_JOIN_TIMEOUT)
+                except asyncio.TimeoutError:
+                    pass
                 join_view.stop()
                 for item in join_view.children:
                     item.disabled = True
@@ -714,61 +878,77 @@ class DungeonMasterCog(commands.Cog):
                           encounter: dict, run_id: str) -> str:
         run   = self._runs[run_id]
         gid   = run["gid"]
-        enemy = dict(encounter["enemy"])
-        e_hp  = enemy["hp"]
-        e_max = enemy["hp"]
-        rnd   = 0
+        enemy      = dict(encounter["enemy"])
+        party_size = len(run["participants"])
+        e_hp       = enemy["hp"] + (party_size - 1) * max(1, enemy["hp"] // 3)
+        e_max      = e_hp
+        rnd        = 0
         last_hitter = None
         kill_entry: dict = {}
 
+        scale_note  = f" *(+{e_hp - enemy['hp']} for party)*" if party_size > 1 else ""
         intro_embed = discord.Embed(
             title=f"⚔️ {encounter['name']}",
             description=(
                 f"*{encounter['intro']}*\n\n"
                 f"{enemy['emoji']} **{enemy['name']}**  —  "
-                f"HP **{e_hp}**  ·  AC **{enemy['ac']}**"
+                f"HP **{e_hp}**{scale_note}  ·  AC **{enemy['ac']}**"
             ),
             color=var.COLOR_COMBAT,
         )
         await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
 
-        # ── Initiative (rolled once, determines who acts first each round) ─────
-        active_init = [uid for uid, _ in run["participants"]
-                       if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+        # ── Initiative — button roll, each player clicks ───────────────────────
+        active_init  = [uid for uid, _ in run["participants"]
+                        if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+        name_map     = {uid: name for uid, name in run["participants"]}
+        init_view    = InitiativeRollView(active_init, name_map, self, gid)
+        init_msg     = await channel.send(embed=init_view.build_embed(), view=init_view)
+        try:
+            await asyncio.wait_for(init_view._done.wait(), timeout=var.ROUND_TIMEOUT)
+        except asyncio.TimeoutError:
+            for uid in active_init:
+                if uid not in init_view.rolls:
+                    stats   = self._get_char_combat_stats(uid, gid)
+                    dex_mod = stats["mods"]["dexterity"] if stats else 0
+                    d20     = random.randint(1, 20)
+                    init_view.rolls[uid] = (d20, dex_mod, d20 + dex_mod)
+        for item in init_view.children:
+            item.disabled = True
+
+        # Enemy initiative
         enemy_init_bonus = enemy.get("initiative_bonus", 0)
         enemy_init_roll  = random.randint(1, 20)
         enemy_init_total = enemy_init_roll + enemy_init_bonus
 
-        init_rows: list[tuple[int, str]] = []  # (total, display_line)
+        # Build sorted results
+        init_rows: list[tuple[int, str]] = []
         player_inits: dict[str, int] = {}
-        for uid, name in run["participants"]:
-            if uid not in active_init:
-                continue
-            stats   = self._get_char_combat_stats(uid, gid)
-            dex_mod = stats["mods"]["dexterity"] if stats else 0
-            p_roll  = random.randint(1, 20)
-            p_total = p_roll + dex_mod
-            player_inits[uid] = p_total
-            mod_txt = f" {dex_mod:+d}" if dex_mod != 0 else ""
-            init_rows.append((p_total, f"🎲 **{name}** — {p_roll}{mod_txt} = **{p_total}**"))
-
+        for uid in active_init:
+            d20, mod, total = init_view.rolls.get(uid, (0, 0, 0))
+            name = name_map.get(uid, uid)
+            player_inits[uid] = total
+            mod_txt = f" {mod:+d}" if mod != 0 else ""
+            init_rows.append((total, f"🎲 **{name}** — {d20}{mod_txt} = **{total}**"))
         e_mod_txt = f" {enemy_init_bonus:+d}" if enemy_init_bonus != 0 else ""
         init_rows.append((enemy_init_total,
                           f"🐾 **{enemy['name']}** — {enemy_init_roll}{e_mod_txt} = **{enemy_init_total}**"))
         init_rows.sort(key=lambda x: x[0], reverse=True)
 
         best_player_init = max(player_inits.values(), default=0)
-        enemy_first = enemy_init_total > best_player_init
-        order_txt   = (f"⚡ **{enemy['name']} acts first!**" if enemy_first
-                       else "⚔️ **Players act first!**")
-
-        init_embed = discord.Embed(
-            title="🎲 Initiative",
+        enemy_first      = enemy_init_total > best_player_init
+        order_txt        = (f"⚡ **{enemy['name']} acts first!**" if enemy_first
+                            else "⚔️ **Players act first!**")
+        final_init_embed = discord.Embed(
+            title="🎲 Initiative Results",
             description="\n".join(line for _, line in init_rows) + f"\n\n{order_txt}",
             color=var.COLOR_COMBAT,
         )
-        await channel.send(embed=init_embed)
+        try:
+            await init_msg.edit(embed=final_init_embed, view=init_view)
+        except Exception:
+            pass
         await asyncio.sleep(var.RESULT_DELAY)
 
         # ── Combat loop ────────────────────────────────────────────────────────
@@ -835,9 +1015,9 @@ class DungeonMasterCog(commands.Cog):
                 ),
                 color=var.COLOR_COMBAT,
             )
-            status.set_footer(text=f"⏱️ {var.ROUND_TIMEOUT}s — choose ⚔️ Attack · 🛡️ Dodge · 🏃 Flee")
+            status.set_footer(text=f"⏱️ {var.ROUND_TIMEOUT}s — choose ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🧪 Item")
 
-            view = CombatView(active)
+            view = CombatView(active, self, gid, run["participants"])
             msg  = await channel.send(embed=status, view=view)
 
             try:
@@ -871,6 +1051,31 @@ class DungeonMasterCog(commands.Cog):
                 elif action == "dodge":
                     dodgers.add(uid)
                     round_lines.append(f"🛡️ **{name}** takes a defensive stance.")
+
+                elif isinstance(action, dict) and action.get("action") == "use_item":
+                    item_id    = action["item_id"]
+                    target_uid = action["target_uid"]
+                    item       = next((i for i in char_var.ITEMS if i["id"] == item_id), None)
+                    if item and item.get("heal_expr") and target_uid in run["player_hp"]:
+                        heal       = _roll(item["heal_expr"])
+                        max_hp     = run["player_max_hp"].get(target_uid, 999)
+                        old_hp     = run["player_hp"].get(target_uid, 0)
+                        actual     = min(max_hp, old_hp + heal) - old_hp
+                        run["player_hp"][target_uid] = old_hp + actual
+                        t_name     = next((n for u, n in run["participants"] if u == target_uid), target_uid)
+                        self.db.execute(
+                            "UPDATE dnd_inventory SET qty=qty-1 WHERE user_id=? AND guild_id=? AND item_id=?",
+                            (uid, gid, item_id))
+                        self.db.execute(
+                            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+                            (uid, gid, item_id))
+                        target_txt = "themselves" if target_uid == uid else f"**{t_name}**"
+                        round_lines.append(
+                            f"🧪 **{name}** uses a {item['name']} on {target_txt} → +{actual} HP")
+                        run["log"].append({
+                            "type": "item_use", "uid": uid, "name": name,
+                            "item": item_id, "target": target_uid, "heal": actual, "round": rnd,
+                        })
 
                 elif action == "attack":
                     stats = self._get_char_combat_stats(uid, gid)
@@ -958,6 +1163,8 @@ class DungeonMasterCog(commands.Cog):
                         "enemy": enemy["name"], "kill_flavor": None,
                     }
                     run["log"].append(kill_entry)
+                    async with channel.typing():
+                        await asyncio.sleep(1.5)
                     await channel.send(
                         f"<@{last_hitter[0]}> delivers the killing blow on **{enemy['name']}**!",
                         view=KillConfirmView(last_hitter[0], enemy["name"], kill_entry),
@@ -1042,6 +1249,9 @@ class DungeonMasterCog(commands.Cog):
             f"🎲 Rolled **{roll}** {mod:+d} = **{total}** vs DC **{dc}**",
             "",
         ]
+
+        async with channel.typing():
+            await asyncio.sleep(2)
 
         if success:
             desc_lines.append(f"✅ **Success!**  {encounter['success_text']}")

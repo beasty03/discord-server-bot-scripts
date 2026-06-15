@@ -80,15 +80,17 @@ CLASSES = [
 ITEMS = [
     # weapon_type: "simple" or "martial" — used for proficiency checks.
     # ability: which ability score drives the attack roll.
-    {"id": "longsword",     "name": "Longsword",     "slot": "weapon",  "weapon_type": "martial", "ability": "strength"},
-    {"id": "greataxe",      "name": "Greataxe",      "slot": "weapon",  "weapon_type": "martial", "ability": "strength"},
-    {"id": "dagger",        "name": "Dagger",        "slot": "weapon",  "weapon_type": "simple",  "ability": "dexterity"},
-    {"id": "shortbow",      "name": "Shortbow",      "slot": "weapon",  "weapon_type": "simple",  "ability": "dexterity"},
-    {"id": "quarterstaff",  "name": "Quarterstaff",  "slot": "weapon",  "weapon_type": "simple",  "ability": "strength"},
-    {"id": "mace",          "name": "Mace",          "slot": "weapon",  "weapon_type": "simple",  "ability": "strength"},
+    {"id": "longsword",     "name": "Longsword",     "slot": "weapon",     "weapon_type": "martial", "ability": "strength"},
+    {"id": "greataxe",      "name": "Greataxe",      "slot": "weapon",     "weapon_type": "martial", "ability": "strength"},
+    {"id": "dagger",        "name": "Dagger",        "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity"},
+    {"id": "shortbow",      "name": "Shortbow",      "slot": "weapon",     "weapon_type": "simple",  "ability": "dexterity"},
+    {"id": "quarterstaff",  "name": "Quarterstaff",  "slot": "weapon",     "weapon_type": "simple",  "ability": "strength"},
+    {"id": "mace",          "name": "Mace",          "slot": "weapon",     "weapon_type": "simple",  "ability": "strength"},
     {"id": "shield",        "name": "Shield",        "slot": "offhand"},
     {"id": "leather_armor", "name": "Leather Armor", "slot": "armor"},
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
+    # Consumables — usable in combat via the 🧪 Item button.
+    {"id": "health_potion", "name": "Health Potion", "slot": "consumable", "heal_expr": "2d4+2"},
 ]
 
 # ============================================================================

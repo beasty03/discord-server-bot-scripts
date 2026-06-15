@@ -99,6 +99,108 @@ def _derive(char: dict) -> dict:
 _RACE_CHOICES  = [app_commands.Choice(name=r["name"], value=r["id"]) for r in var.RACES]
 _CLASS_CHOICES = [app_commands.Choice(name=c["name"], value=c["id"]) for c in var.CLASSES]
 
+# ============================================================================
+# CREATION VIEWS
+# ============================================================================
+
+class StatMethodView(discord.ui.View):
+    """Let the player choose how to assign ability scores at character creation."""
+
+    def __init__(self, cog: "CharacterCog", uid: str, gid: str,
+                 char_name: str, display_name: str):
+        super().__init__(timeout=60)
+        self._cog          = cog
+        self._uid          = uid
+        self._gid          = gid
+        self._char_name    = char_name
+        self._display_name = display_name
+
+    async def _create(self, interaction: discord.Interaction, method: str):
+        if method == "roll":
+            stats = {ab: _roll_4d6_drop_lowest() for ab in var.ABILITIES}
+            method_label = "Rolled (4d6 drop lowest)"
+        else:
+            vals  = list(var.STANDARD_ARRAY)
+            random.shuffle(vals)
+            stats = dict(zip(var.ABILITIES, vals))
+            method_label = "Standard array [15,14,13,12,10,8]"
+
+        self._cog.db.execute(
+            """INSERT INTO dnd_characters
+                   (user_id, guild_id, name, race, char_class, level, xp,
+                    strength, dexterity, constitution, intelligence, wisdom, charisma,
+                    hp, created_at)
+               VALUES (?, ?, ?, NULL, NULL, 1, 0, ?, ?, ?, ?, ?, ?, 0, ?)""",
+            (self._uid, self._gid, self._char_name,
+             stats["strength"], stats["dexterity"], stats["constitution"],
+             stats["intelligence"], stats["wisdom"], stats["charisma"],
+             datetime.utcnow().isoformat()),
+        )
+        # Starting health potion for everyone
+        self._cog.db.execute(
+            """INSERT INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped)
+               VALUES (?, ?, 'health_potion', 1, 0)
+               ON CONFLICT(user_id, guild_id, item_id) DO UPDATE SET qty = qty + 1""",
+            (self._uid, self._gid),
+        )
+
+        rolled = " · ".join(f"{var.ABILITY_ABBR[ab]} {stats[ab]}" for ab in var.ABILITIES)
+        embed  = discord.Embed(
+            title=f"🎲 {self._char_name} enters the world!",
+            description=(
+                f"*{method_label}*\n`{rolled}`\n\n"
+                "Now pick your `/race` and `/class` to finish your character.\n"
+                "You start with **1 Health Potion** in your backpack."
+            ),
+            color=var.COLOR_DND,
+        )
+        embed.set_footer(text=var.SERVER_NAME)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+    @discord.ui.button(label="🎲 Roll Stats", style=discord.ButtonStyle.primary)
+    async def roll_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._create(interaction, "roll")
+
+    @discord.ui.button(label="📋 Standard Array", style=discord.ButtonStyle.secondary)
+    async def array_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._create(interaction, "array")
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
+class DeleteConfirmView(discord.ui.View):
+    """Confirmation gate for /sheet_delete."""
+
+    def __init__(self, cog: "CharacterCog", uid: str, gid: str, char_name: str):
+        super().__init__(timeout=30)
+        self._cog       = cog
+        self._uid       = uid
+        self._gid       = gid
+        self._char_name = char_name
+
+    @discord.ui.button(label="Yes, delete", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, _: discord.ui.Button):
+        self._cog.db.execute(
+            "DELETE FROM dnd_characters WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
+        self._cog.db.execute(
+            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description=f"🗑️ **{self._char_name}** has been deleted. Use `/name` to create a new character.",
+                color=var.COLOR_ERROR),
+            view=None)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="Deletion cancelled.", color=var.COLOR_INFO),
+            view=None)
+        self.stop()
+
 _CHAR_COLS = [
     "user_id", "guild_id", "name", "race", "char_class", "level", "xp",
     "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
@@ -209,30 +311,22 @@ class CharacterCog(commands.Cog):
             )
             return
 
-        stats = _roll_stats()
-        self.db.execute(
-            f"""INSERT INTO dnd_characters
-                   (user_id, guild_id, name, race, char_class, level, xp,
-                    strength, dexterity, constitution, intelligence, wisdom, charisma,
-                    hp, created_at)
-               VALUES (?, ?, ?, NULL, NULL, 1, 0, ?, ?, ?, ?, ?, ?, 0, ?)""",
-            (uid, gid, name,
-             stats["strength"], stats["dexterity"], stats["constitution"],
-             stats["intelligence"], stats["wisdom"], stats["charisma"],
-             datetime.utcnow().isoformat()),
-        )
-
-        rolled = " · ".join(f"{var.ABILITY_ABBR[ab]} {stats[ab]}" for ab in var.ABILITIES)
-        embed = discord.Embed(
-            title=f"🎲 {name} enters the world!",
+        choose_embed = discord.Embed(
+            title=f"✨ Creating **{name}**",
             description=(
-                f"Rolled abilities (4d6 drop lowest):\n`{rolled}`\n\n"
-                "Now pick your `/race` and `/class` to finish your character."
+                "How do you want to assign your ability scores?\n\n"
+                "**🎲 Roll Stats** — 4d6 drop lowest for each ability. "
+                "Random: you might roll higher *or* lower than average.\n\n"
+                "**📋 Standard Array** — [15, 14, 13, 12, 10, 8] randomly "
+                "distributed across your six abilities. Predictable and balanced."
             ),
             color=var.COLOR_DND,
         )
-        embed.set_footer(text=var.SERVER_NAME)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            embed=choose_embed,
+            view=StatMethodView(self, uid, gid, name, interaction.user.display_name),
+            ephemeral=True,
+        )
 
     # ── /race ───────────────────────────────────────────────────────────────────
 
@@ -505,6 +599,33 @@ class CharacterCog(commands.Cog):
         )
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /sheet_delete ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="sheet_delete", description="Permanently delete your character so you can start fresh.")
+    async def sheet_delete(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        char = self._fetch_char(uid, gid)
+        if not char:
+            await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
+            return
+
+        name = char["name"] or interaction.user.display_name
+        embed = discord.Embed(
+            title="⚠️ Delete Character?",
+            description=(
+                f"This will permanently delete **{name}** and all their inventory.\n"
+                "**This cannot be undone.**\n\nAre you sure?"
+            ),
+            color=var.COLOR_ERROR,
+        )
+        await interaction.response.send_message(
+            embed=embed,
+            view=DeleteConfirmView(self, uid, gid, name),
+            ephemeral=True,
+        )
 
     # ── /race_upgrade ─────────────────────────────────────────────────────────────
 

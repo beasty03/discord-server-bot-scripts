@@ -343,6 +343,44 @@ class PartiesCog(commands.Cog):
                 color=var.COLOR_INFO),
             ephemeral=True)
 
+    # ── /party status ─────────────────────────────────────────────────────────
+
+    @party.command(name="status", description="Check your current party details.")
+    async def party_status(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        party = self._member_party(gid, uid)
+        if party is None:
+            await interaction.response.send_message(
+                embed=self._err("You're not in a party. Create one with `/party create` or join with `/party join`."),
+                ephemeral=True)
+            return
+
+        vis_badge  = "🔒 Private" if party["visibility"] == "private" else "🔓 Public"
+        run_status = f"⚔️ On campaign: `{party['active_run']}`" if party["active_run"] else "💤 Idle"
+
+        member_lines = []
+        for m_uid in party["members"]:
+            crown  = " 👑" if m_uid == party["creator_uid"] else ""
+            member = interaction.guild.get_member(int(m_uid)) if interaction.guild else None
+            name   = member.display_name if member else m_uid
+            member_lines.append(f"• {name}{crown}")
+
+        embed = discord.Embed(
+            title=f"🛡️ {party['creator_name']}'s Party",
+            color=var.COLOR_PARTY,
+        )
+        embed.add_field(
+            name=f"Members ({len(party['members'])}/{party['max_size']})",
+            value="\n".join(member_lines),
+            inline=False,
+        )
+        embed.add_field(name="Visibility", value=vis_badge, inline=True)
+        embed.add_field(name="Status",     value=run_status, inline=True)
+        embed.set_footer(text=var.SERVER_NAME)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(PartiesCog(bot))
