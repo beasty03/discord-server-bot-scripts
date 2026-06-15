@@ -5,6 +5,28 @@ config      = load_config()
 GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
+# ── Shop DLC ──────────────────────────────────────────────────────────────────
+
+SHOP_ITEM = {
+    "id":          "boar_tusk_charm",
+    "name":        "Boar Tusk Charm",
+    "emoji":       "🐗",
+    "description": "A trophy from the Prowling Beast. Worn by survivors as a badge of honour.",
+    "price":       75,
+    "max_qty":     1,
+    "tier":        "uncommon",
+}
+
+SHOP_BUNDLE = {
+    "id":          "beast_hunters_kit",
+    "name":        "Beast Hunter's Kit",
+    "emoji":       "🏹",
+    "description": "Everything you need to track and take down the Prowling Beast.",
+    "items":       [("health_potion", 2), ("boar_tusk_charm", 1)],
+    "price":       100,
+    "tier":        "uncommon",
+}
+
 CAMPAIGN = {
     "id":              "beast_hunt",
     "name":            "The Prowling Beast",

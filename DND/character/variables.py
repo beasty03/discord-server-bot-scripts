@@ -91,8 +91,10 @@ ITEMS = [
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
     # Consumables — usable in combat via the 🧪 Item button.
     {"id": "health_potion",  "name": "Health Potion",          "slot": "consumable", "heal_expr": "2d4+2"},
-    # Shop items (effect handled in /name cooldown check — shop not yet built).
-    {"id": "reroll_token",   "name": "Character Reroll Token", "slot": "misc"},
+    # Shop items
+    {"id": "reroll_token",      "name": "Character Reroll Token", "slot": "misc"},
+    # DLC items — registered by DND_DLC cogs; listed here so the inventory has a name for them.
+    {"id": "boar_tusk_charm",   "name": "Boar Tusk Charm",        "slot": "misc"},
 ]
 
 # ============================================================================

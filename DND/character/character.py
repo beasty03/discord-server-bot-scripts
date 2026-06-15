@@ -171,6 +171,64 @@ class StatMethodView(discord.ui.View):
             item.disabled = True
 
 
+class RerollTokenView(discord.ui.View):
+    """Shown when a player is on cooldown but owns a Reroll Token."""
+
+    def __init__(self, cog: "CharacterCog", uid: str, gid: str,
+                 char_name: str, display_name: str):
+        super().__init__(timeout=30)
+        self._cog          = cog
+        self._uid          = uid
+        self._gid          = gid
+        self._char_name    = char_name
+        self._display_name = display_name
+
+    @discord.ui.button(label="🔄 Use Reroll Token", style=discord.ButtonStyle.primary)
+    async def use_token(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid, gid = self._uid, self._gid
+        rows = self._cog.db.execute(
+            "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id='reroll_token'",
+            (uid, gid))
+        if not rows or rows[0][0] <= 0:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    description="You no longer have a Reroll Token.", color=var.COLOR_ERROR),
+                view=None)
+            return
+        self._cog.db.execute(
+            "UPDATE dnd_inventory SET qty=qty-1 WHERE user_id=? AND guild_id=? AND item_id='reroll_token'",
+            (uid, gid))
+        self._cog.db.execute(
+            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id='reroll_token' AND qty<=0",
+            (uid, gid))
+        self._cog.db.execute(
+            "DELETE FROM dnd_character_cooldowns WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        choose_embed = discord.Embed(
+            title=f"✨ Creating **{self._char_name}**",
+            description=(
+                "🔄 Reroll Token used — cooldown cleared!\n\n"
+                "**🎲 Roll Stats** — 4d6 drop lowest for each ability.\n\n"
+                "**📋 Standard Array** — [15, 14, 13, 12, 10, 8] randomly distributed."
+            ),
+            color=var.COLOR_DND,
+        )
+        await interaction.response.edit_message(
+            embed=choose_embed,
+            view=StatMethodView(self._cog, uid, gid, self._char_name, self._display_name),
+        )
+        self.stop()
+
+    @discord.ui.button(label="Wait it out", style=discord.ButtonStyle.secondary)
+    async def wait_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description="No worries — your token is safe. Come back when the cooldown expires!",
+                color=var.COLOR_INFO),
+            view=None)
+        self.stop()
+
+
 class DeleteConfirmView(discord.ui.View):
     """Confirmation gate for /sheet_delete."""
 
@@ -327,25 +385,34 @@ class CharacterCog(commands.Cog):
             )
             return
 
-        # Weekly cooldown — bypassed by a Reroll Token (shop item, coming later)
+        # Weekly cooldown — bypassed by spending a Reroll Token from the shop
         cd_rows = self.db.execute(
             "SELECT deleted_at FROM dnd_character_cooldowns WHERE user_id=? AND guild_id=?",
             (uid, gid))
         if cd_rows:
-            deleted_at  = datetime.fromisoformat(cd_rows[0][0])
+            deleted_at   = datetime.fromisoformat(cd_rows[0][0])
             cooldown_end = deleted_at + timedelta(days=7)
-            remaining   = cooldown_end - datetime.utcnow()
+            remaining    = cooldown_end - datetime.utcnow()
             if remaining.total_seconds() > 0:
-                days  = remaining.days
-                hours = remaining.seconds // 3600
+                days     = remaining.days
+                hours    = remaining.seconds // 3600
                 time_txt = f"{days}d {hours}h" if days > 0 else f"{hours}h"
-                await interaction.response.send_message(
-                    embed=self._err(
-                        f"You can only create a new character once per week.\n"
-                        f"Try again in **{time_txt}**.\n\n"
-                        f"*Character Reroll Tokens will bypass this — coming to the shop!*"
-                    ),
-                    ephemeral=True)
+
+                token_rows = self.db.execute(
+                    "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id='reroll_token'",
+                    (uid, gid))
+                has_token = bool(token_rows and token_rows[0][0] > 0)
+
+                cd_embed = self._err(
+                    f"You can only create a new character once per week.\n"
+                    f"Try again in **{time_txt}**."
+                    + ("\n\nYou have a **🔄 Character Reroll Token** — use it to skip the wait!"
+                       if has_token else
+                       "\n\n*Buy a **Character Reroll Token** from `/shop` to skip the wait.*")
+                )
+                view = (RerollTokenView(self, uid, gid, name, interaction.user.display_name)
+                        if has_token else None)
+                await interaction.response.send_message(embed=cd_embed, view=view, ephemeral=True)
                 return
 
         choose_embed = discord.Embed(

@@ -21,7 +21,14 @@ async def setup(bot: commands.Bot):
     if dm:
         dm.register_campaign(var.CAMPAIGN)
     else:
-        log.warning("BeastHunt DLC: DungeonMasterCog not loaded — campaign not registered. "
-                    "Make sure DND/DungeonMaster loads before DND_DLC cogs.")
+        log.warning("BeastHunt DLC: DungeonMasterCog not loaded — campaign not registered.")
+
+    shop = bot.get_cog("ShopCog")
+    if shop:
+        shop.register_item(var.SHOP_ITEM)
+        shop.register_bundle(var.SHOP_BUNDLE)
+    else:
+        log.warning("BeastHunt DLC: ShopCog not loaded — shop items not registered.")
+
     await bot.add_cog(BeastHuntDLC(bot))
     log.info("✅ DND_DLC/BeastHunt loaded")
