@@ -1703,8 +1703,8 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.command(
         name="companion",
         description="View your Beast Master companion's stats, or give them a name.")
-    @app_commands.describe(name="Give your companion a custom name (leave empty to just view)")
-    async def companion(self, interaction: discord.Interaction, name: str | None = None):
+    @app_commands.describe(new_name="Give your companion a custom name (leave empty to just view)")
+    async def companion(self, interaction: discord.Interaction, new_name: str | None = None):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
@@ -1744,12 +1744,12 @@ class DungeonMasterCog(commands.Cog):
             comp_item = self._find_item("wolf_companion")  # free fallback
 
         # Save name if provided
-        if name:
-            name = name.strip()[:32]
+        if new_name:
+            new_name = new_name.strip()[:32]
             self.db.execute(
                 "INSERT OR REPLACE INTO dnd_character_choices "
                 "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
-                (uid, gid, "companion_name", name))
+                (uid, gid, "companion_name", new_name))
 
         name_row     = self.db.execute(
             "SELECT choice_val FROM dnd_character_choices "
@@ -1787,12 +1787,12 @@ class DungeonMasterCog(commands.Cog):
         embed.add_field(name="⚔️ Damage",    value=beast_dmg,          inline=True)
         embed.add_field(name="🎯 ATK Bonus", value=f"{atk_bonus:+d}",  inline=True)
         embed.add_field(name="🧑 Owner",     value=interaction.user.display_name, inline=True)
-        if name:
+        if new_name:
             embed.set_footer(text=f"✅ Name set to '{display_name}'!")
         elif not custom_name:
-            embed.set_footer(text=f"Tip: /companion name:Rex to give {beast_name} a personal name.")
+            embed.set_footer(text=f"Tip: /companion new_name:Rex to give {beast_name} a personal name.")
         else:
-            embed.set_footer(text=f"Use /companion name:… to rename {display_name}.")
+            embed.set_footer(text=f"Use /companion new_name:… to rename {display_name}.")
         await interaction.response.send_message(embed=embed)
 
     # ── /roll ─────────────────────────────────────────────────────────────────
