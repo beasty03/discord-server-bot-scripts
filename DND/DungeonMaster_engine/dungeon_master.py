@@ -101,6 +101,20 @@ def _get_favored_enemy(db, uid: str, gid: str) -> str | None:
     return rows[0][0] if rows else None
 
 
+def _grant_wolf_if_needed(db, uid: str, gid: str) -> None:
+    """Give a wolf_companion to a new Beast Master if they own no companion at all."""
+    companion_ids = ["baby_dragon_companion", "bear_companion", "eagle_companion", "wolf_companion"]
+    for cid in companion_ids:
+        rows = db.execute(
+            "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty>0",
+            (uid, gid, cid))
+        if rows:
+            return  # already has a companion
+    db.execute(
+        "INSERT OR IGNORE INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped) VALUES (?,?,?,1,0)",
+        (uid, gid, "wolf_companion"))
+
+
 def _get_elf_subrace(db, uid: str, gid: str) -> str | None:
     rows = db.execute(
         "SELECT choice_val FROM dnd_character_choices "
@@ -1441,6 +1455,8 @@ class DungeonMasterCog(commands.Cog):
                         "INSERT OR REPLACE INTO dnd_character_choices "
                         "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
                         (uid, gid, choice_key, chosen))
+                    if char_class == "ranger" and choice_key == "ranger_subclass" and chosen == "beast_master":
+                        _grant_wolf_if_needed(self.db, uid, gid)
                 else:
                     # Timed out — edit message to show warning
                     for item in view.children:
@@ -1555,6 +1571,8 @@ class DungeonMasterCog(commands.Cog):
                 "INSERT OR REPLACE INTO dnd_character_choices "
                 "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
                 (uid, gid, choice_key, chosen))
+            if char_class == "ranger" and choice_key == "ranger_subclass" and chosen == "beast_master":
+                _grant_wolf_if_needed(self.db, uid, gid)
 
     # ── /prepare_spells ───────────────────────────────────────────────────────
 

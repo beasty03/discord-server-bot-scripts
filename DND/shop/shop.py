@@ -405,6 +405,13 @@ class ShopCog(commands.Cog):
                 embed=discord.Embed(description="That item can't be sold.", color=var.COLOR_ERROR),
                 ephemeral=True)
             return
+        if item_data.get("slot") == "companion":
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="You can't sell your companion — they're loyal to you, not a commodity!",
+                    color=var.COLOR_ERROR),
+                ephemeral=True)
+            return
 
         total = item_data["sell"] * qty
         self.db.execute(
