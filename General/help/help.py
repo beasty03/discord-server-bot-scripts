@@ -80,12 +80,13 @@ CATEGORIES = [
     {
         "label":       "⚔️ D&D",
         "value":       "dnd",
-        "description": "D&D system — character creation, sheets, parties, campaigns",
+        "description": "D&D system — character, parties, campaigns, dice, stories",
         "color":       0x8E44AD,
         "sections": [
-            ("📜 Character", "CharacterCog"),
-            ("🛡️ Parties",   "PartiesCog"),
-            ("🗺️ Campaign",  "CampaignCog"),
+            ("📜 Character",       "CharacterCog"),
+            ("🛡️ Parties",         "PartiesCog"),
+            ("🗡️ Dungeon Master",  "DungeonMasterCog"),
+            ("📖 Scribe",          "ScribeCog"),
         ],
     },
     {
