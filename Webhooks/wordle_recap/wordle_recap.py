@@ -25,8 +25,8 @@ class WordleRecap(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot         = bot
         self._cfg        = self._load_cfg()
-        self.post_hour   = self._cfg.get("post_hour",   var.WORDLE_POST_HOUR)
-        self.post_minute = self._cfg.get("post_minute", var.WORDLE_POST_MINUTE)
+        self.post_hour   = int(self._cfg.get("post_hour",   var.WORDLE_POST_HOUR))
+        self.post_minute = int(self._cfg.get("post_minute", var.WORDLE_POST_MINUTE))
         self._last_posted: date | None = None
 
     # ── JSON config ───────────────────────────────────────────────────────────
@@ -158,8 +158,8 @@ class WordleRecap(commands.Cog):
             return
         self.post_hour   = hour
         self.post_minute = minute
-        self._set_cfg("post_hour",   str(hour))
-        self._set_cfg("post_minute", str(minute))
+        self._set_cfg("post_hour",   hour)
+        self._set_cfg("post_minute", minute)
         tz = self._get_tz()
         await interaction.response.send_message(
             embed=discord.Embed(
@@ -195,6 +195,25 @@ class WordleRecap(commands.Cog):
         lower   = current.lower()
         matches = [tz for tz in _SORTED_TIMEZONES if lower in tz.lower()]
         return [app_commands.Choice(name=tz, value=tz) for tz in matches[:25]]
+
+    @app_commands.command(name="wordle_recap_check", description="See when the next Wordle recap is scheduled to post.")
+    async def wordle_recap_check(self, interaction: discord.Interaction):
+        tz       = self._get_tz()
+        now      = datetime.now(tz)
+        channel  = self._resolve_channel()
+        ch_mention = channel.mention if channel else "*(no channel set)*"
+
+        # Build next fire time: today at post_hour:post_minute, or tomorrow if already past
+        next_post = now.replace(hour=self.post_hour, minute=self.post_minute, second=0, microsecond=0)
+        if next_post <= now:
+            next_post = next_post + timedelta(days=1)
+
+        next_ts = int(next_post.timestamp())
+        embed = discord.Embed(title="📅 Wordle Recap Schedule", color=var.COLOR_INFO)
+        embed.add_field(name="Next post",  value=f"<t:{next_ts}:F> (<t:{next_ts}:R>)", inline=False)
+        embed.add_field(name="Time",       value=f"`{self.post_hour:02d}:{self.post_minute:02d}` ({tz.key})",  inline=True)
+        embed.add_field(name="Channel",    value=ch_mention, inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="wordle_recap", description="Manually post yesterday's Wordle answer right now.")
     @app_commands.checks.has_permissions(manage_guild=True)

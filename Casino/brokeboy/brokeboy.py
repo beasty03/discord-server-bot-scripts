@@ -473,6 +473,51 @@ class BrokeBoy(commands.Cog):
                 color=var.COLOR_INFO,
             ))
 
+    # ── /loan_check ──────────────────────────────────────────────────────────
+
+    @app_commands.command(name="loan_check", description="Quick look at your remaining loan and current balance.")
+    async def loan_check(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+        self.db.ensure_user(uid, gid, interaction.user.display_name)
+
+        rows = self.db.execute(
+            "SELECT amount, remaining, due_timestamp FROM brokeboy_loans WHERE user_id=? AND guild_id=?",
+            (uid, gid),
+        )
+
+        if not rows:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="✅ No Active Loan",
+                    description="You have no outstanding loan.",
+                    color=var.COLOR_WIN,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        original, remaining, due_ts = rows[0]
+        paid    = original - remaining
+        pct     = (paid / original * 100) if original > 0 else 0
+        balance = self.db.get_balance(uid, gid)
+        now     = int(time.time())
+        danger  = (due_ts - now) < 86_400
+        color   = var.COLOR_WIN if pct >= 50 else (var.COLOR_INFO if pct >= 25 else var.COLOR_LOSE)
+
+        embed = discord.Embed(
+            title="💳 Loan Status",
+            color=color,
+        )
+        embed.add_field(name="Remaining",       value=f"{var.CURRENCY_SYMBOL} {remaining:,}",          inline=True)
+        embed.add_field(name="Paid",            value=f"{var.CURRENCY_SYMBOL} {paid:,} ({pct:.0f}%)",  inline=True)
+        embed.add_field(name="Current Balance", value=f"{var.CURRENCY_SYMBOL} {balance:,}",            inline=True)
+        embed.add_field(name="Due",             value=f"<t:{due_ts}:F> (<t:{due_ts}:R>)",              inline=False)
+        if danger:
+            embed.add_field(name="⚠️ Warning", value="Under 24 hours left — repay now or get kicked!", inline=False)
+        embed.set_footer(text=f"{interaction.user.display_name} · {var.SERVER_NAME}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     # ── /loan_payback ────────────────────────────────────────────────────────
 
     @app_commands.command(name="loan_payback", description="Check your active loan status and net profit/loss.")

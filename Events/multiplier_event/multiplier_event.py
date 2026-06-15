@@ -27,6 +27,7 @@ class MultiplierEventCog(commands.Cog):
         self._settings: dict = self._load_settings()
         self._event_task: asyncio.Task | None = None
         self._loop_task:  asyncio.Task | None = None
+        self._next_event_ts: int | None = None
         if not hasattr(self.bot, 'multiplier_event_mult'):
             self.bot.multiplier_event_mult = None
 
@@ -70,8 +71,10 @@ class MultiplierEventCog(commands.Cog):
             min_m = self._settings.get("interval_min", var.EVENT_INTERVAL_MIN)
             max_m = self._settings.get("interval_max", var.EVENT_INTERVAL_MAX)
             wait  = random.randint(min_m, max_m)
+            self._next_event_ts = int(time.time()) + wait * 60
             log.info("MultiplierEvent: next event in %d minutes", wait)
             await asyncio.sleep(wait * 60)
+            self._next_event_ts = None
             if self.bot.multiplier_event_mult is None:
                 multiplier = self._pick_multiplier()
                 self.bot.multiplier_event_mult = multiplier

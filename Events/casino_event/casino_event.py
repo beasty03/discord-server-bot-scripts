@@ -445,6 +445,7 @@ class CasinoEventCog(commands.Cog):
         self._event_msg: discord.Message | None = None
         self._event_end_ts: int = 0
         self._event_min_bet: int = 0
+        self._next_event_ts: int | None = None
 
     async def cog_load(self):
         self.db.execute("""
@@ -488,8 +489,10 @@ class CasinoEventCog(commands.Cog):
             min_m = cfg.get("interval_min", var.EVENT_INTERVAL_MIN)
             max_m = cfg.get("interval_max", var.EVENT_INTERVAL_MAX)
             wait  = random.randint(min_m, max_m)
+            self._next_event_ts = int(time.time()) + wait * 60
             log.info("CasinoEvent: next event in %d minutes", wait)
             await asyncio.sleep(wait * 60)
+            self._next_event_ts = None
             await self._run_event()
 
     # ── Core event runner ─────────────────────────────────────────────────────
@@ -783,6 +786,38 @@ class CasinoEventCog(commands.Cog):
         )
         showdown.timestamp = datetime.utcnow()
         await channel.send(embed=showdown)
+
+    # ── /event_check ─────────────────────────────────────────────────────────
+
+    @app_commands.command(name="event_check", description="See the status of casino and multiplier events.")
+    async def event_check(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="📅 Event Status", color=var.COLOR_INFO)
+
+        # Casino event
+        if self.event_active and self._current_game:
+            casino_value = (
+                f"🎰 **{self._current_game['label']}** is live now!\n"
+                f"Join window closes <t:{self._event_end_ts}:R>"
+            )
+        elif self._next_event_ts:
+            casino_value = f"Next event <t:{self._next_event_ts}:R> (<t:{self._next_event_ts}:F>)"
+        else:
+            casino_value = "Scheduled — exact time unknown until the current wait resolves."
+        embed.add_field(name="🎲 Casino Event", value=casino_value, inline=False)
+
+        # Multiplier event
+        mult_cog = self.bot.get_cog("MultiplierEventCog")
+        if self.bot.multiplier_event_mult is not None:
+            mult_value = f"✨ Active now! Multiplier: **{self.bot.multiplier_event_mult}x**"
+        elif mult_cog and getattr(mult_cog, "_next_event_ts", None):
+            ts = mult_cog._next_event_ts
+            mult_value = f"Next event <t:{ts}:R> (<t:{ts}:F>)"
+        else:
+            mult_value = "Scheduled — exact time unknown until the current wait resolves."
+        embed.add_field(name="✨ Multiplier Event", value=mult_value, inline=False)
+
+        embed.set_footer(text=var.SERVER_NAME)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /join ─────────────────────────────────────────────────────────────────
 
