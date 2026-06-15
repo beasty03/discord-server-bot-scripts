@@ -433,7 +433,7 @@ class CharacterCog(commands.Cog):
             (uid, gid))
         if cd_rows:
             deleted_at   = datetime.fromisoformat(cd_rows[0][0])
-            cooldown_end = deleted_at + timedelta(days=7)
+            cooldown_end = deleted_at + timedelta(days=var.DELETION_COOLDOWN_DAYS)
             remaining    = cooldown_end - datetime.utcnow()
             if remaining.total_seconds() > 0:
                 days     = remaining.days

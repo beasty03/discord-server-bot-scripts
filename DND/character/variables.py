@@ -43,31 +43,31 @@ STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]
 # they get their own data files.
 # ============================================================================
 
-_OTHER_RACES = [
-    {"id": "halfling", "name": "Halfling", "emoji": "🧒",
-     "mods": {"dexterity": 2, "charisma": 1}},
-    {"id": "half_orc", "name": "Half-Orc", "emoji": "👹",
-     "mods": {"strength": 2, "constitution": 1}},
-    {"id": "tiefling", "name": "Tiefling", "emoji": "😈",
-     "mods": {"charisma": 2, "intelligence": 1}},
-]
+# _OTHER_RACES = [
+#     {"id": "halfling", "name": "Halfling", "emoji": "🧒",
+#      "mods": {"dexterity": 2, "charisma": 1}},
+#     {"id": "half_orc", "name": "Half-Orc", "emoji": "👹",
+#      "mods": {"strength": 2, "constitution": 1}},
+#     {"id": "tiefling", "name": "Tiefling", "emoji": "😈",
+#      "mods": {"charisma": 2, "intelligence": 1}},
+# ]
 
-RACES = _dm_data.RACES + _OTHER_RACES
+RACES = _dm_data.RACES
 
 # ============================================================================
-# CLASSES — Fighter comes from DungeonMaster_data; others stay inline.
+# CLASSES — Fighter, Ranger, Wizard come from DungeonMaster_data.
 # ============================================================================
 
-_OTHER_CLASSES = [
-    {"id": "barbarian", "name": "Barbarian", "emoji": "🪓", "hit_die": 12, "armor": 2,
-     "primary": "strength",  "start_items": ["greataxe"],               "weapon_profs": ["simple", "martial"]},
-    {"id": "rogue",     "name": "Rogue",     "emoji": "🗡️", "hit_die": 8,  "armor": 1,
-     "primary": "dexterity", "start_items": ["dagger", "leather_armor"],"weapon_profs": ["simple", "longsword", "shortsword", "rapier"]},
-    {"id": "cleric",    "name": "Cleric",    "emoji": "✨", "hit_die": 8,  "armor": 4,
-     "primary": "wisdom",    "start_items": ["mace", "shield"],          "weapon_profs": ["simple"]},
-]
+# _OTHER_CLASSES = [
+#     {"id": "barbarian", "name": "Barbarian", "emoji": "🪓", "hit_die": 12, "armor": 2,
+#      "primary": "strength",  "start_items": ["greataxe"],               "weapon_profs": ["simple", "martial"]},
+#     {"id": "rogue",     "name": "Rogue",     "emoji": "🗡️", "hit_die": 8,  "armor": 1,
+#      "primary": "dexterity", "start_items": ["dagger", "leather_armor"],"weapon_profs": ["simple", "longsword", "shortsword", "rapier"]},
+#     {"id": "cleric",    "name": "Cleric",    "emoji": "✨", "hit_die": 8,  "armor": 4,
+#      "primary": "wisdom",    "start_items": ["mace", "shield"],          "weapon_profs": ["simple"]},
+# ]
 
-CLASSES = _dm_data.CLASSES + _OTHER_CLASSES
+CLASSES = _dm_data.CLASSES
 
 # ============================================================================
 # ITEMS — unchanged; shop, recipes, and scribe depend on this list.
@@ -368,6 +368,12 @@ LEVEL_UP_CHOICES = {
         ],
     },
 }
+
+# ============================================================================
+# SHEET DELETION 
+# ============================================================================
+
+DELETION_COOLDOWN_DAYS = 0
 
 # ============================================================================
 # EMBED COLORS
