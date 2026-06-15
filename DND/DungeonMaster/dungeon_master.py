@@ -49,6 +49,17 @@ def roll_expr(expr: str) -> tuple[int, str]:
 def _roll(expr: str) -> int:
     return roll_expr(expr)[0]
 
+
+def _n_attacks(char_class: str, level: int) -> int:
+    """Extra Attack: Fighter Lv5=2/11=3/20=4; Barbarian/Ranger/Paladin Lv5=2."""
+    if char_class == "fighter":
+        if level >= 20: return 4
+        if level >= 11: return 3
+        if level >= 5:  return 2
+    elif char_class in ("barbarian", "ranger", "paladin"):
+        if level >= 5: return 2
+    return 1
+
 # ============================================================================
 # MODALS
 # ============================================================================
@@ -181,43 +192,133 @@ class TargetSelectView(discord.ui.View):
 
 
 class CombatView(discord.ui.View):
-    """One round of combat — each active participant picks an action."""
+    """One round of combat — main action required; bonus action optional."""
 
     def __init__(self, active_uids: list[str], cog: "DungeonMasterCog",
-                 gid: str, participants: list[tuple[str, str]]):
+                 gid: str, participants: list[tuple[str, str]], run: dict):
         super().__init__(timeout=None)
-        self.actions:      dict[str, str | dict | None] = {uid: None for uid in active_uids}
+        self.actions:       dict[str, str | dict | None] = {uid: None for uid in active_uids}
+        self.bonus_actions: dict[str, dict | None]       = {uid: None for uid in active_uids}
         self._done         = asyncio.Event()
         self._active_set   = set(active_uids)
         self._cog          = cog
         self._gid          = gid
         self._participants = participants
+        self._run          = run
 
-    async def _record(self, interaction: discord.Interaction, action: str):
+    def _check_done(self):
+        if all(v is not None for v in self.actions.values()):
+            self._done.set()
+
+    async def _record(self, interaction: discord.Interaction, action):
         uid = str(interaction.user.id)
         if uid not in self.actions:
             await interaction.response.send_message("You're not in this combat.", ephemeral=True)
             return
         if self.actions[uid] is not None:
-            await interaction.response.send_message(
-                f"Already locked in: **{self.actions[uid] if isinstance(self.actions[uid], str) else 'item use'}**.",
-                ephemeral=True)
+            label = self.actions[uid] if isinstance(self.actions[uid], str) else "chosen"
+            await interaction.response.send_message(f"Main action already locked in: **{label}**.", ephemeral=True)
             return
         self.actions[uid] = action
-        await interaction.response.send_message(f"✅ **{action.title()}** locked in!", ephemeral=True)
-        if all(v is not None for v in self.actions.values()):
-            self._done.set()
+        label = action if isinstance(action, str) else action.get("action", "action")
+        await interaction.response.send_message(f"✅ **{label.replace('_', ' ').title()}** locked in!", ephemeral=True)
+        self._check_done()
 
-    @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger,     row=0)
+    @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger,    row=0)
     async def attack(self, i: discord.Interaction, _): await self._record(i, "attack")
 
-    @discord.ui.button(label="🛡️ Dodge",  style=discord.ButtonStyle.secondary,  row=0)
+    @discord.ui.button(label="🛡️ Dodge",  style=discord.ButtonStyle.secondary, row=0)
     async def dodge(self, i: discord.Interaction, _): await self._record(i, "dodge")
 
-    @discord.ui.button(label="🏃 Flee",   style=discord.ButtonStyle.primary,    row=0)
+    @discord.ui.button(label="🏃 Flee",   style=discord.ButtonStyle.primary,   row=0)
     async def flee(self, i: discord.Interaction, _): await self._record(i, "flee")
 
-    @discord.ui.button(label="🧪 Item",   style=discord.ButtonStyle.secondary,  row=1)
+    @discord.ui.button(label="🤝 Help",   style=discord.ButtonStyle.secondary, row=0)
+    async def help_action(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.actions:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if self.actions[uid] is not None:
+            await interaction.response.send_message("Main action already chosen.", ephemeral=True)
+            return
+        targets = [(u, n) for u, n in self._participants
+                   if u != uid and u not in self._run.get("dead", set())]
+        if not targets:
+            await interaction.response.send_message("No allies to help.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=discord.Embed(description="🤝 Who do you help?", color=var.COLOR_INFO),
+            view=_HelpTargetView(self, uid, targets, self._run),
+            ephemeral=True)
+
+    @discord.ui.button(label="⚡ Class Action", style=discord.ButtonStyle.success,   row=1)
+    async def use_class_action(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.actions:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if self.actions[uid] is not None:
+            await interaction.response.send_message("Main action already chosen.", ephemeral=True)
+            return
+        rows = self._cog.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, self._gid))
+        if not rows or not rows[0][0]:
+            await interaction.response.send_message("You don't have a class set.", ephemeral=True)
+            return
+        char_class, level = rows[0]
+        used = self._run.get("features_used", {}).get(uid, set())
+        available = [
+            f for f in char_var.COMBAT_FEATURES.get(char_class, [])
+            if f.get("action_type") == "action"
+            and f["level_req"] <= (level or 1)
+            and (f["once_per"] != "combat" or f["id"] not in used)
+        ]
+        if not available:
+            await interaction.response.send_message(
+                "No class actions available at your level / all used.", ephemeral=True)
+            return
+        active_members = [(u, n) for u, n in self._participants if u in self._active_set]
+        await interaction.response.send_message(
+            embed=discord.Embed(description="⚡ Choose a class action:", color=var.COLOR_INFO),
+            view=_FeaturePickView(self, uid, available, active_members),
+            ephemeral=True)
+
+    @discord.ui.button(label="✨ Bonus Action", style=discord.ButtonStyle.secondary, row=1)
+    async def use_bonus_action(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.bonus_actions:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if self.bonus_actions[uid] is not None:
+            await interaction.response.send_message("Bonus action already chosen.", ephemeral=True)
+            return
+        rows = self._cog.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, self._gid))
+        if not rows or not rows[0][0]:
+            await interaction.response.send_message("You don't have a class set.", ephemeral=True)
+            return
+        char_class, level = rows[0]
+        used = self._run.get("features_used", {}).get(uid, set())
+        available = [
+            f for f in char_var.COMBAT_FEATURES.get(char_class, [])
+            if f.get("action_type") == "bonus"
+            and f["level_req"] <= (level or 1)
+            and (f["once_per"] != "combat" or f["id"] not in used)
+        ]
+        if not available:
+            await interaction.response.send_message("No bonus actions available.", ephemeral=True)
+            return
+        all_members = [(u, n) for u, n in self._participants
+                       if u not in self._run.get("dead", set())]
+        await interaction.response.send_message(
+            embed=discord.Embed(description="✨ Choose a bonus action:", color=var.COLOR_INFO),
+            view=_BonusPickView(self, uid, available, all_members),
+            ephemeral=True)
+
+    @discord.ui.button(label="🧪 Item", style=discord.ButtonStyle.secondary, row=1)
     async def use_item(self, interaction: discord.Interaction, _: discord.ui.Button):
         uid = str(interaction.user.id)
         if uid not in self.actions:
@@ -247,8 +348,9 @@ class CombatView(discord.ui.View):
                     description=f"Heals {item.get('heal_expr', '?')} HP",
                     value=iid,
                 ))
-        active_members = [(uid2, name) for uid2, name in self._participants if uid2 in self._active_set]
-        view = _ItemPickView(self, uid, active_members, options)
+        all_members = [(uid2, name) for uid2, name in self._participants
+                       if uid2 not in self._run.get("dead", set())]
+        view = _ItemPickView(self, uid, all_members, options)
         await interaction.response.send_message(
             embed=discord.Embed(description="🧪 Pick an item to use:", color=var.COLOR_INFO),
             view=view,
@@ -260,11 +362,11 @@ class _ItemPickView(discord.ui.View):
     """Ephemeral first step: which consumable?"""
 
     def __init__(self, combat_view: CombatView, uid: str,
-                 active_members: list[tuple[str, str]], options: list):
+                 all_members: list[tuple[str, str]], options: list):
         super().__init__(timeout=30)
-        self._cv             = combat_view
-        self._uid            = uid
-        self._active_members = active_members
+        self._cv          = combat_view
+        self._uid         = uid
+        self._all_members = all_members
         sel = discord.ui.Select(placeholder="Choose an item…", options=options)
         sel.callback = self._on_item
         self.add_item(sel)
@@ -273,9 +375,151 @@ class _ItemPickView(discord.ui.View):
         item_id = interaction.data["values"][0]
         await interaction.response.edit_message(
             embed=discord.Embed(description="🧪 Who should receive it?", color=var.COLOR_INFO),
-            view=TargetSelectView(self._cv, self._uid, item_id, self._active_members),
+            view=TargetSelectView(self._cv, self._uid, item_id, self._all_members),
         )
         self.stop()
+
+
+class _FeaturePickView(discord.ui.View):
+    """Ephemeral: pick which class action feature to use (main action slot)."""
+
+    def __init__(self, combat_view: "CombatView", uid: str,
+                 features: list[dict], active_members: list[tuple[str, str]]):
+        super().__init__(timeout=30)
+        self._cv             = combat_view
+        self._uid            = uid
+        self._active_members = active_members
+        options = [
+            discord.SelectOption(label=f["label"], value=f["id"], description=f["desc"][:100])
+            for f in features
+        ]
+        sel = discord.ui.Select(placeholder="Choose a class action…", options=options)
+        sel.callback = self._on_pick
+        self.add_item(sel)
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        fid = interaction.data["values"][0]
+        self._cv.actions[self._uid] = {"action": "feature", "feature_id": fid}
+        self._cv._check_done()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="⚡ Class action locked in!", color=var.COLOR_WIN), view=None)
+        self.stop()
+
+
+class _BonusPickView(discord.ui.View):
+    """Ephemeral: pick which bonus-action class feature to use."""
+
+    def __init__(self, combat_view: "CombatView", uid: str,
+                 features: list[dict], all_members: list[tuple[str, str]]):
+        super().__init__(timeout=30)
+        self._cv          = combat_view
+        self._uid         = uid
+        self._all_members = all_members
+        options = [
+            discord.SelectOption(label=f["label"], value=f["id"], description=f["desc"][:100])
+            for f in features
+        ]
+        sel = discord.ui.Select(placeholder="Choose a bonus action…", options=options)
+        sel.callback = self._on_pick
+        self.add_item(sel)
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        fid = interaction.data["values"][0]
+        if fid in ("lay_on_hands", "healing_word"):
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="✨ Who receives it?", color=var.COLOR_INFO),
+                view=_BonusTargetView(self._cv, self._uid, fid, self._all_members))
+        else:
+            self._cv.bonus_actions[self._uid] = {"action": "bonus_feature", "feature_id": fid}
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="✨ Bonus action locked in!", color=var.COLOR_WIN), view=None)
+        self.stop()
+
+
+class _BonusTargetView(discord.ui.View):
+    """Ephemeral: pick which ally receives a targeted bonus feature (heal)."""
+
+    def __init__(self, combat_view: "CombatView", uid: str,
+                 feature_id: str, all_members: list[tuple[str, str]]):
+        super().__init__(timeout=30)
+        self._cv         = combat_view
+        self._uid        = uid
+        self._feature_id = feature_id
+        hp = combat_view._run["player_hp"]
+        options = [
+            discord.SelectOption(
+                label=f"{name}{' (you)' if m_uid == uid else ''}{' ⚰️' if hp.get(m_uid, 0) <= 0 else ''}",
+                value=m_uid)
+            for m_uid, name in all_members
+        ]
+        sel = discord.ui.Select(placeholder="Choose a target…", options=options)
+        sel.callback = self._on_target
+        self.add_item(sel)
+
+    async def _on_target(self, interaction: discord.Interaction):
+        target_uid = interaction.data["values"][0]
+        self._cv.bonus_actions[self._uid] = {
+            "action": "bonus_feature", "feature_id": self._feature_id, "target_uid": target_uid}
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="✨ Bonus action locked in!", color=var.COLOR_WIN), view=None)
+        self.stop()
+
+
+class _HelpTargetView(discord.ui.View):
+    """Ephemeral: pick which ally to Help (stabilize if downed, or +4 to hit)."""
+
+    def __init__(self, combat_view: "CombatView", uid: str,
+                 targets: list[tuple[str, str]], run: dict):
+        super().__init__(timeout=30)
+        self._cv  = combat_view
+        self._uid = uid
+        hp = run["player_hp"]
+        options = [
+            discord.SelectOption(
+                label=f"{name}{' ⚰️ downed' if hp.get(t_uid, 0) <= 0 else ''}",
+                value=t_uid)
+            for t_uid, name in targets
+        ]
+        sel = discord.ui.Select(placeholder="Help who?", options=options)
+        sel.callback = self._on_target
+        self.add_item(sel)
+
+    async def _on_target(self, interaction: discord.Interaction):
+        target_uid = interaction.data["values"][0]
+        self._cv.actions[self._uid] = {"action": "help", "target_uid": target_uid}
+        self._cv._check_done()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="🤝 Help action locked in!", color=var.COLOR_WIN), view=None)
+        self.stop()
+
+
+class ChoiceView(discord.ui.View):
+    """Decision node — party picks a path, one player decides for everyone."""
+
+    def __init__(self, active_uids: list[str], encounter: dict):
+        super().__init__(timeout=None)
+        self._active = set(active_uids)
+        self.chosen: dict | None = None
+        self._done = asyncio.Event()
+        for opt in encounter["options"][:4]:
+            btn = discord.ui.Button(label=opt["label"], style=discord.ButtonStyle.primary, row=0)
+            btn.callback = self._make_cb(opt)
+            self.add_item(btn)
+
+    def _make_cb(self, opt: dict):
+        async def cb(interaction: discord.Interaction):
+            if str(interaction.user.id) not in self._active:
+                await interaction.response.send_message("You're not in this run.", ephemeral=True)
+                return
+            if self._done.is_set():
+                await interaction.response.send_message("Already decided.", ephemeral=True)
+                return
+            await interaction.response.send_message(
+                f"✅ You chose: **{opt['label']}**", ephemeral=True)
+            self.chosen = opt
+            self._done.set()
+            self.stop()
+        return cb
 
 
 class InteractionView(discord.ui.View):
@@ -571,6 +815,8 @@ class DungeonMasterCog(commands.Cog):
 
         race  = next((r for r in char_var.RACES  if r["id"] == race_id),    None)
         klass = next((c for c in char_var.CLASSES if c["id"] == char_class), None)
+        if klass is None:
+            klass = next((c for c in self._extra_classes if c["id"] == char_class), None)
 
         # Apply racial modifiers
         rm = race["mods"] if race else {}
@@ -603,14 +849,16 @@ class DungeonMasterCog(commands.Cog):
             atk_bonus   = mods["strength"] + prof
 
         return {
-            "mods":      mods,
-            "prof":      prof,
-            "ac":        ac,
-            "max_hp":    max_hp,
+            "mods":       mods,
+            "prof":       prof,
+            "ac":         ac,
+            "max_hp":     max_hp,
             "current_hp": current_hp or max_hp,
-            "atk_bonus": atk_bonus,
-            "dmg_expr":  f"{dmg_expr}+{mods[atk_ability]}" if mods[atk_ability] >= 0
-                         else f"{dmg_expr}{mods[atk_ability]}",
+            "atk_bonus":  atk_bonus,
+            "dmg_expr":   f"{dmg_expr}+{mods[atk_ability]}" if mods[atk_ability] >= 0
+                          else f"{dmg_expr}{mods[atk_ability]}",
+            "char_class": char_class,
+            "level":      level or 1,
         }
 
     def _get_equipped_weapon(self, uid: str, gid: str) -> dict | None:
@@ -834,14 +1082,21 @@ class DungeonMasterCog(commands.Cog):
 
             # Load combat HP for each participant
             run_state: dict = {
-                "gid":         gid,
-                "participants": participants,
-                "player_hp":    {},
-                "player_max_hp":{},
-                "fled":         set(),
-                "log":          [],
+                "gid":                gid,
+                "participants":       participants,
+                "player_hp":          {},
+                "player_max_hp":      {},
+                "fled":               set(),
+                "log":                [],
+                "features_used":      {},
+                "raging_uids":        set(),
+                "downed":             {},
+                "dead":               set(),
+                "hunters_mark_uids":  set(),
+                "helped_next_attack": {},
             }
             for uid, name in participants:
+                run_state["features_used"][uid] = set()
                 stats = self._get_char_combat_stats(uid, gid)
                 hp = stats["max_hp"] if stats else 10
                 run_state["player_hp"][uid]     = hp
@@ -855,26 +1110,38 @@ class DungeonMasterCog(commands.Cog):
                 description=f"*{campaign['intro']}*\n\n**Adventurers:** {names}",
                 color=var.COLOR_CAMPAIGN,
             )
+            if campaign.get("image"):
+                intro.set_image(url=campaign["image"])
             intro.set_footer(text=var.SERVER_NAME)
             await interaction.channel.send(embed=intro)
             await asyncio.sleep(2)
 
-            # Run encounters
-            success = True
-            for encounter in campaign["encounters"]:
+            # Run encounters (queue supports choice nodes injecting sub-encounters)
+            success        = True
+            enc_queue      = list(campaign["encounters"])
+            enc_idx        = 0
+            while enc_idx < len(enc_queue):
+                encounter = enc_queue[enc_idx]
                 if encounter["type"] == "combat":
                     result = await self._run_combat(interaction.channel, encounter, run_id)
+                elif encounter["type"] == "choice":
+                    result, extra = await self._run_choice(interaction.channel, encounter, run_id)
+                    if extra and result == "victory":
+                        enc_queue[enc_idx + 1:enc_idx + 1] = extra
                 else:
                     result = await self._run_interaction(interaction.channel, encounter, run_id)
 
                 if result in ("defeat", "all_fled"):
                     success = False
                     break
+                enc_idx += 1
 
             # Final rewards
             run   = self._runs[run_id]
             alive = [(uid, name) for uid, name in participants
-                     if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+                     if uid not in run["fled"]
+                     and uid not in run.get("dead", set())
+                     and run["player_hp"].get(uid, 0) > 0]
 
             if success and alive:
                 total_gold = random.randint(campaign["reward_gold_min"], campaign["reward_gold_max"])
@@ -927,104 +1194,184 @@ class DungeonMasterCog(commands.Cog):
         last_hitter = None
         kill_entry: dict = {}
 
+        surprise    = encounter.get("surprise", False)
         scale_note  = f" *(+{e_hp - enemy['hp']} for party)*" if party_size > 1 else ""
+        surp_note   = "  ·  ⚡ **Surprise!**" if surprise else ""
         intro_embed = discord.Embed(
             title=f"⚔️ {encounter['name']}",
             description=(
                 f"*{encounter['intro']}*\n\n"
                 f"{enemy['emoji']} **{enemy['name']}**  —  "
-                f"HP **{e_hp}**{scale_note}  ·  AC **{enemy['ac']}**"
+                f"HP **{e_hp}**{scale_note}  ·  AC **{enemy['ac']}**{surp_note}"
             ),
             color=var.COLOR_COMBAT,
         )
+        if encounter.get("image"):
+            intro_embed.set_image(url=encounter["image"])
         await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
 
-        # ── Initiative — button roll, each player clicks ───────────────────────
+        # ── Initiative (skipped on surprise) ──────────────────────────────────
         active_init  = [uid for uid, _ in run["participants"]
                         if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
         name_map     = {uid: name for uid, name in run["participants"]}
-        init_view    = InitiativeRollView(active_init, name_map, self, gid)
-        init_msg     = await channel.send(embed=init_view.build_embed(), view=init_view)
-        try:
-            await asyncio.wait_for(init_view._done.wait(), timeout=var.ROUND_TIMEOUT)
-        except asyncio.TimeoutError:
+
+        if surprise:
+            enemy_first = False
+            await channel.send(embed=discord.Embed(
+                title="⚡ Surprise Round!",
+                description="You catch them off-guard — free round of attacks before they can react!",
+                color=var.COLOR_WIN,
+            ))
+            await asyncio.sleep(1)
+        else:
+            init_view    = InitiativeRollView(active_init, name_map, self, gid)
+            init_msg     = await channel.send(embed=init_view.build_embed(), view=init_view)
+            try:
+                await asyncio.wait_for(init_view._done.wait(), timeout=var.ROUND_TIMEOUT)
+            except asyncio.TimeoutError:
+                for uid in active_init:
+                    if uid not in init_view.rolls:
+                        stats   = self._get_char_combat_stats(uid, gid)
+                        dex_mod = stats["mods"]["dexterity"] if stats else 0
+                        d20     = random.randint(1, 20)
+                        init_view.rolls[uid] = (d20, dex_mod, d20 + dex_mod)
+            for item in init_view.children:
+                item.disabled = True
+
+            # Enemy initiative
+            enemy_init_bonus = enemy.get("initiative_bonus", 0)
+            enemy_init_roll  = random.randint(1, 20)
+            enemy_init_total = enemy_init_roll + enemy_init_bonus
+
+            # Build sorted results
+            init_rows: list[tuple[int, str]] = []
+            player_inits: dict[str, int] = {}
             for uid in active_init:
-                if uid not in init_view.rolls:
-                    stats   = self._get_char_combat_stats(uid, gid)
-                    dex_mod = stats["mods"]["dexterity"] if stats else 0
-                    d20     = random.randint(1, 20)
-                    init_view.rolls[uid] = (d20, dex_mod, d20 + dex_mod)
-        for item in init_view.children:
-            item.disabled = True
+                d20, mod, total = init_view.rolls.get(uid, (0, 0, 0))
+                name = name_map.get(uid, uid)
+                player_inits[uid] = total
+                mod_txt = f" {mod:+d}" if mod != 0 else ""
+                init_rows.append((total, f"🎲 **{name}** — {d20}{mod_txt} = **{total}**"))
+            e_mod_txt = f" {enemy_init_bonus:+d}" if enemy_init_bonus != 0 else ""
+            init_rows.append((enemy_init_total,
+                              f"🐾 **{enemy['name']}** — {enemy_init_roll}{e_mod_txt} = **{enemy_init_total}**"))
+            init_rows.sort(key=lambda x: x[0], reverse=True)
 
-        # Enemy initiative
-        enemy_init_bonus = enemy.get("initiative_bonus", 0)
-        enemy_init_roll  = random.randint(1, 20)
-        enemy_init_total = enemy_init_roll + enemy_init_bonus
-
-        # Build sorted results
-        init_rows: list[tuple[int, str]] = []
-        player_inits: dict[str, int] = {}
-        for uid in active_init:
-            d20, mod, total = init_view.rolls.get(uid, (0, 0, 0))
-            name = name_map.get(uid, uid)
-            player_inits[uid] = total
-            mod_txt = f" {mod:+d}" if mod != 0 else ""
-            init_rows.append((total, f"🎲 **{name}** — {d20}{mod_txt} = **{total}**"))
-        e_mod_txt = f" {enemy_init_bonus:+d}" if enemy_init_bonus != 0 else ""
-        init_rows.append((enemy_init_total,
-                          f"🐾 **{enemy['name']}** — {enemy_init_roll}{e_mod_txt} = **{enemy_init_total}**"))
-        init_rows.sort(key=lambda x: x[0], reverse=True)
-
-        best_player_init = max(player_inits.values(), default=0)
-        enemy_first      = enemy_init_total > best_player_init
-        order_txt        = (f"⚡ **{enemy['name']} acts first!**" if enemy_first
-                            else "⚔️ **Players act first!**")
-        final_init_embed = discord.Embed(
-            title="🎲 Initiative Results",
-            description="\n".join(line for _, line in init_rows) + f"\n\n{order_txt}",
-            color=var.COLOR_COMBAT,
-        )
-        try:
-            await init_msg.edit(embed=final_init_embed, view=init_view)
-        except Exception:
-            pass
+            best_player_init = max(player_inits.values(), default=0)
+            enemy_first      = enemy_init_total > best_player_init
+            order_txt        = (f"⚡ **{enemy['name']} acts first!**" if enemy_first
+                                else "⚔️ **Players act first!**")
+            final_init_embed = discord.Embed(
+                title="🎲 Initiative Results",
+                description="\n".join(line for _, line in init_rows) + f"\n\n{order_txt}",
+                color=var.COLOR_COMBAT,
+            )
+            try:
+                await init_msg.edit(embed=final_init_embed, view=init_view)
+            except Exception:
+                pass
         await asyncio.sleep(var.RESULT_DELAY)
 
         # ── Combat loop ────────────────────────────────────────────────────────
         while e_hp > 0:
             rnd += 1
+
+            # ── Death saving throws ───────────────────────────────────────────
+            downed = run.setdefault("downed", {})
+            dead   = run.setdefault("dead",   set())
+            ds_lines: list[str] = []
+            for uid, name in run["participants"]:
+                if uid in dead or uid in run["fled"]:
+                    continue
+                if run["player_hp"].get(uid, 0) > 0:
+                    continue
+                if uid not in downed:
+                    downed[uid] = {"successes": 0, "failures": 0}
+                entry = downed[uid]
+                ds    = random.randint(1, 20)
+                if ds == 20:
+                    run["player_hp"][uid] = 1
+                    del downed[uid]
+                    ds_lines.append(f"✨ **{name}** rolled **20** on their death save — stabilizes at **1 HP!**")
+                elif ds == 1:
+                    entry["failures"] += 2
+                    if entry["failures"] >= 3:
+                        dead.add(uid)
+                        del downed[uid]
+                        ds_lines.append(f"💀 **{name}** rolled **1** — 2 failures — **dead**.")
+                        run["log"].append({"type": "death", "uid": uid, "name": name, "round": rnd})
+                    else:
+                        ds_lines.append(f"💀 **{name}** rolled **1** — 2 failures! ({entry['failures']}/3)")
+                elif ds >= 10:
+                    entry["successes"] += 1
+                    if entry["successes"] >= 3:
+                        run["player_hp"][uid] = 1
+                        del downed[uid]
+                        ds_lines.append(f"✨ **{name}** rolled **{ds}** — 3rd success, stabilizes at **1 HP!**")
+                    else:
+                        ds_lines.append(f"⚰️ **{name}** rolled **{ds}** — success ({entry['successes']}/3)")
+                else:
+                    entry["failures"] += 1
+                    if entry["failures"] >= 3:
+                        dead.add(uid)
+                        del downed[uid]
+                        ds_lines.append(f"⚰️ **{name}** rolled **{ds}** — 3rd failure — **dead**.")
+                        run["log"].append({"type": "death", "uid": uid, "name": name, "round": rnd})
+                    else:
+                        ds_lines.append(f"⚰️ **{name}** rolled **{ds}** — failure ({entry['failures']}/3 failures)")
+            if ds_lines:
+                await channel.send(embed=discord.Embed(
+                    title="⚰️ Death Saving Throws",
+                    description="\n".join(ds_lines),
+                    color=var.COLOR_ERROR,
+                ))
+                await asyncio.sleep(1)
+
+            # ── Active check ──────────────────────────────────────────────────
             active = [uid for uid, _ in run["participants"]
-                      if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+                      if uid not in run["fled"]
+                      and uid not in run.get("dead", set())
+                      and run["player_hp"].get(uid, 0) > 0]
             if not active:
+                if all(uid in run["fled"]
+                       for uid, _ in run["participants"]
+                       if uid not in run.get("dead", set())):
+                    return "all_fled"
                 return "defeat"
 
-            # Enemy strikes first if it won initiative
+            # ── Enemy strikes first if it won initiative ───────────────────
             if enemy_first and e_hp > 0:
-                non_fled = [uid for uid in active if uid not in run["fled"]]
-                if non_fled:
-                    t_uid  = random.choice(non_fled)
+                if active:
+                    t_uid  = random.choice(active)
                     t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
                     t_stat = self._get_char_combat_stats(t_uid, gid)
                     if t_stat:
                         e_roll = random.randint(1, 20)
                         e_tot  = e_roll + enemy["atk_bonus"]
                         if e_roll == 20 or e_tot >= t_stat["ac"]:
-                            dmg = _roll(enemy["dmg"])
+                            dmg1 = _roll(enemy["dmg"])
+                            if e_roll == 20:
+                                dmg2 = _roll(enemy["dmg"])
+                                dmg  = dmg1 + dmg2
+                                hit_txt = f"✨ **CRIT!** {dmg1}+{dmg2} = **{dmg} dmg**"
+                            else:
+                                dmg     = dmg1
+                                hit_txt = f"**{dmg} dmg**"
                             run["player_hp"][t_uid] = max(0, run["player_hp"][t_uid] - dmg)
-                            crit_txt = " ✨ **CRIT!**" if e_roll == 20 else ""
-                            ko_txt   = f"\n💀 **{t_name}** goes down before they can act!" \
-                                       if run["player_hp"][t_uid] <= 0 else ""
+                            ko_txt = ""
+                            if run["player_hp"][t_uid] <= 0:
+                                run.setdefault("downed", {})[t_uid] = {"successes": 0, "failures": 0}
+                                ko_txt = f"\n💀 **{t_name}** goes down!"
                             pre_desc = (f"💥 **{enemy['name']}** strikes first!\n"
-                                        f"Hits **{t_name}** → `{dmg}` dmg{crit_txt}{ko_txt}")
+                                        f"Hits **{t_name}** → {hit_txt}{ko_txt}")
                             run["log"].append({
                                 "type": "enemy_hit", "enemy": enemy["name"],
                                 "target": t_uid, "target_name": t_name,
                                 "dmg": dmg, "round": rnd, "initiative": True,
                             })
                         else:
-                            pre_desc = (f"💨 **{enemy['name']}** lunges first at **{t_name}** — MISS!")
+                            pre_desc = f"💨 **{enemy['name']}** lunges first at **{t_name}** — MISS!"
                         pre_embed = discord.Embed(
                             title=f"⚡ Round {rnd} — {enemy['name']} goes first!",
                             description=pre_desc,
@@ -1035,30 +1382,52 @@ class DungeonMasterCog(commands.Cog):
 
                 # Refresh active after possible KO
                 active = [uid for uid, _ in run["participants"]
-                          if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+                          if uid not in run["fled"]
+                          and uid not in run.get("dead", set())
+                          and run["player_hp"].get(uid, 0) > 0]
                 if not active:
                     return "defeat"
 
-            # HP bars + action buttons
-            hp_lines = "\n".join(
-                f"❤️ **{name}** — {run['player_hp'].get(uid, 0)}/{run['player_max_hp'].get(uid, 1)} HP"
-                for uid, name in run["participants"] if uid in active
-            )
+            # ── HP bars + action buttons ───────────────────────────────────
+            hp_lines = []
+            for uid, name in run["participants"]:
+                if uid in run["fled"]:
+                    continue
+                hp  = run["player_hp"].get(uid, 0)
+                mhp = run["player_max_hp"].get(uid, 1)
+                if uid in run.get("dead", set()):
+                    hp_lines.append(f"💀 **{name}** — dead")
+                elif hp <= 0:
+                    hp_lines.append(f"⚰️ **{name}** — downed")
+                else:
+                    hp_lines.append(f"❤️ **{name}** — {hp}/{mhp} HP")
+
             filled = int((e_hp / e_max) * 10)
             e_bar  = "█" * filled + "░" * (10 - filled)
+
+            bonuses_txt: list[str] = []
+            if run.get("raging_uids"):
+                rage_names = [n for u, n in run["participants"] if u in run["raging_uids"]]
+                bonuses_txt.append(f"💢 Raging: {', '.join(rage_names)}")
+            if run.get("hunters_mark_uids"):
+                mark_names = [n for u, n in run["participants"] if u in run["hunters_mark_uids"]]
+                bonuses_txt.append(f"🎯 Marked: {', '.join(mark_names)}")
+            buff_line = ("\n" + " · ".join(bonuses_txt)) if bonuses_txt else ""
 
             status = discord.Embed(
                 title=f"⚔️ Round {rnd}  —  {enemy['name']}",
                 description=(
                     f"{enemy['emoji']} **{enemy['name']}**\n"
                     f"HP: `{e_bar}` {e_hp}/{e_max}\n\n"
-                    f"{hp_lines}"
+                    + "\n".join(hp_lines)
+                    + buff_line
                 ),
                 color=var.COLOR_COMBAT,
             )
-            status.set_footer(text=f"⏱️ {var.ROUND_TIMEOUT}s — choose ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🧪 Item")
+            status.set_footer(
+                text=f"⏱️ {var.ROUND_TIMEOUT}s — ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus Action · 🧪 Item")
 
-            view = CombatView(active, self, gid, run["participants"])
+            view = CombatView(active, self, gid, run["participants"], run)
             msg  = await channel.send(embed=status, view=view)
 
             try:
@@ -1075,10 +1444,75 @@ class DungeonMasterCog(commands.Cog):
             except Exception:
                 pass
 
-            round_lines = []
-            dodgers: set[str] = set()
+            round_lines:     list[str] = []
+            dodgers:         set[str]  = set()
+            cunning_dodgers: set[str]  = set()
 
-            # Process each player's action
+            # ── Process bonus actions ──────────────────────────────────────
+            for uid, name in run["participants"]:
+                if uid not in active:
+                    continue
+                bonus = view.bonus_actions.get(uid)
+                if not bonus:
+                    continue
+                fid   = bonus.get("feature_id")
+                stats = self._get_char_combat_stats(uid, gid)
+                level = stats["level"] if stats else 1
+                wis   = stats["mods"]["wisdom"]   if stats else 0
+                cha   = stats["mods"]["charisma"] if stats else 0
+                run["features_used"].setdefault(uid, set()).add(fid)
+
+                if fid == "second_wind":
+                    heal   = _roll(f"1d10+{level}")
+                    max_hp = run["player_max_hp"].get(uid, 999)
+                    old_hp = run["player_hp"].get(uid, 0)
+                    actual = min(max_hp, old_hp + heal) - old_hp
+                    run["player_hp"][uid] = old_hp + actual
+                    round_lines.append(f"🌬️ **{name}** Second Wind → **+{actual} HP** *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "heal": actual, "round": rnd})
+
+                elif fid == "rage":
+                    run["raging_uids"].add(uid)
+                    round_lines.append(f"💢 **{name}** enters a **RAGE!** *(bonus — ×2 damage all combat)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "cunning_action":
+                    cunning_dodgers.add(uid)
+                    round_lines.append(f"🕵️ **{name}** Cunning Action — Dodge *(bonus — half enemy damage this round)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid == "hunters_mark":
+                    run.setdefault("hunters_mark_uids", set()).add(uid)
+                    round_lines.append(f"🎯 **{name}** marks the target *(bonus — +1d6 to all attacks)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "round": rnd})
+
+                elif fid in ("lay_on_hands", "healing_word"):
+                    t_uid    = bonus.get("target_uid", uid)
+                    # Paladin Lay on Hands uses CHA; Cleric uses WIS
+                    heal_mod = cha if (fid == "lay_on_hands" and stats and stats["char_class"] == "paladin") else wis
+                    heal     = max(1, random.randint(1, 8) + heal_mod) if fid == "lay_on_hands" \
+                               else max(1, random.randint(1, 4) + wis)
+                    max_hp = run["player_max_hp"].get(t_uid, 999)
+                    old_hp = run["player_hp"].get(t_uid, 0)
+                    actual = min(max_hp, old_hp + heal) - old_hp
+                    run["player_hp"][t_uid] = old_hp + actual
+                    if t_uid in run.get("downed", {}) and run["player_hp"][t_uid] > 0:
+                        del run["downed"][t_uid]
+                        rev_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+                        round_lines.append(f"💉 **{rev_name}** is back on their feet!")
+                    t_name   = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+                    feat_lbl = "Lay on Hands" if fid == "lay_on_hands" else "Healing Word"
+                    emoji    = "✨" if fid == "lay_on_hands" else "🙏"
+                    who      = "themselves" if t_uid == uid else f"**{t_name}**"
+                    round_lines.append(f"{emoji} **{name}** {feat_lbl} on {who} → **+{actual} HP** *(bonus)*")
+                    run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                       "feature": fid, "target": t_uid, "heal": actual, "round": rnd})
+
+            # ── Process main actions ───────────────────────────────────────
             for uid, name in run["participants"]:
                 if uid not in active:
                     continue
@@ -1093,17 +1527,44 @@ class DungeonMasterCog(commands.Cog):
                     dodgers.add(uid)
                     round_lines.append(f"🛡️ **{name}** takes a defensive stance.")
 
+                elif isinstance(action, dict) and action.get("action") == "help":
+                    t_uid  = action["target_uid"]
+                    t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+                    if t_uid in run.get("downed", {}):
+                        stats   = self._get_char_combat_stats(uid, gid)
+                        wis_mod = stats["mods"]["wisdom"] if stats else 0
+                        roll    = random.randint(1, 20) + wis_mod
+                        if roll >= 10:
+                            run["player_hp"][t_uid] = 1
+                            del run["downed"][t_uid]
+                            round_lines.append(
+                                f"🤝 **{name}** stabilizes **{t_name}** (Medicine {roll}) → back at 1 HP!")
+                            run["log"].append({"type": "help_stabilize", "uid": uid,
+                                               "target": t_uid, "roll": roll, "round": rnd})
+                        else:
+                            round_lines.append(
+                                f"🤝 **{name}** tries to help **{t_name}** but fails (Medicine {roll})")
+                    else:
+                        run.setdefault("helped_next_attack", {})[t_uid] = 4
+                        round_lines.append(
+                            f"🤝 **{name}** helps **{t_name}** — advantage on next attack! *(+4 to hit)*")
+                        run["log"].append({"type": "help_attack", "uid": uid, "target": t_uid, "round": rnd})
+
                 elif isinstance(action, dict) and action.get("action") == "use_item":
                     item_id    = action["item_id"]
                     target_uid = action["target_uid"]
                     item       = self._find_item(item_id)
                     if item and item.get("heal_expr") and target_uid in run["player_hp"]:
-                        heal       = _roll(item["heal_expr"])
-                        max_hp     = run["player_max_hp"].get(target_uid, 999)
-                        old_hp     = run["player_hp"].get(target_uid, 0)
-                        actual     = min(max_hp, old_hp + heal) - old_hp
+                        heal   = _roll(item["heal_expr"])
+                        max_hp = run["player_max_hp"].get(target_uid, 999)
+                        old_hp = run["player_hp"].get(target_uid, 0)
+                        actual = min(max_hp, old_hp + heal) - old_hp
                         run["player_hp"][target_uid] = old_hp + actual
-                        t_name     = next((n for u, n in run["participants"] if u == target_uid), target_uid)
+                        if target_uid in run.get("downed", {}) and run["player_hp"][target_uid] > 0:
+                            del run["downed"][target_uid]
+                            rev_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
+                            round_lines.append(f"💉 **{rev_name}** is back on their feet!")
+                        t_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
                         self.db.execute(
                             "UPDATE dnd_inventory SET qty=qty-1 WHERE user_id=? AND guild_id=? AND item_id=?",
                             (uid, gid, item_id))
@@ -1121,48 +1582,192 @@ class DungeonMasterCog(commands.Cog):
                 elif action == "attack":
                     stats = self._get_char_combat_stats(uid, gid)
                     if stats:
-                        roll  = random.randint(1, 20)
-                        total = roll + stats["atk_bonus"]
-                        crit  = roll == 20
-                        if crit or total >= enemy["ac"]:
-                            dmg1 = _roll(stats["dmg_expr"])
-                            if crit:
-                                dmg2 = _roll(stats["dmg_expr"])
-                                dmg  = dmg1 + dmg2
+                        char_class = stats["char_class"]
+                        level      = stats["level"]
+                        n_atk      = _n_attacks(char_class, level)
+                        is_raging  = uid in run.get("raging_uids", set())
+                        is_marked  = uid in run.get("hunters_mark_uids", set())
+                        imp_smite  = char_class == "paladin" and level >= 9
+                        help_bonus = run.setdefault("helped_next_attack", {}).pop(uid, 0)
+                        b_txt      = f"{stats['atk_bonus']:+d}"
+                        rage_txt   = " 💢*(rage ×2)*" if is_raging else ""
+                        help_txt   = f" 🤝*(+{help_bonus})*" if help_bonus else ""
+
+                        total_dmg  = 0
+                        first_roll = first_total = first_crit = 0
+                        hit_parts: list[str] = []
+                        for i in range(n_atk):
+                            roll  = random.randint(1, 20)
+                            bonus = help_bonus if i == 0 else 0
+                            total = roll + stats["atk_bonus"] + bonus
+                            crit  = roll == 20
+                            if i == 0:
+                                first_roll, first_total, first_crit = roll, total, crit
+                            if crit or total >= enemy["ac"]:
+                                dmg1     = _roll(stats["dmg_expr"])
+                                mark_add = random.randint(1, 6) if is_marked else 0
+                                ism_add  = random.randint(1, 8) if imp_smite else 0
+                                if crit:
+                                    dmg2      = _roll(stats["dmg_expr"])
+                                    mark_add2 = random.randint(1, 6) if is_marked else 0
+                                    ism_add2  = random.randint(1, 8) if imp_smite else 0
+                                    dmg       = dmg1 + dmg2 + mark_add + mark_add2 + ism_add + ism_add2
+                                else:
+                                    dmg = dmg1 + mark_add + ism_add
+                                if is_raging:
+                                    dmg *= 2
+                                e_hp = max(0, e_hp - dmg)
+                                total_dmg += dmg
+                                last_hitter = (uid, name)
+                                extras = (f"+{mark_add}🎯" if mark_add else "") + (f"+{ism_add}✝️" if ism_add else "")
+                                hit_parts.append(f"✨CRIT **{dmg}**{extras}" if crit else f"**{dmg}**{extras}")
                             else:
-                                dmg  = dmg1
-                            e_hp = max(0, e_hp - dmg)
-                            last_hitter = (uid, name)
-                            bonus_txt = f"{stats['atk_bonus']:+d}"
-                            if crit:
+                                hit_parts.append("miss")
+                            if e_hp <= 0:
+                                break
+
+                        if n_atk == 1:
+                            result = hit_parts[0] if hit_parts else "miss"
+                            if result == "miss":
                                 round_lines.append(
-                                    f"⚔️ **{name}** ✨ **CRIT!** — {dmg1} + {dmg2} = **{dmg} dmg**")
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}** vs AC {enemy['ac']} → MISS")
+                                run["log"].append({"type": "attack", "uid": uid, "name": name,
+                                    "roll": first_roll, "total": first_total, "dmg": 0,
+                                    "hit": False, "crit": False, "round": rnd, "enemy": enemy["name"]})
                             else:
                                 round_lines.append(
-                                    f"⚔️ **{name}** rolled {roll} {bonus_txt} = **{total}** vs AC {enemy['ac']} → {dmg} dmg")
-                            run["log"].append({
-                                "type": "attack", "uid": uid, "name": name,
-                                "roll": roll, "total": total, "dmg": dmg,
-                                "hit": True, "crit": crit, "round": rnd, "enemy": enemy["name"],
-                            })
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}** vs AC {enemy['ac']} → {result}{rage_txt}")
+                                run["log"].append({"type": "attack", "uid": uid, "name": name,
+                                    "roll": first_roll, "total": first_total, "dmg": total_dmg,
+                                    "hit": True, "crit": first_crit, "round": rnd, "enemy": enemy["name"]})
                         else:
-                            bonus_txt = f"{stats['atk_bonus']:+d}"
                             round_lines.append(
-                                f"⚔️ **{name}** rolled {roll} {bonus_txt} = **{total}** vs AC {enemy['ac']} → MISS")
-                            run["log"].append({
-                                "type": "attack", "uid": uid, "name": name,
-                                "roll": roll, "total": total, "dmg": 0,
-                                "hit": False, "crit": False, "round": rnd, "enemy": enemy["name"],
-                            })
+                                f"⚔️ **{name}** {n_atk}× attacks{help_txt} → {' | '.join(hit_parts)}{rage_txt}")
+                            run["log"].append({"type": "attack", "uid": uid, "name": name,
+                                "n_attacks": n_atk, "dmg": total_dmg, "round": rnd, "enemy": enemy["name"]})
                     else:
                         round_lines.append(f"⚔️ **{name}** swings wildly and misses!")
-
                     if e_hp <= 0:
                         break
 
-            # Enemy retaliates only when players went first
-            if not enemy_first and e_hp > 0:
-                non_fled = [uid for uid in active if uid not in run["fled"]]
+                elif isinstance(action, dict) and action.get("action") == "feature":
+                    fid   = action["feature_id"]
+                    stats = self._get_char_combat_stats(uid, gid)
+                    level = stats["level"] if stats else 1
+                    wis   = stats["mods"]["wisdom"] if stats else 0
+                    run["features_used"].setdefault(uid, set()).add(fid)
+
+                    if fid == "action_surge" and stats:
+                        surge_n    = _n_attacks(stats["char_class"], stats["level"])
+                        surge_hits: list[str] = []
+                        for _ in range(surge_n):
+                            r = random.randint(1, 20)
+                            t = r + stats["atk_bonus"]
+                            c = r == 20
+                            if c or t >= enemy["ac"]:
+                                d1 = _roll(stats["dmg_expr"])
+                                if c:
+                                    d2 = _roll(stats["dmg_expr"])
+                                    d  = d1 + d2
+                                    surge_hits.append(f"✨CRIT {d1}+{d2}=**{d}**")
+                                else:
+                                    d = d1
+                                    surge_hits.append(f"**{d}**")
+                                if uid in run.get("raging_uids", set()):
+                                    d *= 2
+                                e_hp = max(0, e_hp - d)
+                                last_hitter = (uid, name)
+                            else:
+                                surge_hits.append("miss")
+                        round_lines.append(
+                            f"⚡ **{name}** Action Surge ×{surge_n}! → {' | '.join(surge_hits)}")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "sneak_attack" and stats:
+                        sneak_dice = max(1, (level + 1) // 2)
+                        r = random.randint(1, 20)
+                        t = r + stats["atk_bonus"]
+                        c = r == 20
+                        if c or t >= enemy["ac"]:
+                            d1  = _roll(stats["dmg_expr"])
+                            snk = sum(random.randint(1, 6) for _ in range(sneak_dice))
+                            if c:
+                                d2   = _roll(stats["dmg_expr"])
+                                snk2 = sum(random.randint(1, 6) for _ in range(sneak_dice))
+                                dmg  = d1 + d2 + snk + snk2
+                                round_lines.append(f"🗡️ **{name}** Sneak Attack ✨CRIT! → **{dmg} dmg** (+{sneak_dice}d6)")
+                            else:
+                                dmg = d1 + snk
+                                round_lines.append(f"🗡️ **{name}** Sneak Attack → **{dmg} dmg** (+{sneak_dice}d6)")
+                            e_hp = max(0, e_hp - dmg)
+                            last_hitter = (uid, name)
+                        else:
+                            round_lines.append(f"🗡️ **{name}** Sneak Attack missed!")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "sacred_flame" and stats:
+                        dmg = max(1, random.randint(1, 8) + wis)
+                        e_hp = max(0, e_hp - dmg)
+                        last_hitter = (uid, name)
+                        round_lines.append(f"🔥 **{name}** Sacred Flame → **{dmg} radiant dmg** *(auto-hit)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": dmg, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "magic_missile" and stats:
+                        n_bolts   = min(6, 3 + (level - 1) // 3)
+                        total_dmg = sum(random.randint(1, 4) + 1 for _ in range(n_bolts))
+                        e_hp      = max(0, e_hp - total_dmg)
+                        last_hitter = (uid, name)
+                        bolt_s = "bolts" if n_bolts != 1 else "bolt"
+                        round_lines.append(
+                            f"✨ **{name}** Magic Missile — {n_bolts} {bolt_s} → **{total_dmg} dmg** *(auto-hit)*")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "dmg": total_dmg, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+                    elif fid == "divine_smite" and stats:
+                        r  = random.randint(1, 20)
+                        t  = r + stats["atk_bonus"]
+                        c  = r == 20
+                        bx = f"{stats['atk_bonus']:+d}"
+                        if c or t >= enemy["ac"]:
+                            d1  = _roll(stats["dmg_expr"])
+                            sm1 = random.randint(1, 8)
+                            sm2 = random.randint(1, 8)
+                            if c:
+                                d2  = _roll(stats["dmg_expr"])
+                                sm3 = random.randint(1, 8)
+                                sm4 = random.randint(1, 8)
+                                dmg = d1 + d2 + sm1 + sm2 + sm3 + sm4
+                                round_lines.append(
+                                    f"⚡ **{name}** Divine Smite ✨CRIT! → **{dmg} dmg** (+4d8 radiant)")
+                            else:
+                                dmg = d1 + sm1 + sm2
+                                round_lines.append(
+                                    f"⚡ **{name}** Divine Smite (rolled {r} {bx} = **{t}**) → **{dmg} dmg** (+2d8 radiant)")
+                            e_hp = max(0, e_hp - dmg)
+                            last_hitter = (uid, name)
+                        else:
+                            round_lines.append(
+                                f"⚡ **{name}** Divine Smite missed! (rolled {r} {bx} = **{t}** vs AC {enemy['ac']})")
+                        run["log"].append({"type": "feature", "uid": uid, "name": name,
+                                           "feature": fid, "round": rnd})
+                        if e_hp <= 0:
+                            break
+
+            # ── Enemy retaliates (not on surprise round 1) ─────────────────
+            if not enemy_first and e_hp > 0 and not (surprise and rnd == 1):
+                non_fled = [uid for uid in active
+                            if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
                 if non_fled:
                     target_uid  = random.choice(non_fled)
                     target_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
@@ -1170,7 +1775,8 @@ class DungeonMasterCog(commands.Cog):
                     if stats:
                         roll      = random.randint(1, 20)
                         total_atk = roll + enemy["atk_bonus"]
-                        dodge_ac  = stats["ac"] + (2 if target_uid in dodgers else 0)
+                        in_dodge  = target_uid in dodgers or target_uid in cunning_dodgers
+                        dodge_ac  = stats["ac"] + (2 if in_dodge else 0)
                         if roll == 20 or total_atk >= dodge_ac:
                             dmg1 = _roll(enemy["dmg"])
                             if roll == 20:
@@ -1178,10 +1784,10 @@ class DungeonMasterCog(commands.Cog):
                                 dmg  = dmg1 + dmg2
                             else:
                                 dmg  = dmg1
-                            if target_uid in dodgers:
+                            if in_dodge:
                                 dmg = max(1, dmg // 2)
                             run["player_hp"][target_uid] = max(0, run["player_hp"][target_uid] - dmg)
-                            dodge_txt = " *(half dmg — dodged)*" if target_uid in dodgers else ""
+                            dodge_txt = " *(half dmg — dodged)*" if in_dodge else ""
                             if roll == 20:
                                 round_lines.append(
                                     f"💥 **{enemy['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}")
@@ -1194,13 +1800,17 @@ class DungeonMasterCog(commands.Cog):
                                 "dmg": dmg, "round": rnd,
                             })
                             if run["player_hp"][target_uid] <= 0:
-                                round_lines.append(f"💀 **{target_name}** goes down!")
+                                run.setdefault("downed", {})[target_uid] = {"successes": 0, "failures": 0}
+                                round_lines.append(
+                                    f"💀 **{target_name}** goes down! *(death saves begin next round)*")
                         else:
                             round_lines.append(f"💨 **{enemy['name']}** attacks **{target_name}** — MISS!")
 
-            # Round result
+            # ── Round result ───────────────────────────────────────────────
             still_active = [uid for uid, _ in run["participants"]
-                            if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+                            if uid not in run["fled"]
+                            and uid not in run.get("dead", set())
+                            and run["player_hp"].get(uid, 0) > 0]
             color = var.COLOR_WIN if e_hp <= 0 else var.COLOR_COMBAT
 
             result_embed = discord.Embed(
@@ -1228,7 +1838,9 @@ class DungeonMasterCog(commands.Cog):
                 return "victory"
 
             if not still_active:
-                if all(uid in run["fled"] for uid, _ in run["participants"]):
+                if all(uid in run["fled"]
+                       for uid, _ in run["participants"]
+                       if uid not in run.get("dead", set())):
                     return "all_fled"
                 return "defeat"
 
@@ -1252,6 +1864,8 @@ class DungeonMasterCog(commands.Cog):
             description=f"*{encounter['intro']}*",
             color=var.COLOR_INTERACTION,
         )
+        if encounter.get("image"):
+            embed.set_image(url=encounter["image"])
         embed.set_footer(text=f"⏱️ {var.INTERACTION_TIMEOUT}s to decide")
 
         view = InteractionView(active, encounter)
@@ -1349,6 +1963,48 @@ class DungeonMasterCog(commands.Cog):
                 }
                 return await self._run_combat(channel, fight_enc, run_id)
             return "victory"  # no fallback — failure is narrative only, run continues
+
+    # ── Choice / branching node ───────────────────────────────────────────────
+
+    async def _run_choice(self, channel: discord.TextChannel,
+                          encounter: dict, run_id: str) -> tuple[str, list]:
+        run    = self._runs[run_id]
+        active = [uid for uid, _ in run["participants"]
+                  if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
+        if not active:
+            return "defeat", []
+
+        embed = discord.Embed(
+            title=f"🗺️ {encounter['name']}",
+            description=f"*{encounter['intro']}*",
+            color=var.COLOR_INTERACTION,
+        )
+        if encounter.get("image"):
+            embed.set_image(url=encounter["image"])
+        embed.set_footer(text=f"⏱️ {var.INTERACTION_TIMEOUT}s — first to choose decides for the party")
+
+        view = ChoiceView(active, encounter)
+        msg  = await channel.send(embed=embed, view=view)
+        try:
+            await asyncio.wait_for(view._done.wait(), timeout=var.INTERACTION_TIMEOUT)
+        except asyncio.TimeoutError:
+            view.chosen = encounter["options"][0]
+
+        for item in view.children:
+            item.disabled = True
+        try:
+            await msg.edit(view=view)
+        except Exception:
+            pass
+
+        chosen = view.chosen or encounter["options"][0]
+        result_text = chosen.get("result_text", "The party presses on.")
+        await channel.send(embed=discord.Embed(
+            description=f"**{chosen['label']}** — *{result_text}*",
+            color=var.COLOR_WIN,
+        ))
+        await asyncio.sleep(1)
+        return "victory", chosen.get("encounters", [])
 
 
 async def setup(bot: commands.Bot):

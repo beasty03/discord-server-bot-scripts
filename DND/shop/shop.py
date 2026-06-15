@@ -374,6 +374,77 @@ class ShopCog(commands.Cog):
         view = ShopSelectView(self, uid, gid, available) if available else None
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    # ── /shop_sell ─────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="shop_sell", description="Sell items from your backpack.")
+    @app_commands.describe(item="Item to sell", qty="How many to sell (default 1)")
+    async def shop_sell(self, interaction: discord.Interaction, item: str, qty: int = 1):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        if qty < 1:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="Quantity must be at least 1.", color=var.COLOR_ERROR),
+                ephemeral=True)
+            return
+
+        rows    = self.db.execute(
+            "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=?",
+            (uid, gid, item))
+        have    = rows[0][0] if rows else 0
+        if have < qty:
+            msg = f"You only have {have}." if have else "You don't have that item."
+            await interaction.response.send_message(
+                embed=discord.Embed(description=msg, color=var.COLOR_ERROR), ephemeral=True)
+            return
+
+        all_items = list(char_var.ITEMS) + self._char_extra_items()
+        item_data = next((i for i in all_items if i["id"] == item), None)
+        if not item_data or "sell" not in item_data:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="That item can't be sold.", color=var.COLOR_ERROR),
+                ephemeral=True)
+            return
+
+        total = item_data["sell"] * qty
+        self.db.execute(
+            "UPDATE dnd_inventory SET qty=qty-? WHERE user_id=? AND guild_id=? AND item_id=?",
+            (qty, uid, gid, item))
+        self.db.execute(
+            "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty<=0",
+            (uid, gid, item))
+        self.db.update_balance(uid, gid, total, "shop_sell")
+        new_bal = self.db.get_balance(uid, gid)
+
+        emoji   = item_data.get("emoji", "🎒")
+        qty_txt = f"×{qty} " if qty > 1 else ""
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"{emoji} Sold {qty_txt}**{item_data['name']}** "
+                    f"→ **+{total:,}** {var.CURRENCY_SYMBOL}\n"
+                    f"Balance: **{new_bal:,}** {var.CURRENCY_SYMBOL}"
+                ),
+                color=var.COLOR_WIN),
+            ephemeral=True)
+
+    @shop_sell.autocomplete("item")
+    async def _shop_sell_ac(self, interaction: discord.Interaction, current: str):
+        uid, gid  = str(interaction.user.id), str(interaction.guild_id)
+        rows      = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid)) or []
+        all_items = list(char_var.ITEMS) + self._char_extra_items()
+        choices   = []
+        for iid, qty in rows:
+            d = next((i for i in all_items if i["id"] == iid and "sell" in i), None)
+            if not d:
+                continue
+            label = f"{d.get('emoji','')}{d['name']} ×{qty} — {d['sell']} {var.CURRENCY_NAME} each".strip()
+            if current.lower() in label.lower():
+                choices.append(app_commands.Choice(name=label[:100], value=iid))
+        return choices[:25]
+
     @staticmethod
     def _err(msg: str) -> discord.Embed:
         return discord.Embed(description=msg, color=var.COLOR_ERROR)

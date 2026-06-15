@@ -90,16 +90,16 @@ ITEMS = [
     {"id": "leather_armor", "name": "Leather Armor", "slot": "armor"},
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
     # Consumables — tiered healing potions, usable in combat (🧪) and via /backpack_use.
-    {"id": "small_health_potion", "name": "Small Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "1d4+1",  "tier": "common"},
-    {"id": "health_potion",       "name": "Health Potion",       "emoji": "🧪", "slot": "consumable", "heal_expr": "2d4+2",  "tier": "uncommon"},
-    {"id": "large_health_potion", "name": "Large Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "4d4+4",  "tier": "rare"},
+    {"id": "small_health_potion", "name": "Small Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "1d4+1",  "tier": "common",   "sell": 8},
+    {"id": "health_potion",       "name": "Health Potion",       "emoji": "🧪", "slot": "consumable", "heal_expr": "2d4+2",  "tier": "uncommon", "sell": 20},
+    {"id": "large_health_potion", "name": "Large Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "4d4+4",  "tier": "rare",     "sell": 45},
     # Crafting materials — dropped during campaign encounters.
-    {"id": "herb",          "name": "Herb",          "emoji": "🌿", "slot": "material", "tier": "common"},
-    {"id": "leather_scrap", "name": "Leather Scrap", "emoji": "🪶", "slot": "material", "tier": "uncommon"},
-    {"id": "arcane_shard",  "name": "Arcane Shard",  "emoji": "💎", "slot": "material", "tier": "rare"},
+    {"id": "herb",          "name": "Herb",          "emoji": "🌿", "slot": "material", "tier": "common",   "sell": 3},
+    {"id": "leather_scrap", "name": "Leather Scrap", "emoji": "🪶", "slot": "material", "tier": "uncommon", "sell": 5},
+    {"id": "arcane_shard",  "name": "Arcane Shard",  "emoji": "💎", "slot": "material", "tier": "rare",     "sell": 15},
     # Recipe scrolls — consumed via /learn_recipe to unlock crafting recipes.
-    {"id": "recipe_hp_medium", "name": "Recipe: Health Potion",       "emoji": "📜", "slot": "recipe", "unlocks": "health_potion"},
-    {"id": "recipe_hp_large",  "name": "Recipe: Large Health Potion", "emoji": "📜", "slot": "recipe", "unlocks": "large_health_potion"},
+    {"id": "recipe_hp_medium", "name": "Recipe: Health Potion",       "emoji": "📜", "slot": "recipe", "unlocks": "health_potion",       "sell": 60},
+    {"id": "recipe_hp_large",  "name": "Recipe: Large Health Potion", "emoji": "📜", "slot": "recipe", "unlocks": "large_health_potion",  "sell": 150},
     # Shop / misc
     {"id": "reroll_token",      "name": "Character Reroll Token", "slot": "misc"},
     # DLC items — registered by DND_DLC cogs; listed here so the inventory has a name for them.
@@ -298,6 +298,67 @@ RACE_TRAITS = {
         {"name": "Darkvision",         "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
         {"name": "Hellish Resistance", "desc": "Resistance to fire damage."},
         {"name": "Infernal Legacy",    "desc": "Thaumaturgy cantrip; Hellish Rebuke 1×/day at Lv 3; Darkness 1×/day at Lv 5."},
+    ],
+}
+
+# ============================================================================
+# COMBAT FEATURES — active abilities usable in combat.
+#
+# action_type: "action"  → uses the main action slot (replaces Attack)
+#              "bonus"   → uses the bonus action slot (can combine with Attack)
+# once_per:    "combat"  → one use per combat encounter; None → unlimited
+# ============================================================================
+
+COMBAT_FEATURES = {
+    "fighter": [
+        {"id": "second_wind",  "name": "Second Wind",  "label": "🌬️ Second Wind",
+         "action_type": "bonus",
+         "level_req": 1, "once_per": "combat", "desc": "Heal 1d10 + level HP (bonus action)"},
+        {"id": "action_surge", "name": "Action Surge", "label": "⚡ Action Surge",
+         "action_type": "action",
+         "level_req": 2, "once_per": "combat", "desc": "Attack twice this round (main action)"},
+    ],
+    "barbarian": [
+        {"id": "rage", "name": "Rage", "label": "💢 Rage",
+         "action_type": "bonus",
+         "level_req": 1, "once_per": "combat", "desc": "Enter rage — ×2 damage all combat (bonus action)"},
+    ],
+    "rogue": [
+        {"id": "sneak_attack",  "name": "Sneak Attack",   "label": "🗡️ Sneak Attack",
+         "action_type": "action",
+         "level_req": 1, "once_per": None, "desc": "Attack + 1d6 per 2 levels bonus damage (main action)"},
+        {"id": "cunning_action","name": "Cunning Action", "label": "🕵️ Cunning Action",
+         "action_type": "bonus",
+         "level_req": 2, "once_per": None, "desc": "Dodge as a bonus action — halve enemy damage this round"},
+    ],
+    "ranger": [
+        {"id": "hunters_mark", "name": "Hunter's Mark", "label": "🎯 Hunter's Mark",
+         "action_type": "bonus",
+         "level_req": 1, "once_per": "combat", "desc": "+1d6 to all your attacks for rest of combat (bonus action)"},
+    ],
+    "cleric": [
+        {"id": "sacred_flame", "name": "Sacred Flame", "label": "🔥 Sacred Flame",
+         "action_type": "action",
+         "level_req": 1, "once_per": None, "desc": "Radiant blast — 1d8 + WIS, auto-hit (main action)"},
+        {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
+         "action_type": "bonus",
+         "level_req": 1, "once_per": "combat", "desc": "Restore 1d8 + WIS HP to yourself or an ally (bonus action)"},
+        {"id": "healing_word", "name": "Healing Word",  "label": "🙏 Healing Word",
+         "action_type": "bonus",
+         "level_req": 2, "once_per": None, "desc": "Heal yourself or an ally 1d4 + WIS HP (bonus action)"},
+    ],
+    "wizard": [
+        {"id": "magic_missile", "name": "Magic Missile", "label": "✨ Magic Missile",
+         "action_type": "action",
+         "level_req": 1, "once_per": None, "desc": "Auto-hit — bolts deal 1d4+1 each, scales with level (main action)"},
+    ],
+    "paladin": [
+        {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
+         "action_type": "bonus",
+         "level_req": 1, "once_per": "combat", "desc": "Restore 1d8 + CHA HP to yourself or an ally (bonus action)"},
+        {"id": "divine_smite", "name": "Divine Smite",  "label": "⚡ Divine Smite",
+         "action_type": "action",
+         "level_req": 2, "once_per": None, "desc": "Attack + 2d8 radiant damage; crits deal 4d8 (main action)"},
     ],
 }
 
