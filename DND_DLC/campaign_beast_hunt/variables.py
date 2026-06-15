@@ -73,6 +73,7 @@ CAMPAIGN = {
                 "ac":        11,
                 "atk_bonus": 3,
                 "dmg":       "1d6+1",
+                "drops":     [{"id": "leather_scrap", "chance": 80}, {"id": "herb", "chance": 60}],
             },
         },
     ],

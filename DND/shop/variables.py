@@ -74,6 +74,24 @@ SHOP_ITEMS = [
         "max_qty":     3,
         "tier":        "epic",
     },
+    {
+        "id":          "recipe_hp_medium",
+        "name":        "Recipe: Health Potion",
+        "emoji":       "📜",
+        "description": "Unlocks the Health Potion crafting recipe (2d4+2 heal).",
+        "price":       150,
+        "max_qty":     1,
+        "tier":        "uncommon",
+    },
+    {
+        "id":          "recipe_hp_large",
+        "name":        "Recipe: Large Health Potion",
+        "emoji":       "📜",
+        "description": "Unlocks the Large Health Potion crafting recipe (4d4+4 heal).",
+        "price":       400,
+        "max_qty":     1,
+        "tier":        "rare",
+    },
 ]
 
 # ============================================================================

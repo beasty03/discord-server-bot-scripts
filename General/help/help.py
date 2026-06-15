@@ -87,6 +87,7 @@ CATEGORIES = [
             ("🛡️ Parties",         "PartiesCog"),
             ("🗡️ Dungeon Master",  "DungeonMasterCog"),
             ("🏪 Shop",            "ShopCog"),
+            ("⚗️ Recipes",         "RecipesCog"),
             ("📖 Scribe",          "ScribeCog"),
         ],
     },

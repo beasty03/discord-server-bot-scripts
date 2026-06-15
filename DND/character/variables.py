@@ -89,9 +89,18 @@ ITEMS = [
     {"id": "shield",        "name": "Shield",        "slot": "offhand"},
     {"id": "leather_armor", "name": "Leather Armor", "slot": "armor"},
     {"id": "spellbook",     "name": "Spellbook",     "slot": "misc"},
-    # Consumables — usable in combat via the 🧪 Item button.
-    {"id": "health_potion",  "name": "Health Potion",          "slot": "consumable", "heal_expr": "2d4+2"},
-    # Shop items
+    # Consumables — tiered healing potions, usable in combat (🧪) and via /backpack_use.
+    {"id": "small_health_potion", "name": "Small Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "1d4+1",  "tier": "common"},
+    {"id": "health_potion",       "name": "Health Potion",       "emoji": "🧪", "slot": "consumable", "heal_expr": "2d4+2",  "tier": "uncommon"},
+    {"id": "large_health_potion", "name": "Large Health Potion", "emoji": "🧪", "slot": "consumable", "heal_expr": "4d4+4",  "tier": "rare"},
+    # Crafting materials — dropped during campaign encounters.
+    {"id": "herb",          "name": "Herb",          "emoji": "🌿", "slot": "material", "tier": "common"},
+    {"id": "leather_scrap", "name": "Leather Scrap", "emoji": "🪶", "slot": "material", "tier": "uncommon"},
+    {"id": "arcane_shard",  "name": "Arcane Shard",  "emoji": "💎", "slot": "material", "tier": "rare"},
+    # Recipe scrolls — consumed via /learn_recipe to unlock crafting recipes.
+    {"id": "recipe_hp_medium", "name": "Recipe: Health Potion",       "emoji": "📜", "slot": "recipe", "unlocks": "health_potion"},
+    {"id": "recipe_hp_large",  "name": "Recipe: Large Health Potion", "emoji": "📜", "slot": "recipe", "unlocks": "large_health_potion"},
+    # Shop / misc
     {"id": "reroll_token",      "name": "Character Reroll Token", "slot": "misc"},
     # DLC items — registered by DND_DLC cogs; listed here so the inventory has a name for them.
     {"id": "boar_tusk_charm",   "name": "Boar Tusk Charm",        "slot": "misc"},

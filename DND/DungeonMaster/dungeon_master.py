@@ -613,6 +613,39 @@ class DungeonMasterCog(commands.Cog):
             return None
         return next((i for i in char_var.ITEMS if i["id"] == rows[0][0]), None)
 
+    async def _drop_materials(self, channel: discord.TextChannel,
+                              run: dict, gid: str, enemy: dict):
+        drops = enemy.get("drops", [])
+        if not drops:
+            return
+        alive_uids = {uid for uid, _ in run["participants"]
+                      if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0}
+        if not alive_uids:
+            return
+        drop_lines = []
+        for uid, name in run["participants"]:
+            if uid not in alive_uids:
+                continue
+            got = []
+            for drop in drops:
+                if random.randint(1, 100) <= drop["chance"]:
+                    self.db.execute(
+                        """INSERT INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped)
+                           VALUES (?,?,?,1,0)
+                           ON CONFLICT(user_id,guild_id,item_id) DO UPDATE SET qty=qty+1""",
+                        (uid, gid, drop["id"]))
+                    item_data = next((i for i in char_var.ITEMS if i["id"] == drop["id"]), None)
+                    label = f"{item_data.get('emoji','📦')} {item_data['name']}" if item_data else drop["id"]
+                    got.append(label)
+            if got:
+                drop_lines.append(f"• **{name}**: {', '.join(got)}")
+        if drop_lines:
+            await channel.send(embed=discord.Embed(
+                title="🎒 Materials Found",
+                description="\n".join(drop_lines),
+                color=var.COLOR_WIN,
+            ))
+
     def _give_rewards(self, uid: str, gid: str, display_name: str, gold: int, xp: int) -> int:
         self.db.ensure_user(uid, gid, display_name)
         if gold > 0:
@@ -1169,6 +1202,7 @@ class DungeonMasterCog(commands.Cog):
                         f"<@{last_hitter[0]}> delivers the killing blow on **{enemy['name']}**!",
                         view=KillConfirmView(last_hitter[0], enemy["name"], kill_entry),
                     )
+                await self._drop_materials(channel, run, gid, enemy)
                 await asyncio.sleep(2)
                 return "victory"
 
