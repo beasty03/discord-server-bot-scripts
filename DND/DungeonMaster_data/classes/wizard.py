@@ -95,6 +95,7 @@ SUBCLASS_COMBAT_FEATURES = {
     "abjuration": [],
     "illusion":   [],
     "divination": [],
+    "knowledge":  [],
 }
 
 # ── Level-up interactive choices ─────────────────────────────────────────────
@@ -112,6 +113,8 @@ LEVEL_UP_CHOICES = {
              "desc": "Illusory Self — +4 to attack rolls on the first round of combat"},
             {"id": "divination", "label": "Divination",
              "desc": "Portent — roll twice for your first attack each combat, take the better result"},
+            {"id": "knowledge",  "label": "School of Knowledge",
+             "desc": "Broad Study — +2 to all spell attack rolls from accumulated arcane insight"},
         ],
     },
 }

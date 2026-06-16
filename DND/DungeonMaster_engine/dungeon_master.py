@@ -2497,6 +2497,22 @@ class DungeonMasterCog(commands.Cog):
         await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
 
+        # Ranger Primeval Awareness (Lv 3+): sense if enemy matches favored type
+        for _pa_uid, _pa_name in run["participants"]:
+            _pa_stats = self._get_char_combat_stats(_pa_uid, gid)
+            if (_pa_stats and _pa_stats["char_class"] == "ranger"
+                    and _pa_stats["level"] >= 3):
+                _pa_fe = run.get("favored_enemy", {}).get(_pa_uid)
+                if _pa_fe and _enemy_matches_type(enemy["name"], _pa_fe):
+                    await channel.send(embed=discord.Embed(
+                        description=(
+                            f"🦅 **{_pa_name}** — *Primeval Awareness:* "
+                            f"You sense these are **{_pa_fe}** — your favored prey. "
+                            f"Your +2 favored enemy bonus applies!"
+                        ),
+                        color=var.COLOR_WIN))
+                    await asyncio.sleep(1)
+
         # ── Initiative (skipped on surprise) ──────────────────────────────────
         active_init  = [uid for uid, _ in run["participants"]
                         if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
@@ -4082,18 +4098,26 @@ class DungeonMasterCog(commands.Cog):
         # Apply Help bonus: +4 from a party member who clicked Help (must be a different player)
         helper_uid  = view.helper_uid
         help_bonus  = 4 if (helper_uid and helper_uid != roller_uid) else 0
-        total       = roll + mod + help_bonus
+        # Ranger Natural Explorer (Lv 1+): +1 to all skill checks
+        explore_bonus = 1 if (stats and stats["char_class"] == "ranger") else 0
+        total       = roll + mod + help_bonus + explore_bonus
         dc          = encounter["dc"]
         success     = total >= dc
 
-        help_line   = (f"\n🤝 **{view.helper_name}** helped — +{help_bonus} bonus!\n"
-                       if help_bonus else "")
-        flavor_line = f'\n*"{flavor}"*\n' if flavor else ""
+        help_line    = (f"\n🤝 **{view.helper_name}** helped — +{help_bonus} bonus!\n"
+                        if help_bonus else "")
+        explore_line = "\n🌿 *Natural Explorer — +1 to skill check*\n" if explore_bonus else ""
+        flavor_line  = f'\n*"{flavor}"*\n' if flavor else ""
+        roll_detail  = (f"🎲 Rolled **{roll}** {mod:+d}"
+                        + (f" +{help_bonus} (help)" if help_bonus else "")
+                        + (f" +{explore_bonus} (explorer)" if explore_bonus else "")
+                        + f" = **{total}** vs DC **{dc}**")
         desc_lines  = [
             f"**{roller_name}** attempts a **{skill.title()}** check!",
             help_line,
+            explore_line,
             flavor_line,
-            f"🎲 Rolled **{roll}** {mod:+d}{f' +{help_bonus} (help)' if help_bonus else ''} = **{total}** vs DC **{dc}**",
+            roll_detail,
             "",
         ]
 

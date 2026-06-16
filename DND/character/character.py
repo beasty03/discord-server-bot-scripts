@@ -289,6 +289,72 @@ class DeleteConfirmView(discord.ui.View):
             view=None)
         self.stop()
 
+class EquipView(discord.ui.View):
+    """Equip or unequip a weapon, armor, or shield."""
+    _SLOT_EMOJI = {"weapon": "⚔️", "offhand": "🛡️", "armor": "🪖"}
+
+    def __init__(self, cog: "CharacterCog", uid: str, gid: str,
+                 items: list[tuple]):
+        super().__init__(timeout=30)
+        self._cog   = cog
+        self._uid   = uid
+        self._gid   = gid
+        self._items = items
+        options = [
+            discord.SelectOption(
+                label=f"{'✅ ' if eq else ''}{item['name']}",
+                value=iid,
+                description=(
+                    f"{self._SLOT_EMOJI.get(item['slot'], '📦')} "
+                    f"{item['slot'].capitalize()}"
+                    + (" — equipped" if eq else "")
+                ),
+            )
+            for iid, eq, item in items
+        ]
+        sel = discord.ui.Select(placeholder="Choose an item to equip/unequip…", options=options)
+        sel.callback = self._on_pick
+        self.add_item(sel)
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        chosen_id  = interaction.data["values"][0]
+        chosen_row = next(((iid, eq, it) for iid, eq, it in self._items if iid == chosen_id), None)
+        if not chosen_row:
+            await interaction.response.edit_message(
+                embed=discord.Embed(description="Item not found.", color=var.COLOR_ERROR), view=None)
+            self.stop()
+            return
+        _, currently_eq, chosen_item = chosen_row
+        slot = chosen_item.get("slot")
+
+        if currently_eq:
+            self._cog.db.execute(
+                "UPDATE dnd_inventory SET equipped=0 "
+                "WHERE user_id=? AND guild_id=? AND item_id=?",
+                (self._uid, self._gid, chosen_id))
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    description=f"🗃️ **{chosen_item['name']}** unequipped.",
+                    color=var.COLOR_INFO), view=None)
+        else:
+            for iid, eq, it in self._items:
+                if eq and it.get("slot") == slot and iid != chosen_id:
+                    self._cog.db.execute(
+                        "UPDATE dnd_inventory SET equipped=0 "
+                        "WHERE user_id=? AND guild_id=? AND item_id=?",
+                        (self._uid, self._gid, iid))
+            self._cog.db.execute(
+                "UPDATE dnd_inventory SET equipped=1 "
+                "WHERE user_id=? AND guild_id=? AND item_id=?",
+                (self._uid, self._gid, chosen_id))
+            emoji = self._SLOT_EMOJI.get(slot, "📦")
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    description=f"{emoji} **{chosen_item['name']}** equipped!",
+                    color=var.COLOR_WIN), view=None)
+        self.stop()
+
+
 _CHAR_COLS = [
     "user_id", "guild_id", "name", "race", "char_class", "level", "xp",
     "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma",
@@ -689,6 +755,44 @@ class CharacterCog(commands.Cog):
         )
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /equip ──────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="equip", description="Equip or unequip a weapon, armor, or shield.")
+    async def equip(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        char = self._fetch_char(uid, gid)
+        if not char:
+            await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
+            return
+
+        rows = self.db.execute(
+            "SELECT item_id, equipped FROM dnd_inventory WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+
+        EQUIPPABLE = {"weapon", "offhand", "armor"}
+        equippable = []
+        for item_id, equipped in (rows or []):
+            item = self._item(item_id)
+            if item and item.get("slot") in EQUIPPABLE:
+                equippable.append((item_id, bool(equipped), item))
+
+        if not equippable:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="No equippable items in your backpack.",
+                    color=var.COLOR_INFO),
+                ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description="🗡️ **Equip / unequip** — ✅ = currently equipped",
+                color=var.COLOR_INFO),
+            view=EquipView(self, uid, gid, equippable),
+            ephemeral=True)
 
     # ── /level ──────────────────────────────────────────────────────────────────
 
