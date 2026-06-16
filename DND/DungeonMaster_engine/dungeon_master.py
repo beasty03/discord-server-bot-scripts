@@ -320,20 +320,54 @@ class TargetSelectView(discord.ui.View):
         self.stop()
 
 
+class EnemyTargetView(discord.ui.View):
+    """Ephemeral enemy target picker shown when ⚔️ Attack is clicked with multiple live enemies."""
+
+    def __init__(self, combat_view: "CombatView", uid: str,
+                 enemies: list[dict], run: dict):
+        super().__init__(timeout=30)
+        self._cv  = combat_view
+        self._uid = uid
+
+        options = [
+            discord.SelectOption(
+                label=f"{run.get('combat_enemy_base', {}).get('emoji', '⚔️')} {e['name']} ({e['hp']}/{e['max_hp']} HP)",
+                value=str(e["idx"]),
+            )
+            for e in enemies if e["hp"] > 0
+        ]
+        sel = discord.ui.Select(placeholder="Which enemy do you attack?", options=options)
+        sel.callback = self._on_target
+        self.add_item(sel)
+
+    async def _on_target(self, interaction: discord.Interaction):
+        tidx = int(interaction.data["values"][0])
+        self._cv.actions[self._uid]       = {"action": "attack", "target_idx": tidx}
+        self._cv.enemy_targets[self._uid] = tidx
+        if all(v is not None for v in self._cv.actions.values()):
+            self._cv._done.set()
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="⚔️ Target locked in!", color=0x57F287), view=None)
+        self.stop()
+
+
 class CombatView(discord.ui.View):
     """One round of combat — main action required; bonus action optional."""
 
     def __init__(self, active_uids: list[str], cog: "DungeonMasterCog",
-                 gid: str, participants: list[tuple[str, str]], run: dict):
+                 gid: str, participants: list[tuple[str, str]], run: dict,
+                 enemies: list[dict] | None = None):
         super().__init__(timeout=None)
         self.actions:       dict[str, str | dict | None] = {uid: None for uid in active_uids}
         self.bonus_actions: dict[str, dict | None]       = {uid: None for uid in active_uids}
+        self.enemy_targets: dict[str, int]               = {uid: 0   for uid in active_uids}
         self._done         = asyncio.Event()
         self._active_set   = set(active_uids)
         self._cog          = cog
         self._gid          = gid
         self._participants = participants
         self._run          = run
+        self._enemies      = enemies or []
 
     def _check_done(self):
         if all(v is not None for v in self.actions.values()):
@@ -354,7 +388,26 @@ class CombatView(discord.ui.View):
         self._check_done()
 
     @discord.ui.button(label="⚔️ Attack", style=discord.ButtonStyle.danger,    row=0)
-    async def attack(self, i: discord.Interaction, _): await self._record(i, "attack")
+    async def attack(self, interaction: discord.Interaction, _: discord.ui.Button):
+        uid = str(interaction.user.id)
+        if uid not in self.actions:
+            await interaction.response.send_message("You're not in this combat.", ephemeral=True)
+            return
+        if self.actions[uid] is not None:
+            await interaction.response.send_message("Main action already locked in.", ephemeral=True)
+            return
+        alive_enemies = [e for e in self._enemies if e["hp"] > 0]
+        if len(alive_enemies) > 1:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ Choose your target:", color=var.COLOR_COMBAT),
+                view=EnemyTargetView(self, uid, alive_enemies, self._run),
+                ephemeral=True)
+        else:
+            tidx = alive_enemies[0]["idx"] if alive_enemies else 0
+            self.actions[uid]       = {"action": "attack", "target_idx": tidx}
+            self.enemy_targets[uid] = tidx
+            await interaction.response.send_message("⚔️ **Attack** locked in!", ephemeral=True)
+            self._check_done()
 
     @discord.ui.button(label="🛡️ Dodge",  style=discord.ButtonStyle.secondary, row=0)
     async def dodge(self, i: discord.Interaction, _): await self._record(i, "dodge")
@@ -2217,22 +2270,63 @@ class DungeonMasterCog(commands.Cog):
         gid   = run["gid"]
         enemy      = dict(encounter["enemy"])
         party_size = len(run["participants"])
-        e_hp       = enemy["hp"] + (party_size - 1) * max(1, enemy["hp"] // 3)
-        e_max      = e_hp
-        rnd        = 0
-        last_hitter = None
-        kill_entry: dict = {}
+        _base_hp   = enemy["hp"]
+        # Decide whether to multiply enemies or scale HP based on enemy strength:
+        #   Mooks  (≤30 HP)  → spawn one per player, cap 3, base HP each
+        #   Elites (31-60 HP)→ 1 for solo/duo, 2 for 3-4 players; HP distributed
+        #   Bosses (>60 HP)  → always 1 enemy, scale HP with party size (old behavior)
+        if _base_hp <= 30:
+            n_enemies = min(party_size, 3)
+            _per_hp   = _base_hp
+        elif _base_hp <= 60:
+            n_enemies = 1 if party_size <= 2 else 2
+            _total_hp = _base_hp + (party_size - 1) * max(1, _base_hp // 3)
+            _per_hp   = max(1, _total_hp // n_enemies)
+        else:
+            n_enemies = 1
+            _per_hp   = _base_hp + (party_size - 1) * max(1, _base_hp // 3)
+        enemies    = [
+            {"idx": i, "hp": _per_hp, "max_hp": _per_hp,
+             "name": (enemy["name"] if n_enemies == 1 else f"{enemy['name']} {chr(65 + i)}")}
+            for i in range(n_enemies)
+        ]
+        run["combat_enemies"]     = enemies
+        run["combat_enemy_base"]  = enemy  # base dict with emoji, ac, atk_bonus etc.
+        e_max  = _per_hp           # kept for any leftover refs; use enemies[x]["hp"] instead
+        e_hp   = _per_hp           # placeholder; overwritten per-player each round
+        rnd    = 0
+        last_hitter: tuple | None              = None
+        kill_entries_log: list[dict]           = []   # per-enemy kill log entries
+        already_killed:   set[int]             = set()  # enemy indices already processed
+
+        # ── Local helpers ─────────────────────────────────────────────────────
+        def _first_alive_idx() -> int:
+            for _i, _e in enumerate(enemies):
+                if _e["hp"] > 0:
+                    return _i
+            return 0
+
+        def _clamp_to_alive(tidx: int) -> int:
+            if 0 <= tidx < len(enemies) and enemies[tidx]["hp"] > 0:
+                return tidx
+            return _first_alive_idx()
 
         surprise    = encounter.get("surprise", False)
-        scale_note  = f" *(+{e_hp - enemy['hp']} for party)*" if party_size > 1 else ""
         surp_note   = "  ·  ⚡ **Surprise!**" if surprise else ""
+        if n_enemies == 1:
+            enemy_intro_txt = (
+                f"{enemy['emoji']} **{enemy['name']}**  —  "
+                f"HP **{_per_hp}**  ·  AC **{enemy['ac']}**{surp_note}"
+            )
+        else:
+            enemy_intro_txt = (
+                f"{enemy['emoji']} **{n_enemies}× {enemy['name']}**  —  "
+                f"HP **{_per_hp}** each  ·  AC **{enemy['ac']}**{surp_note}\n"
+                f"*(one enemy per player)*"
+            )
         intro_embed = discord.Embed(
             title=f"⚔️ {encounter['name']}",
-            description=(
-                f"*{encounter['intro']}*\n\n"
-                f"{enemy['emoji']} **{enemy['name']}**  —  "
-                f"HP **{e_hp}**{scale_note}  ·  AC **{enemy['ac']}**{surp_note}"
-            ),
+            description=f"*{encounter['intro']}*\n\n{enemy_intro_txt}",
             color=var.COLOR_COMBAT,
         )
         if encounter.get("image"):
@@ -2344,7 +2438,7 @@ class DungeonMasterCog(commands.Cog):
         await asyncio.sleep(var.RESULT_DELAY)
 
         # ── Combat loop ────────────────────────────────────────────────────────
-        while e_hp > 0:
+        while any(e["hp"] > 0 for e in enemies):
             rnd += 1
 
             # ── Per-round state reset ─────────────────────────────────────────
@@ -2447,8 +2541,13 @@ class DungeonMasterCog(commands.Cog):
                 return "defeat"
 
             # ── Enemy strikes first if it won initiative ───────────────────
-            if enemy_first and e_hp > 0:
-                if active:
+            if enemy_first and any(e["hp"] > 0 for e in enemies):
+                # Each alive enemy gets one pre-round strike
+                for _ei, _eobj in enumerate(enemies):
+                    if _eobj["hp"] <= 0:
+                        continue
+                    if not active:
+                        break
                     taunt_first = [u for u in run.get("taunt_targets", set()) if u in active]
                     t_uid  = random.choice(taunt_first) if taunt_first else random.choice(active)
                     run["taunt_targets"] = set()
@@ -2467,7 +2566,6 @@ class DungeonMasterCog(commands.Cog):
                                 dmg     = dmg1
                                 hit_txt = f"**{dmg} dmg**"
                             ef_sc = _get_subclass(self.db, t_uid, gid, t_stat["char_class"])
-                            ef_notes = ""
                             if t_uid in run.get("raging_uids", set()) and ef_sc == "totem_warrior":
                                 dmg = max(1, dmg // 2)
                                 hit_txt += " *(Bear — half dmg)*"
@@ -2482,28 +2580,25 @@ class DungeonMasterCog(commands.Cog):
                             if run["player_hp"][t_uid] <= 0:
                                 run.setdefault("downed", {})[t_uid] = {"successes": 0, "failures": 0}
                                 ko_txt = f"\n💀 **{t_name}** goes down!"
-                            pre_desc = (f"💥 **{enemy['name']}** strikes first!\n"
+                            pre_desc = (f"💥 **{_eobj['name']}** strikes first!\n"
                                         f"Hits **{t_name}** → {hit_txt}{ko_txt}")
                             run["log"].append({
-                                "type": "enemy_hit", "enemy": enemy["name"],
+                                "type": "enemy_hit", "enemy": _eobj["name"],
                                 "target": t_uid, "target_name": t_name,
                                 "dmg": dmg, "round": rnd, "initiative": True,
                             })
                         else:
-                            pre_desc = f"💨 **{enemy['name']}** lunges first at **{t_name}** — MISS!"
-                        pre_embed = discord.Embed(
-                            title=f"⚡ Round {rnd} — {enemy['name']} goes first!",
-                            description=pre_desc,
-                            color=var.COLOR_COMBAT,
-                        )
-                        await channel.send(embed=pre_embed)
+                            pre_desc = f"💨 **{_eobj['name']}** lunges first at **{t_name}** — MISS!"
+                        await channel.send(embed=discord.Embed(
+                            title=f"⚡ Round {rnd} — {_eobj['name']} goes first!",
+                            description=pre_desc, color=var.COLOR_COMBAT))
                         await asyncio.sleep(1)
+                        # Refresh active after possible KO
+                        active = [uid for uid, _ in run["participants"]
+                                  if uid not in run["fled"]
+                                  and uid not in run.get("dead", set())
+                                  and run["player_hp"].get(uid, 0) > 0]
 
-                # Refresh active after possible KO
-                active = [uid for uid, _ in run["participants"]
-                          if uid not in run["fled"]
-                          and uid not in run.get("dead", set())
-                          and run["player_hp"].get(uid, 0) > 0]
                 if not active:
                     return "defeat"
 
@@ -2521,8 +2616,15 @@ class DungeonMasterCog(commands.Cog):
                 else:
                     hp_lines.append(f"❤️ **{name}** — {hp}/{mhp} HP")
 
-            filled = int((e_hp / e_max) * 10)
-            e_bar  = "█" * filled + "░" * (10 - filled)
+            enemy_hp_lines = []
+            for _eobj in enemies:
+                if _eobj["hp"] > 0:
+                    _filled = int((_eobj["hp"] / _eobj["max_hp"]) * 10)
+                    _bar    = "█" * _filled + "░" * (10 - _filled)
+                    enemy_hp_lines.append(
+                        f"{enemy['emoji']} **{_eobj['name']}** HP: `{_bar}` {_eobj['hp']}/{_eobj['max_hp']}")
+                else:
+                    enemy_hp_lines.append(f"💀 ~~{_eobj['name']}~~")
 
             bonuses_txt: list[str] = []
             if run.get("raging_uids"):
@@ -2534,10 +2636,9 @@ class DungeonMasterCog(commands.Cog):
             buff_line = ("\n" + " · ".join(bonuses_txt)) if bonuses_txt else ""
 
             status = discord.Embed(
-                title=f"⚔️ Round {rnd}  —  {enemy['name']}",
+                title=f"⚔️ Round {rnd}  —  {encounter['name']}",
                 description=(
-                    f"{enemy['emoji']} **{enemy['name']}**\n"
-                    f"HP: `{e_bar}` {e_hp}/{e_max}\n\n"
+                    "\n".join(enemy_hp_lines) + "\n\n"
                     + "\n".join(hp_lines)
                     + buff_line
                 ),
@@ -2546,7 +2647,7 @@ class DungeonMasterCog(commands.Cog):
             status.set_footer(
                 text="⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus (Item/Taunt + class) · 🧪 Item")
 
-            view = CombatView(active, self, gid, run["participants"], run)
+            view = CombatView(active, self, gid, run["participants"], run, enemies=enemies)
             msg  = await channel.send(embed=status, view=view)
 
             try:
@@ -2755,6 +2856,7 @@ class DungeonMasterCog(commands.Cog):
                     if uid not in run.get("raging_uids", set()):
                         round_lines.append(f"🔥 **{name}** tried Frenzy but isn't raging!")
                     elif stats:
+                        _fa_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
                         fr = random.randint(1, 20)
                         ft = fr + stats["atk_bonus"]
                         if fr == 20 or ft >= enemy["ac"]:
@@ -2766,7 +2868,7 @@ class DungeonMasterCog(commands.Cog):
                             else:
                                 fdmg = fd1 * 2
                                 round_lines.append(f"🔥 **{name}** Frenzy attack → **{fdmg} dmg** *(rage ×2)*")
-                            e_hp = max(0, e_hp - fdmg)
+                            enemies[_fa_tidx]["hp"] = max(0, enemies[_fa_tidx]["hp"] - fdmg)
                             last_hitter = (uid, name)
                         else:
                             round_lines.append(f"🔥 **{name}** Frenzy attack missed! (rolled {fr})")
@@ -2774,8 +2876,9 @@ class DungeonMasterCog(commands.Cog):
                                            "feature": fid, "round": rnd})
 
                 elif fid == "eldritch_spell":
+                    _es_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
                     es_dmg = random.randint(1, 8)
-                    e_hp   = max(0, e_hp - es_dmg)
+                    enemies[_es_tidx]["hp"] = max(0, enemies[_es_tidx]["hp"] - es_dmg)
                     last_hitter = (uid, name)
                     round_lines.append(f"🔮 **{name}** War Magic — Booming Blade → **{es_dmg} force dmg** *(auto-hit)*")
                     run["log"].append({"type": "feature", "uid": uid, "name": name,
@@ -2834,6 +2937,7 @@ class DungeonMasterCog(commands.Cog):
                         round_lines.append(
                             f"⚔️ **{name}** War Magic Strike — no spell cast this round *(fizzles)*")
                     else:
+                        _wm_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
                         wm_r = random.randint(1, 20)
                         wm_t = wm_r + stats["atk_bonus"]
                         if wm_r == 20 or wm_t >= enemy["ac"]:
@@ -2845,7 +2949,7 @@ class DungeonMasterCog(commands.Cog):
                             else:
                                 wdmg   = wd1
                                 wm_txt = f"**{wdmg}**"
-                            e_hp = max(0, e_hp - wdmg)
+                            enemies[_wm_tidx]["hp"] = max(0, enemies[_wm_tidx]["hp"] - wdmg)
                             last_hitter = (uid, name)
                             round_lines.append(
                                 f"⚔️ **{name}** War Magic Strike → {wm_txt} dmg *(bonus)*")
@@ -2899,6 +3003,8 @@ class DungeonMasterCog(commands.Cog):
             for uid, name in run["participants"]:
                 if uid not in active:
                     continue
+                if all(e["hp"] <= 0 for e in enemies):
+                    break
                 action = view.actions.get(uid, "dodge")
                 if uid in run["fled"]:
                     continue  # already fled via bonus action
@@ -2964,7 +3070,11 @@ class DungeonMasterCog(commands.Cog):
                             "item": item_id, "target": target_uid, "heal": actual, "round": rnd,
                         })
 
-                elif action == "attack":
+                elif action == "attack" or (isinstance(action, dict) and action.get("action") == "attack"):
+                    _atk_tidx = _clamp_to_alive(
+                        action.get("target_idx", 0) if isinstance(action, dict) else
+                        view.enemy_targets.get(uid, 0))
+                    e_hp = enemies[_atk_tidx]["hp"]
                     stats = self._get_char_combat_stats(uid, gid)
                     if stats:
                         char_class = stats["char_class"]
@@ -3249,14 +3359,16 @@ class DungeonMasterCog(commands.Cog):
                                 "n_attacks": n_atk, "dmg": total_dmg, "round": rnd, "enemy": enemy["name"]})
                     else:
                         round_lines.append(f"⚔️ **{name}** swings wildly and misses!")
-                    if e_hp <= 0:
-                        break
+                    enemies[_atk_tidx]["hp"] = e_hp  # write back to the targeted enemy
 
                 elif isinstance(action, dict) and action.get("action") == "feature":
                     fid   = action["feature_id"]
                     stats = self._get_char_combat_stats(uid, gid)
                     level = stats["level"] if stats else 1
                     wis   = stats["mods"]["wisdom"] if stats else 0
+                    # Feature actions auto-target the first alive enemy
+                    _feat_tidx = _first_alive_idx()
+                    e_hp = enemies[_feat_tidx]["hp"]
                     # Action Surge uses its own counter; everything else uses features_used
                     if fid == "action_surge":
                         run.setdefault("action_surge_uses", {})[uid] = max(
@@ -3306,8 +3418,7 @@ class DungeonMasterCog(commands.Cog):
                             f"⚡ **{name}** Action Surge ×{surge_n}! → {' | '.join(surge_hits)}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "fire_bolt" and stats:
                         fb_dice = 1 if level < 5 else (2 if level < 11 else (3 if level < 17 else 4))
@@ -3323,8 +3434,7 @@ class DungeonMasterCog(commands.Cog):
                             f"🔥 **{name}** Fire Bolt ({fb_dice}d10) → **{fb_dmg} fire dmg** *(auto-hit)*{es_note}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": fb_dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "sneak_attack" and stats:
                         sneak_dice = max(1, (level + 1) // 2)
@@ -3348,8 +3458,7 @@ class DungeonMasterCog(commands.Cog):
                             round_lines.append(f"🗡️ **{name}** Sneak Attack missed!")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "sacred_flame" and stats:
                         dmg = max(1, random.randint(1, 8) + wis)
@@ -3358,8 +3467,7 @@ class DungeonMasterCog(commands.Cog):
                         round_lines.append(f"🔥 **{name}** Sacred Flame → **{dmg} radiant dmg** *(auto-hit)*")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "magic_missile" and stats:
                         n_bolts   = min(6, 3 + (level - 1) // 3)
@@ -3378,8 +3486,7 @@ class DungeonMasterCog(commands.Cog):
                             f"✨ **{name}** Magic Missile — {n_bolts} {bolt_s} → **{total_dmg} dmg** *(auto-hit)*{sculpt_txt}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": total_dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "divine_smite" and stats:
                         r  = random.randint(1, 20)
@@ -3408,8 +3515,7 @@ class DungeonMasterCog(commands.Cog):
                                 f"⚡ **{name}** Divine Smite missed! (rolled {r} {bx} = **{t}** vs AC {enemy['ac']})")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "cure_wounds_rng" and stats:
                         wis_cw  = stats["mods"]["wisdom"]
@@ -3437,8 +3543,7 @@ class DungeonMasterCog(commands.Cog):
                             f"🔥 **{name}** Burning Hands ({bh_dice}d6) → **{bh_dmg} fire dmg** *(auto-hit)*{sculpt_t}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": bh_dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "thunderwave" and stats:
                         int_mod = stats["mods"]["intelligence"]
@@ -3449,11 +3554,10 @@ class DungeonMasterCog(commands.Cog):
                         last_hitter = (uid, name)
                         round_lines.append(
                             f"🌊 **{name}** Thunderwave → **{tw_dmg} thunder dmg** *(auto-hit)* · "
-                            f"**{enemy['name']}** is pushed back! *(ATK −2 next round)*")
+                            f"**{enemies[_feat_tidx]['name']}** is pushed back! *(ATK −2 next round)*")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": tw_dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "scorching_ray" and stats:
                         sr_hits: list[str] = []
@@ -3479,8 +3583,7 @@ class DungeonMasterCog(commands.Cog):
                             f"☀️ **{name}** Scorching Ray → {' | '.join(sr_hits)} *(total {sr_total} fire)*")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": sr_total, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "fireball" and stats:
                         fb_dmg = sum(random.randint(1, 6) for _ in range(8))
@@ -3496,8 +3599,7 @@ class DungeonMasterCog(commands.Cog):
                             f"💥 **{name}** FIREBALL! (8d6) → **{fb_dmg} fire dmg** *(auto-hit)*{evoc_t}")
                         run["log"].append({"type": "feature", "uid": uid, "name": name,
                                            "feature": fid, "dmg": fb_dmg, "round": rnd})
-                        if e_hp <= 0:
-                            break
+                        enemies[_feat_tidx]["hp"] = e_hp
 
                     elif fid == "volley" and stats:
                         if level < 11:
@@ -3531,21 +3633,26 @@ class DungeonMasterCog(commands.Cog):
                             round_lines.append(f"🏹 **{name}** Volley! → {' | '.join(vol_hits)}")
                             run["log"].append({"type": "feature", "uid": uid, "name": name,
                                                "feature": fid, "round": rnd})
-                            if e_hp <= 0:
-                                break
+                            enemies[_feat_tidx]["hp"] = e_hp
 
             # ── Enemy retaliates (not on surprise round 1) ─────────────────
             _counterspelled = bool(run.get("counterspell_uids"))
             run["counterspell_uids"] = set()
             if _counterspelled:
                 round_lines.append(f"🚫 **{enemy['name']}** is disrupted — no retaliation this round!")
-            if not enemy_first and e_hp > 0 and not (surprise and rnd == 1) and not _counterspelled:
+            if not enemy_first and not (surprise and rnd == 1) and not _counterspelled:
                 non_fled = [uid for uid in active
                             if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
-                if non_fled:
-                    taunt_now   = [u for u in run.get("taunt_targets", set()) if u in non_fled]
+                taunt_uids = set(run.get("taunt_targets", set()))
+                run["taunt_targets"] = set()
+                # Each alive enemy attacks one random player
+                for _ret_eobj in enemies:
+                    if _ret_eobj["hp"] <= 0:
+                        continue
+                    if not non_fled:
+                        break
+                    taunt_now   = [u for u in taunt_uids if u in non_fled]
                     target_uid  = random.choice(taunt_now) if taunt_now else random.choice(non_fled)
-                    run["taunt_targets"] = set()
                     target_name = next((n for u, n in run["participants"] if u == target_uid), target_uid)
                     stats       = self._get_char_combat_stats(target_uid, gid)
                     if stats:
@@ -3642,23 +3749,21 @@ class DungeonMasterCog(commands.Cog):
                             ward_txt  = f" *(Ward absorbed {ward_abs})*" if ward_abs else ""
                             if roll == 20:
                                 round_lines.append(
-                                    f"💥 **{enemy['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}{ward_txt}{note_sfx}")
+                                    f"💥 **{_ret_eobj['name']}** ✨ **CRIT!** on **{target_name}** — {dmg1} + {dmg2} = **{dmg} dmg**{dodge_txt}{ward_txt}{note_sfx}")
                             else:
                                 round_lines.append(
-                                    f"💥 **{enemy['name']}** hits **{target_name}** → {dmg} dmg{dodge_txt}{ward_txt}{note_sfx}")
+                                    f"💥 **{_ret_eobj['name']}** hits **{target_name}** → {dmg} dmg{dodge_txt}{ward_txt}{note_sfx}")
                             run["log"].append({
-                                "type": "enemy_hit", "enemy": enemy["name"],
+                                "type": "enemy_hit", "enemy": _ret_eobj["name"],
                                 "target": target_uid, "target_name": target_name,
                                 "dmg": dmg, "round": rnd,
                             })
                             if run["player_hp"][target_uid] <= 0:
                                 # Indomitable: Fighter saves vs death
-                                t_stats_i   = stats
-                                indom_left  = run.get("indomitable_uses", {}).get(target_uid, 0)
-                                if (t_stats_i and t_stats_i["char_class"] == "fighter"
-                                        and indom_left > 0):
-                                    con_mod  = t_stats_i["mods"]["constitution"]
-                                    isave    = random.randint(1, 20) + con_mod
+                                indom_left = run.get("indomitable_uses", {}).get(target_uid, 0)
+                                if stats and stats["char_class"] == "fighter" and indom_left > 0:
+                                    con_mod = stats["mods"]["constitution"]
+                                    isave   = random.randint(1, 20) + con_mod
                                     run["indomitable_uses"][target_uid] -= 1
                                     if isave >= 15:
                                         run["player_hp"][target_uid] = 1
@@ -3672,9 +3777,12 @@ class DungeonMasterCog(commands.Cog):
                                     run.setdefault("downed", {})[target_uid] = {"successes": 0, "failures": 0}
                                     round_lines.append(
                                         f"💀 **{target_name}** goes down! *(death saves begin next round)*")
+                                # Refresh non_fled so a dead player isn't retargeted
+                                non_fled = [u for u in non_fled
+                                            if run["player_hp"].get(u, 0) > 0]
                         else:
-                            round_lines.append(f"💨 **{enemy['name']}** attacks **{target_name}** — MISS!{note_sfx}")
-                            # BM Riposte: counter-attack on miss
+                            round_lines.append(f"💨 **{_ret_eobj['name']}** attacks **{target_name}** — MISS!{note_sfx}")
+                            # BM Riposte: counter-attack on miss (targets the riposting enemy)
                             if target_uid in run.get("bm_riposte_set", set()):
                                 rip_pend = run.get("bm_pending", {}).get(target_uid, {})
                                 rip_die  = rip_pend.get("die", 0) if rip_pend.get("type") == "riposte" else 0
@@ -3692,7 +3800,7 @@ class DungeonMasterCog(commands.Cog):
                                         rdmg = rd1 + rip_die
                                         round_lines.append(
                                             f"🔄 **{target_name}** Riposte → **{rdmg} dmg** (+{rip_die} die)")
-                                    e_hp = max(0, e_hp - rdmg)
+                                    _ret_eobj["hp"] = max(0, _ret_eobj["hp"] - rdmg)
                                     last_hitter = (target_uid, target_name)
                                 else:
                                     round_lines.append(f"🔄 **{target_name}** Riposte missed! (rolled {rip_r})")
@@ -3704,7 +3812,8 @@ class DungeonMasterCog(commands.Cog):
                             if uid not in run["fled"]
                             and uid not in run.get("dead", set())
                             and run["player_hp"].get(uid, 0) > 0]
-            color = var.COLOR_WIN if e_hp <= 0 else var.COLOR_COMBAT
+            all_enemies_dead = all(e["hp"] <= 0 for e in enemies)
+            color = var.COLOR_WIN if all_enemies_dead else var.COLOR_COMBAT
 
             result_embed = discord.Embed(
                 title=f"Round {rnd} — Results",
@@ -3713,13 +3822,20 @@ class DungeonMasterCog(commands.Cog):
             )
             await channel.send(embed=result_embed)
 
-            if e_hp <= 0:
+            if all_enemies_dead:
+                # Kill blow messages for each enemy that died this round
+                for _ke_idx, _ke in enumerate(enemies):
+                    if _ke_idx in already_killed:
+                        continue
+                    if _ke["hp"] <= 0:
+                        already_killed.add(_ke_idx)
                 if last_hitter:
                     kill_entry = {
                         "type": "kill", "uid": last_hitter[0], "name": last_hitter[1],
                         "enemy": enemy["name"], "kill_flavor": None,
                     }
                     run["log"].append(kill_entry)
+                    kill_entries_log.append(kill_entry)
                     async with channel.typing():
                         await asyncio.sleep(1.5)
                     await channel.send(
