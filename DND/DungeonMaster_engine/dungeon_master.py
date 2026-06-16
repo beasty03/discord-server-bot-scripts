@@ -1768,6 +1768,71 @@ class DungeonMasterCog(commands.Cog):
             view=PrepareSpellsView(self, uid, gid, preparable, prepared, max_prep),
             ephemeral=True)
 
+    # ── /spells ───────────────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="spells",
+        description="Wizard only: view your known and prepared spells.")
+    async def spells(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        rows = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
+            (uid, gid))
+        if not rows:
+            await interaction.response.send_message(
+                embed=self._err("You don't have a character yet."), ephemeral=True)
+            return
+        char_class, level = rows[0]
+        if char_class != "wizard":
+            await interaction.response.send_message(
+                embed=self._err("Only Wizards have spells."), ephemeral=True)
+            return
+
+        known    = _get_wizard_known_spells(self.db, uid, gid)
+        prepared = _get_wizard_prepared_spells(self.db, uid, gid)
+
+        spell_lookup = {s["id"]: s for s in char_var.WIZARD_SPELLS}
+        cantrips     = char_var.WIZARD_CANTRIPS
+
+        cantrip_lines  = []
+        prepared_lines = []
+        known_lines    = []
+
+        for sid in (known or list(char_var.WIZARD_STARTING_SPELLS)):
+            s = spell_lookup.get(sid)
+            if not s:
+                continue
+            level_ok = s["level_req"] <= (level or 1)
+            locked   = "" if level_ok else f" *(Lv {s['level_req']} req)*"
+            if sid in cantrips:
+                cantrip_lines.append(f"{s['emoji']} **{s['name']}** — {s['desc']}")
+            elif sid in prepared:
+                prepared_lines.append(
+                    f"{s['emoji']} **{s['name']}**{locked} — {s['desc']}"
+                    + ("" if s["once_per"] else ""))
+            else:
+                known_lines.append(f"{s['emoji']} ~~{s['name']}~~{locked} *(not prepared)*")
+
+        parts = []
+        if cantrip_lines:
+            parts.append("**✨ Cantrips (always available)**\n" + "\n".join(cantrip_lines))
+        if prepared_lines:
+            parts.append("**📖 Prepared spells**\n" + "\n".join(prepared_lines))
+        if known_lines:
+            parts.append("**📚 Known but not prepared**\n" + "\n".join(known_lines))
+        if not parts:
+            parts.append("No spells yet. Use `/prepare_spells` to set up your spellbook.")
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🪄 Your Spellbook",
+                description="\n\n".join(parts),
+                color=var.COLOR_CAMPAIGN,
+            ).set_footer(text="Use /prepare_spells to change your loadout · /learn_spell to add new spells"),
+            ephemeral=True)
+
     # ── /learn_spell ──────────────────────────────────────────────────────────
 
     @app_commands.command(
