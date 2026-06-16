@@ -646,12 +646,10 @@ class LevelUpView(discord.ui.View):
 
 
 class _BonusPickView(discord.ui.View):
-    """Ephemeral: pick a bonus action — class feature OR general utility (Flee/Item/Help/Taunt)."""
+    """Ephemeral: pick a bonus action — class feature OR general utility (Item/Taunt)."""
 
     _UTILITY = [
-        discord.SelectOption(label="🏃 Flee",  value="__flee__",  description="Escape the battle (main action still fires)"),
         discord.SelectOption(label="🧪 Item",  value="__item__",  description="Use a consumable and still act"),
-        discord.SelectOption(label="🤝 Help",  value="__help__",  description="Aid an ally — stabilize or +4 to hit"),
         discord.SelectOption(label="🗣️ Taunt", value="__taunt__", description="Force the enemy to target you next hit"),
     ]
 
@@ -956,7 +954,9 @@ class WanderJoinView(discord.ui.View):
                 "You're already in an active campaign run.", ephemeral=True)
             return
         self._joiner_set.add(uid)
-        self.joiners.append((uid, interaction.user.display_name))
+        gid = str(interaction.guild_id)
+        char_name = self._cog._char_display_name(uid, gid, interaction.user.display_name)
+        self.joiners.append((uid, char_name))
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
         if self._joiner_set >= set(self.party_members):
             self._all_joined.set()
@@ -1182,6 +1182,11 @@ class DungeonMasterCog(commands.Cog):
 
     def _find_item(self, item_id: str) -> dict | None:
         return next((i for i in self._all_char_items() if i["id"] == item_id), None)
+
+    def _char_display_name(self, uid: str, gid: str, fallback: str) -> str:
+        rows = self.db.execute(
+            "SELECT name FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        return rows[0][0] if rows and rows[0][0] else fallback
 
     @staticmethod
     def _err(msg: str) -> discord.Embed:
@@ -1795,6 +1800,42 @@ class DungeonMasterCog(commands.Cog):
             embed.set_footer(text=f"Use /companion new_name:… to rename {display_name}.")
         await interaction.response.send_message(embed=embed)
 
+    # ── /set_level ────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="set_level", description="[Admin] Set a player's character level.")
+    @app_commands.describe(member="The player", level="New level (1–20)")
+    @app_commands.default_permissions(administrator=True)
+    async def set_level(self, interaction: discord.Interaction, member: discord.Member, level: int):
+        if not 1 <= level <= 20:
+            await interaction.response.send_message(
+                embed=self._err("Level must be between 1 and 20."), ephemeral=True)
+            return
+        uid = str(member.id)
+        gid = str(interaction.guild_id)
+        rows = self.db.execute(
+            "SELECT name FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        if not rows:
+            await interaction.response.send_message(
+                embed=self._err(f"{member.display_name} doesn't have a character."), ephemeral=True)
+            return
+        char_name = rows[0][0] or member.display_name
+        # Compute XP to reach this level (use the threshold table from char_var)
+        target_xp = char_var.XP_THRESHOLDS.get(level, char_var.XP_THRESHOLDS[level])
+        self.db.execute(
+            "UPDATE dnd_characters SET level=?, xp=? WHERE user_id=? AND guild_id=?",
+            (level, target_xp, uid, gid))
+        # Recompute and save max HP for new level
+        stats = self._get_char_combat_stats(uid, gid)
+        if stats:
+            self.db.execute(
+                "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
+                (stats["max_hp"], uid, gid))
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ **{char_name}** is now level **{level}** ({target_xp:,} XP).",
+                color=var.COLOR_WIN),
+            ephemeral=True)
+
     # ── /roll ─────────────────────────────────────────────────────────────────
 
     @app_commands.command(name="roll", description="Roll dice. Examples: d20 · 2d6 · 1d8+3")
@@ -1904,7 +1945,7 @@ class DungeonMasterCog(commands.Cog):
             asyncio.create_task(
                 self._run_campaign(
                     interaction, campaign, None, run_id, None, None,
-                    solo=[(uid, interaction.user.display_name)]))
+                    solo=[(uid, self._char_display_name(uid, gid, interaction.user.display_name))]))
 
     # ── Campaign runner ───────────────────────────────────────────────────────
 
@@ -2000,9 +2041,10 @@ class DungeonMasterCog(commands.Cog):
                 run_state["features_used"][uid]  = set()
                 run_state["subclass_used"][uid]  = set()
                 stats = self._get_char_combat_stats(uid, gid)
-                hp = stats["max_hp"] if stats else 10
-                run_state["player_hp"][uid]     = hp
-                run_state["player_max_hp"][uid] = hp
+                hp_max = stats["max_hp"]     if stats else 10
+                hp_cur = stats["current_hp"] if stats else hp_max
+                run_state["player_hp"][uid]     = hp_cur
+                run_state["player_max_hp"][uid] = hp_max
                 if stats:
                     char_class = stats["char_class"]
                     level      = stats["level"]
@@ -2125,13 +2167,30 @@ class DungeonMasterCog(commands.Cog):
                     color=var.COLOR_WIN,
                 )
             else:
+                # Death penalty: non-fleeing players lose 50% of their coins
+                penalty_lines = []
+                for p_uid, p_name in participants:
+                    if p_uid not in run.get("fled", set()):
+                        bal     = self.db.get_balance(p_uid, gid)
+                        penalty = bal // 2
+                        if penalty > 0:
+                            self.db.update_balance(p_uid, gid, -penalty, "death_penalty")
+                            penalty_lines.append(f"• **{p_name}** lost {penalty:,} {var.CURRENCY_SYMBOL}")
+                desc = "The party was overwhelmed and forced to retreat.\n*(Use `/rest` to recover HP.)*"
+                if penalty_lines:
+                    desc += "\n\n💸 **Death penalty (−50% coins):**\n" + "\n".join(penalty_lines)
                 result_embed = discord.Embed(
                     title=f"❌ {campaign['name']} — Defeated!",
-                    description=(
-                        "The party was overwhelmed and forced to retreat.\n"
-                        "*(No rewards — regroup and try again.)*"),
+                    description=desc,
                     color=var.COLOR_ERROR,
                 )
+
+            # Save current HP to DB for all participants
+            for p_uid, _ in participants:
+                final_hp = run["player_hp"].get(p_uid, 0)
+                self.db.execute(
+                    "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
+                    (max(0, final_hp), p_uid, gid))
 
             result_embed.set_footer(text=var.SERVER_NAME)
             await interaction.channel.send(embed=result_embed)
@@ -2485,7 +2544,7 @@ class DungeonMasterCog(commands.Cog):
                 color=var.COLOR_COMBAT,
             )
             status.set_footer(
-                text=f"⏱️ {var.ROUND_TIMEOUT}s — ⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class · ✨ Bonus (Flee/Item/Help/Taunt + class) · 🧪 Item")
+                text="⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus (Item/Taunt + class) · 🧪 Item")
 
             view = CombatView(active, self, gid, run["participants"], run)
             msg  = await channel.send(embed=status, view=view)
@@ -3091,38 +3150,6 @@ class DungeonMasterCog(commands.Cog):
                                 )
                                 hit_parts.append(f"✨CRIT **{dmg}**{extras}" if crit else f"**{dmg}**{extras}")
 
-                                if uid in run.get("beast_companion", set()) and i == 0:
-                                    _comp    = run.get("beast_companion_item", {}).get(uid)
-                                    if _comp:
-                                        _b_dmg  = _comp.get("beast_dmg",     "1d6+2")
-                                        _b_amod = _comp.get("beast_atk_mod", -2)
-                                        _b_emj  = _comp.get("emoji",         "🐾")
-                                        _b_nm   = _comp.get("beast_name",    "Beast")
-                                    else:
-                                        _b_dmg  = "1d6+2"
-                                        _b_amod = -2
-                                        _b_emj  = "🐺"
-                                        _b_nm   = "Wolf"
-                                    _cn_row = self.db.execute(
-                                        "SELECT choice_val FROM dnd_character_choices "
-                                        "WHERE user_id=? AND guild_id=? AND choice_key=?",
-                                        (uid, gid, "companion_name"))
-                                    if _cn_row:
-                                        _b_nm = _cn_row[0][0]
-                                    b_atk = stats["atk_bonus"] + _b_amod
-                                    br    = random.randint(1, 20)
-                                    bt    = br + b_atk
-                                    if br == 20 or bt >= enemy["ac"]:
-                                        bd   = _roll(_b_dmg)
-                                        if br == 20:
-                                            bd += _roll(_b_dmg)
-                                        e_hp = max(0, e_hp - bd)
-                                        total_dmg += bd
-                                        crit_tag = " ✨CRIT!" if br == 20 else ""
-                                        hit_parts.append(f"{_b_emj} {_b_nm}{crit_tag} **{bd}**")
-                                    else:
-                                        hit_parts.append(f"{_b_emj} {_b_nm} miss")
-
                                 # GWM: auto bonus attack after crit or kill
                                 if (any_crit or e_hp <= 0) and p_feat == "great_weapon_master" and not is_ranged:
                                     gwm_r = random.randint(1, 20)
@@ -3144,6 +3171,40 @@ class DungeonMasterCog(commands.Cog):
                                     any_crit = False  # only trigger once
                             else:
                                 hit_parts.append("miss")
+
+                            # Beast companion always attacks on first attack, win or lose
+                            if uid in run.get("beast_companion", set()) and i == 0:
+                                _comp    = run.get("beast_companion_item", {}).get(uid)
+                                if _comp:
+                                    _b_dmg  = _comp.get("beast_dmg",     "1d6+2")
+                                    _b_amod = _comp.get("beast_atk_mod", -2)
+                                    _b_emj  = _comp.get("emoji",         "🐾")
+                                    _b_nm   = _comp.get("beast_name",    "Beast")
+                                else:
+                                    _b_dmg  = "1d6+2"
+                                    _b_amod = -2
+                                    _b_emj  = "🐺"
+                                    _b_nm   = "Wolf"
+                                _cn_row = self.db.execute(
+                                    "SELECT choice_val FROM dnd_character_choices "
+                                    "WHERE user_id=? AND guild_id=? AND choice_key=?",
+                                    (uid, gid, "companion_name"))
+                                if _cn_row:
+                                    _b_nm = _cn_row[0][0]
+                                b_atk = stats["atk_bonus"] + _b_amod
+                                br    = random.randint(1, 20)
+                                bt    = br + b_atk
+                                if br == 20 or bt >= enemy["ac"]:
+                                    bd   = _roll(_b_dmg)
+                                    if br == 20:
+                                        bd += _roll(_b_dmg)
+                                    e_hp = max(0, e_hp - bd)
+                                    total_dmg += bd
+                                    crit_tag = " ✨CRIT!" if br == 20 else ""
+                                    hit_parts.append(f"{_b_emj} {_b_nm}{crit_tag} **{bd}**")
+                                else:
+                                    hit_parts.append(f"{_b_emj} {_b_nm} miss")
+
                             if e_hp <= 0:
                                 break
 

@@ -374,6 +374,20 @@ class ShopCog(commands.Cog):
         view = ShopSelectView(self, uid, gid, available) if available else None
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    # ── /restock_store ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="restock_shop", description="[Admin] Force-restock the shop with new items today.")
+    @app_commands.default_permissions(administrator=True)
+    async def restock_store(self, interaction: discord.Interaction):
+        today = date.today().isoformat()
+        self.db.execute("DELETE FROM dnd_shop_stock WHERE date=?", (today,))
+        self._generate_daily_stock(today)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"🛒 Shop restocked for today! Use `/shop` to see the new inventory.",
+                color=var.COLOR_WIN),
+            ephemeral=True)
+
     # ── /shop_sell ─────────────────────────────────────────────────────────────
 
     @app_commands.command(name="shop_sell", description="Sell items from your backpack.")
@@ -413,7 +427,10 @@ class ShopCog(commands.Cog):
                 ephemeral=True)
             return
 
-        total = item_data["sell"] * qty
+        # Sell price = 85% of shop buy price, falling back to item's hardcoded sell value
+        shop_listing = next((s for s in var.SHOP_ITEMS if s["id"] == item), None)
+        unit_price   = round((shop_listing["price"] * 0.85)) if shop_listing else item_data["sell"]
+        total        = unit_price * qty
         self.db.execute(
             "UPDATE dnd_inventory SET qty=qty-? WHERE user_id=? AND guild_id=? AND item_id=?",
             (qty, uid, gid, item))
