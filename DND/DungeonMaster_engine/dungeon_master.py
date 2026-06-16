@@ -718,10 +718,9 @@ class LevelUpView(discord.ui.View):
 
 
 class _BonusPickView(discord.ui.View):
-    """Ephemeral: pick a bonus action — class feature OR general utility (Item/Taunt)."""
+    """Ephemeral: pick a bonus action — class feature OR general utility (Taunt)."""
 
     _UTILITY = [
-        discord.SelectOption(label="🧪 Item",  value="__item__",  description="Use a consumable and still act"),
         discord.SelectOption(label="🗣️ Taunt", value="__taunt__", description="Force the enemy to target you next hit"),
     ]
 
@@ -750,31 +749,6 @@ class _BonusPickView(discord.ui.View):
             self._cv.bonus_actions[self._uid] = {"action": "taunt"}
             await interaction.response.edit_message(
                 embed=discord.Embed(description="🗣️ Taunt locked in!", color=var.COLOR_WIN), view=None)
-        elif val == "__item__":
-            rows = self._cv._cog.db.execute(
-                "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
-                (self._uid, self._cv._gid))
-            all_items   = self._cv._cog._all_char_items()
-            consumables = [
-                (iid, qty) for iid, qty in rows
-                if next((i for i in all_items if i["id"] == iid and i.get("slot") == "consumable"), None)
-            ]
-            if not consumables:
-                await interaction.response.edit_message(
-                    embed=discord.Embed(description="No usable items in your pack!", color=var.COLOR_ERROR), view=None)
-                self.stop()
-                return
-            opts = [
-                discord.SelectOption(
-                    label=f"{next((i for i in all_items if i['id']==iid),{}).get('name',iid)} ×{qty}",
-                    description=f"Heals {next((i for i in all_items if i['id']==iid),{}).get('heal_expr','?')} HP",
-                    value=iid,
-                )
-                for iid, qty in consumables
-            ]
-            await interaction.response.edit_message(
-                embed=discord.Embed(description="🧪 Pick an item:", color=var.COLOR_INFO),
-                view=_ItemPickView(self._cv, self._uid, self._all_members, opts, is_bonus=True))
         elif val == "__help__":
             if _is_help_used(self._cv._cog.db, self._uid, self._cv._gid):
                 await interaction.response.edit_message(
@@ -2431,6 +2405,13 @@ class DungeonMasterCog(commands.Cog):
                 _int_mod = _uid_stats["mods"]["intelligence"]
                 run["ward_hp"][_uid] = max(1, _int_mod + _uid_level)
 
+        # Carry setback disadvantage earned from a failed skill check into this combat
+        run["disadvantage_uids"] = set()
+        if run.pop("setback_disadvantage", False):
+            run["disadvantage_uids"] = {u for u, _ in run["participants"]
+                                         if u not in run["fled"]
+                                         and run["player_hp"].get(u, 0) > 0}
+
         enemy      = dict(encounter["enemy"])
         party_size = len(run["participants"])
         _base_hp   = enemy["hp"]
@@ -2496,6 +2477,15 @@ class DungeonMasterCog(commands.Cog):
             intro_embed.set_image(url=encounter["image"])
         await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
+
+        if run["disadvantage_uids"]:
+            await channel.send(embed=discord.Embed(
+                description=(
+                    "⬇️ **Disadvantage** — the party enters this fight rattled from the failed check. "
+                    "All attack rolls are made at disadvantage *(roll twice, take lower)*."
+                ),
+                color=var.COLOR_ERROR))
+            await asyncio.sleep(1)
 
         # Ranger Primeval Awareness (Lv 3+): sense if enemy matches favored type
         for _pa_uid, _pa_name in run["participants"]:
@@ -2719,6 +2709,18 @@ class DungeonMasterCog(commands.Cog):
                     return "all_fled"
                 return "defeat"
 
+            # ── Enemy surprise: players stunned, cannot act round 1 ────────
+            if enemy_surprise and rnd == 1:
+                await channel.send(embed=discord.Embed(
+                    title="😵 Surprise Round — Party is Stunned!",
+                    description=(
+                        "The ambush leaves the party scrambling — "
+                        "**you cannot act this round!**"
+                    ),
+                    color=var.COLOR_ERROR))
+                await asyncio.sleep(2)
+                continue
+
             # ── Enemy strikes first if it won initiative ───────────────────
             if enemy_first and any(e["hp"] > 0 for e in enemies):
                 # Each alive enemy gets one pre-round strike
@@ -2814,8 +2816,15 @@ class DungeonMasterCog(commands.Cog):
                 bonuses_txt.append(f"🎯 Marked: {', '.join(mark_names)}")
             buff_line = ("\n" + " · ".join(bonuses_txt)) if bonuses_txt else ""
 
+            if surprise and rnd == 1:
+                round_title  = f"⚡ Surprise Round  —  {encounter['name']}"
+                round_footer = "⚡ Free round — the enemy cannot react! Choose your actions."
+            else:
+                round_title  = f"⚔️ Round {rnd}  —  {encounter['name']}"
+                round_footer = "⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus (Taunt + class) · 🧪 Item"
+
             status = discord.Embed(
-                title=f"⚔️ Round {rnd}  —  {encounter['name']}",
+                title=round_title,
                 description=(
                     "\n".join(enemy_hp_lines) + "\n\n"
                     + "\n".join(hp_lines)
@@ -2823,8 +2832,7 @@ class DungeonMasterCog(commands.Cog):
                 ),
                 color=var.COLOR_COMBAT,
             )
-            status.set_footer(
-                text="⚔️ Attack · 🛡️ Dodge · 🏃 Flee · 🤝 Help · ⚡ Class Action · ✨ Bonus (Item/Taunt + class) · 🧪 Item")
+            status.set_footer(text=round_footer)
 
             view = CombatView(active, self, gid, run["participants"], run, enemies=enemies)
             msg  = await channel.send(embed=status, view=view)
@@ -3288,6 +3296,10 @@ class DungeonMasterCog(commands.Cog):
                             roll  = random.randint(1, 20)
                             bonus = help_bonus if i == 0 else 0
                             atk_ann: list[str] = []
+
+                            if uid in run.get("disadvantage_uids", set()):
+                                roll = min(roll, random.randint(1, 20))
+                                atk_ann.append("*(disadv)*")
 
                             if uid in run.get("vow_of_enmity", set()):
                                 roll2b = random.randint(1, 20)
@@ -4157,14 +4169,39 @@ class DungeonMasterCog(commands.Cog):
 
             fallback = encounter.get("combat_fallback")
             if fallback:
+                # Enemy gets a free surprise hit — they capitalised on the failed check
                 fight_enc = {
-                    "type":  "combat",
-                    "name":  encounter["name"],
-                    "intro": "The situation erupts into violence!",
-                    "enemy": fallback,
+                    "type":           "combat",
+                    "name":           encounter["name"],
+                    "intro":          "The situation erupts into violence!",
+                    "enemy":          fallback,
+                    "enemy_surprise": True,
                 }
                 return await self._run_combat(channel, fight_enc, run_id)
-            return "victory"  # no fallback — failure is narrative only, run continues
+
+            # No combat fallback — punish with HP damage scaled to DC
+            n_dice    = max(1, dc // 5)
+            dmg_lines = []
+            for _uid in active:
+                _dmg  = sum(random.randint(1, 4) for _ in range(n_dice))
+                _prev = run["player_hp"].get(_uid, 0)
+                run["player_hp"][_uid] = max(0, _prev - _dmg)
+                _pname = next((n for u, n in run["participants"] if u == _uid), _uid)
+                if run["player_hp"][_uid] <= 0 and _uid not in run.get("dead", set()):
+                    run.setdefault("downed", {})[_uid] = {"successes": 0, "failures": 0}
+                    dmg_lines.append(f"💀 **{_pname}** — **{_dmg}** dmg — goes down!")
+                else:
+                    dmg_lines.append(
+                        f"❤️ **{_pname}** — **{_dmg}** dmg → {run['player_hp'][_uid]} HP")
+            await channel.send(embed=discord.Embed(
+                title="💢 The Setback",
+                description=(
+                    f"The failed check takes its toll — everyone suffers **{n_dice}d4** damage:\n\n"
+                    + "\n".join(dmg_lines)
+                ),
+                color=var.COLOR_ERROR))
+            await asyncio.sleep(2)
+            return "victory"
 
     # ── Choice / branching node ───────────────────────────────────────────────
 
