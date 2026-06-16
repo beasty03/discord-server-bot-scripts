@@ -890,6 +890,10 @@ class CharacterCog(commands.Cog):
         self.db.execute(
             "UPDATE dnd_characters SET hp = ? WHERE user_id = ? AND guild_id = ?",
             (max_hp, uid, gid))
+        self.db.execute(
+            "DELETE FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, gid, "help_long_rest_used"))
         self.db.update_balance(uid, gid, -cost, "rest")
         new_bal = self.db.get_balance(uid, gid)
 

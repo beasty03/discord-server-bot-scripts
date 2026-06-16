@@ -143,6 +143,21 @@ def _get_wizard_prepared_spells(db, uid: str, gid: str) -> list[str]:
     return []
 
 
+def _is_help_used(db, uid: str, gid: str) -> bool:
+    rows = db.execute(
+        "SELECT 1 FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "help_long_rest_used"))
+    return bool(rows)
+
+
+def _set_help_used(db, uid: str, gid: str):
+    db.execute(
+        "INSERT OR REPLACE INTO dnd_character_choices "
+        "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
+        (uid, gid, "help_long_rest_used", "1"))
+
+
 _FAVORED_ENEMY_KEYWORDS: dict[str, list[str]] = {
     "humanoid": ["goblin", "bandit", "guard", "scout", "lieutenant", "chief", "soldier", "cultist"],
     "undead":   ["skeleton", "ghost", "spirit", "lich", "restless", "zombie", "wraith", "vampire"],
@@ -423,6 +438,10 @@ class CombatView(discord.ui.View):
             return
         if self.actions[uid] is not None:
             await interaction.response.send_message("Main action already chosen.", ephemeral=True)
+            return
+        if _is_help_used(self._cog.db, uid, self._gid):
+            await interaction.response.send_message(
+                "🤝 Help already used this long rest — use `/rest` to recover it.", ephemeral=True)
             return
         targets = [(u, n) for u, n in self._participants
                    if u != uid and u not in self._run.get("dead", set())]
@@ -757,6 +776,13 @@ class _BonusPickView(discord.ui.View):
                 embed=discord.Embed(description="🧪 Pick an item:", color=var.COLOR_INFO),
                 view=_ItemPickView(self._cv, self._uid, self._all_members, opts, is_bonus=True))
         elif val == "__help__":
+            if _is_help_used(self._cv._cog.db, self._uid, self._cv._gid):
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        description="🤝 Help already used this long rest — use `/rest` to recover it.",
+                        color=var.COLOR_ERROR), view=None)
+                self.stop()
+                return
             targets = [(u, n) for u, n in self._cv._participants
                        if u != self._uid and u not in self._cv._run.get("dead", set())]
             if not targets:
@@ -830,6 +856,7 @@ class _HelpTargetView(discord.ui.View):
     async def _on_target(self, interaction: discord.Interaction):
         target_uid = interaction.data["values"][0]
         payload = {"action": "help", "target_uid": target_uid}
+        _set_help_used(self._cv._cog.db, self._uid, self._cv._gid)
         if self._is_bonus:
             self._cv.bonus_actions[self._uid] = payload
         else:
@@ -872,13 +899,14 @@ class ChoiceView(discord.ui.View):
 class InteractionView(discord.ui.View):
     """Skill check / interaction encounter — one player acts for the group."""
 
-    def __init__(self, active_uids: list[str], encounter: dict):
+    def __init__(self, active_uids: list[str], encounter: dict, cog=None):
         super().__init__(timeout=None)
         self.active_uids = set(active_uids)
         self.encounter   = encounter
         self.result: dict | None = None
         self.helper_uid: str | None = None   # set when a party member uses Help
         self.helper_name: str | None = None
+        self._cog        = cog
         self._done = asyncio.Event()
 
         skill_btn = discord.ui.Button(
@@ -921,12 +949,19 @@ class InteractionView(discord.ui.View):
     async def _help_cb(self, interaction: discord.Interaction):
         uid  = str(interaction.user.id)
         name = interaction.user.display_name
+        gid  = str(interaction.guild_id)
         if uid not in self.active_uids:
             await interaction.response.send_message("You're not in this run.", ephemeral=True)
             return
         if self._done.is_set():
             await interaction.response.send_message("Already resolved.", ephemeral=True)
             return
+        if self._cog and _is_help_used(self._cog.db, uid, gid):
+            await interaction.response.send_message(
+                "🤝 Help already used this long rest — use `/rest` to recover it.", ephemeral=True)
+            return
+        if self._cog:
+            _set_help_used(self._cog.db, uid, gid)
         self.helper_uid  = uid
         self.helper_name = name
         await interaction.response.send_message(
@@ -3940,7 +3975,7 @@ class DungeonMasterCog(commands.Cog):
             embed.set_image(url=encounter["image"])
         embed.set_footer(text=f"⏱️ {var.INTERACTION_TIMEOUT}s to decide")
 
-        view = InteractionView(active, encounter)
+        view = InteractionView(active, encounter, self)
         msg  = await channel.send(embed=embed, view=view)
 
         try:
