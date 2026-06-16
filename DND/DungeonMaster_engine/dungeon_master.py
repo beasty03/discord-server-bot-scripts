@@ -877,6 +877,8 @@ class InteractionView(discord.ui.View):
         self.active_uids = set(active_uids)
         self.encounter   = encounter
         self.result: dict | None = None
+        self.helper_uid: str | None = None   # set when a party member uses Help
+        self.helper_name: str | None = None
         self._done = asyncio.Event()
 
         skill_btn = discord.ui.Button(
@@ -886,6 +888,15 @@ class InteractionView(discord.ui.View):
         )
         skill_btn.callback = self._skill_cb
         self.add_item(skill_btn)
+
+        if len(active_uids) > 1:
+            help_btn = discord.ui.Button(
+                label="🤝 Help",
+                style=discord.ButtonStyle.secondary,
+                row=0,
+            )
+            help_btn.callback = self._help_cb
+            self.add_item(help_btn)
 
         if encounter.get("combat_fallback"):
             fight_btn = discord.ui.Button(
@@ -906,6 +917,20 @@ class InteractionView(discord.ui.View):
             return
         await interaction.response.send_modal(
             SkillFlavorModal(self, uid, self.encounter["skill"]))
+
+    async def _help_cb(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        name = interaction.user.display_name
+        if uid not in self.active_uids:
+            await interaction.response.send_message("You're not in this run.", ephemeral=True)
+            return
+        if self._done.is_set():
+            await interaction.response.send_message("Already resolved.", ephemeral=True)
+            return
+        self.helper_uid  = uid
+        self.helper_name = name
+        await interaction.response.send_message(
+            f"🤝 **{name}** steps up to help! +4 bonus to the skill check.", ephemeral=False)
 
     async def _fight_cb(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
@@ -2268,6 +2293,44 @@ class DungeonMasterCog(commands.Cog):
                           encounter: dict, run_id: str) -> str:
         run   = self._runs[run_id]
         gid   = run["gid"]
+
+        # Reset per-combat state so once-per-combat features recharge each encounter
+        for _uid, _ in run["participants"]:
+            run["features_used"][_uid]  = set()
+            run["subclass_used"][_uid]  = set()
+        for _key in ("raging_uids", "hunters_mark_uids", "shield_spell_ac",
+                     "counterspell_uids", "misty_step_uids", "sacred_weapon_uids",
+                     "portent_used", "vow_of_enmity", "guided_strike", "superiority_die",
+                     "warding_flare", "arcane_distraction", "ensnaring_uids", "hail_uids",
+                     "vanish_uids", "beast_protect_uids", "sharpshooter_stance",
+                     "bm_riposte_set"):
+            if _key in run:
+                run[_key].clear()
+        for _key in ("bm_pending", "fire_bolt_rnd", "eldritch_strike_rnd"):
+            if _key in run:
+                run[_key].clear()
+        run["natures_wrath_active"] = False
+        run["enemy_ac_penalty"]     = 0
+        run["enemy_atk_penalty"]    = 0
+        # Recharge action-surge and superiority dice (recharge on short rest = between encounters)
+        for _uid, _ in run["participants"]:
+            _uid_stats = self._get_char_combat_stats(_uid, gid)
+            if not _uid_stats:
+                continue
+            _uid_class = _uid_stats["char_class"]
+            _uid_level = _uid_stats["level"]
+            if _uid_class == "fighter":
+                run["action_surge_uses"][_uid] = 2 if _uid_level >= 17 else 1
+            _uid_sc = _get_subclass(self.db, _uid, gid, _uid_class)
+            if _uid_sc == "battle_master" and _uid_level >= 3:
+                _n = 4 + (1 if _uid_level >= 7 else 0) + (1 if _uid_level >= 10 else 0) + (1 if _uid_level >= 15 else 0)
+                _die = "1d12" if _uid_level >= 15 else ("1d10" if _uid_level >= 10 else "1d8")
+                run["sup_dice"][_uid]     = _n
+                run["sup_die_type"][_uid] = _die
+            if _uid_sc == "abjuration":
+                _int_mod = _uid_stats["mods"]["intelligence"]
+                run["ward_hp"][_uid] = max(1, _int_mod + _uid_level)
+
         enemy      = dict(encounter["enemy"])
         party_size = len(run["participants"])
         _base_hp   = enemy["hp"]
@@ -3916,15 +3979,21 @@ class DungeonMasterCog(commands.Cog):
         skill       = encounter["skill"]
         mod         = stats["mods"][skill] if stats else 0
         roll        = random.randint(1, 20)
-        total       = roll + mod
+        # Apply Help bonus: +4 from a party member who clicked Help (must be a different player)
+        helper_uid  = view.helper_uid
+        help_bonus  = 4 if (helper_uid and helper_uid != roller_uid) else 0
+        total       = roll + mod + help_bonus
         dc          = encounter["dc"]
         success     = total >= dc
 
+        help_line   = (f"\n🤝 **{view.helper_name}** helped — +{help_bonus} bonus!\n"
+                       if help_bonus else "")
         flavor_line = f'\n*"{flavor}"*\n' if flavor else ""
         desc_lines  = [
             f"**{roller_name}** attempts a **{skill.title()}** check!",
+            help_line,
             flavor_line,
-            f"🎲 Rolled **{roll}** {mod:+d} = **{total}** vs DC **{dc}**",
+            f"🎲 Rolled **{roll}** {mod:+d}{f' +{help_bonus} (help)' if help_bonus else ''} = **{total}** vs DC **{dc}**",
             "",
         ]
 
