@@ -2372,9 +2372,9 @@ class DungeonMasterCog(commands.Cog):
                     _desc += "\n\n" + "\n".join(_hp_ln)
                 if active_uid:
                     _active_name = name_map.get(active_uid, active_uid)
-                    _desc += f"\n\n🎯 **{_active_name}**'s turn — use `/attack`, `/dodge`, `/flee`, `/item`, `/bonus`, or `/endturn`"
+                    _desc += f"\n\n🎯 **{_active_name}**'s turn — use `/attack`, `/ability`, `/dodge`, `/flee`, `/item`, `/bonus`, or `/endturn`"
                 if round_lines:
-                    _desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines[-5:])
+                    _desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines)
                 return discord.Embed(title=_title, description=_desc, color=var.COLOR_COMBAT)
 
             # ── Collect actions one player at a time in true initiative order ─
@@ -3606,7 +3606,7 @@ class DungeonMasterCog(commands.Cog):
             if _hp_ln2:
                 _result_desc += "\n\n" + "\n".join(_hp_ln2)
             if round_lines:
-                _result_desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines[-8:])
+                _result_desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines)
             _result_embed = discord.Embed(title=_result_title, description=_result_desc, color=color)
             if campaign_msg is not None:
                 try:
@@ -3665,7 +3665,7 @@ class DungeonMasterCog(commands.Cog):
             return "defeat"
 
         skill      = encounter["skill"]
-        cmds_hint  = f"Use `/check` to attempt the **{skill.title()}** check."
+        cmds_hint  = f"Use `/skill_check` to attempt the **{skill.title()}** check."
         if len(active) > 1:
             cmds_hint += "\nUse `/support` to give a **+4 bonus** to whoever checks."
         if encounter.get("combat_fallback"):
@@ -3904,9 +3904,9 @@ class DungeonMasterCog(commands.Cog):
 
     # ── Interaction slash commands ─────────────────────────────────────────
 
-    @app_commands.command(name="check", description="Attempt the skill check during an interaction encounter.")
+    @app_commands.command(name="skill_check", description="Attempt the skill check during an interaction encounter.")
     @app_commands.describe(flavor="Describe what you do or say (optional)")
-    async def check(self, interaction: discord.Interaction, flavor: str = ""):
+    async def skill_check(self, interaction: discord.Interaction, flavor: str = ""):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
         _, iact = self._find_interaction_turn(uid, gid)
@@ -4209,8 +4209,9 @@ class DungeonMasterCog(commands.Cog):
             await interaction.response.send_message(
                 embed=self._err("It's not your turn right now."), ephemeral=True)
             return
-        char       = self._fetch_char_basic(uid, gid)
-        char_class = (char["char_class"] or "").lower() if char else ""
+        _cls_rows  = self.db.execute(
+            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
         _class_bonus: dict[str, list[tuple[str, str]]] = {
             "barbarian": [("rage", "💢 Rage"), ("frenzy", "🔥 Frenzy Attack")],
             "fighter":   [("second_wind", "🌬️ Second Wind")],
@@ -4257,6 +4258,88 @@ class DungeonMasterCog(commands.Cog):
         select.callback = _on_select
         await interaction.response.send_message(view=view, ephemeral=True)
         turn["pending_iact"].append(interaction)
+
+    # Class-specific main action feature lists (fid, display label)
+    _CLASS_MAIN_FEATS: dict[str, list[tuple[str, str]]] = {
+        "wizard":    [("fire_bolt",      "🔥 Fire Bolt"),
+                      ("magic_missile",  "✨ Magic Missile"),
+                      ("burning_hands",  "🔥 Burning Hands"),
+                      ("thunderwave",    "🌊 Thunderwave"),
+                      ("scorching_ray",  "☀️ Scorching Ray"),
+                      ("fireball",       "💥 Fireball")],
+        "sorcerer":  [("fire_bolt",      "🔥 Fire Bolt"),
+                      ("magic_missile",  "✨ Magic Missile"),
+                      ("scorching_ray",  "☀️ Scorching Ray"),
+                      ("fireball",       "💥 Fireball"),
+                      ("thunderwave",    "🌊 Thunderwave")],
+        "warlock":   [("fire_bolt",      "🔮 Eldritch Blast")],
+        "cleric":    [("sacred_flame",   "🔥 Sacred Flame"),
+                      ("cure_wounds_rng","💚 Cure Wounds")],
+        "druid":     [("thunderwave",    "🌊 Thunderwave"),
+                      ("cure_wounds_rng","💚 Cure Wounds")],
+        "paladin":   [("divine_smite",   "⚡ Divine Smite"),
+                      ("cure_wounds_rng","💚 Cure Wounds")],
+        "ranger":    [("volley",         "🏹 Volley"),
+                      ("cure_wounds_rng","💚 Cure Wounds")],
+        "bard":      [("cure_wounds_rng","💚 Cure Wounds")],
+        "fighter":   [("action_surge",   "⚡ Action Surge")],
+        "rogue":     [("sneak_attack",   "🗡️ Sneak Attack")],
+        "barbarian": [],
+        "monk":      [],
+    }
+
+    @app_commands.command(name="ability", description="Use your class ability on your combat turn.")
+    @app_commands.describe(ability="Your class ability (auto-completes with available options)")
+    async def ability(self, interaction: discord.Interaction, ability: str = ""):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        _cls_rows  = self.db.execute(
+            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
+        feats      = self._CLASS_MAIN_FEATS.get(char_class, [])
+        if not feats:
+            await interaction.response.send_message(
+                embed=self._err(
+                    f"No class abilities available for **{char_class or 'your class'}**.\n"
+                    "Try `/attack` or `/item` instead."),
+                ephemeral=True)
+            return
+        # Match by feature id or display label
+        chosen_fid = feats[0][0]
+        chosen_lbl = feats[0][1]
+        for fid, lbl in feats:
+            if ability.lower() in fid.lower() or ability.lower() in lbl.lower():
+                chosen_fid = fid
+                chosen_lbl = lbl
+                break
+        turn["main_action"] = {"action": "feature", "feature_id": chosen_fid}
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✨ **{chosen_lbl}** queued — use `/endturn` to confirm.",
+                color=var.COLOR_COMBAT,
+            ),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @ability.autocomplete("ability")
+    async def ability_autocomplete(self, interaction: discord.Interaction, current: str):
+        uid        = str(interaction.user.id)
+        gid        = str(interaction.guild_id)
+        _cls_rows  = self.db.execute(
+            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
+        feats      = self._CLASS_MAIN_FEATS.get(char_class, [])
+        return [
+            app_commands.Choice(name=lbl, value=fid)
+            for fid, lbl in feats
+            if not current or current.lower() in lbl.lower() or current.lower() in fid.lower()
+        ][:25]
 
     @app_commands.command(name="endturn", description="Finalize your turn and execute all queued actions.")
     async def endturn(self, interaction: discord.Interaction):
