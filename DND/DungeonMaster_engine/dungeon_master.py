@@ -269,6 +269,70 @@ def _build_campaign_embed(
     return embed
 
 
+def _build_turn_order_text(
+    true_order: list[tuple[int, int, str, "str | int"]],
+    acted_uids: set[str],
+    name_map: dict[str, str],
+    active_uid: "str | None",
+    enemy_name: str,
+    enemy_emoji: str,
+) -> str:
+    """Horizontal sliding turn order — max 4 actors, acted ones slide off left."""
+    remaining: list[tuple[str, str]] = []
+    enemy_shown = False
+    for _, _, typ, tid in true_order:
+        if typ == "player":
+            if str(tid) not in acted_uids:
+                remaining.append(("player", str(tid)))
+        elif not enemy_shown:
+            remaining.append(("enemy", "0"))
+            enemy_shown = True
+    parts: list[str] = []
+    for typ, tid in remaining[:4]:
+        if typ == "player":
+            n = name_map.get(tid, tid)
+            parts.append(f"🎯 **{n}**" if tid == active_uid else f"⏳ {n}")
+        else:
+            parts.append(f"{enemy_emoji} {enemy_name}")
+    return " → ".join(parts) if parts else "*(round complete)*"
+
+
+def _build_roster_text(
+    run: dict,
+    enemies: list[dict],
+    name_map: dict[str, str],
+    active_uid: "str | None",
+    acted_uids: set[str],
+    enemy_emoji: str,
+) -> str:
+    """Compact one-line-per-actor roster with HP bars."""
+    lines: list[str] = []
+    for uid, name in run["participants"]:
+        if uid in run["fled"]:
+            lines.append(f"🏃 ~~{name}~~ *(fled)*")
+            continue
+        hp    = run["player_hp"].get(uid, 0)
+        max_hp = run["player_max_hp"].get(uid, 1)
+        bar   = _build_hp_bar(hp, max_hp, 8)
+        if uid in run.get("dead", set()):
+            lines.append(f"💀 ~~{name}~~")
+        elif hp <= 0:
+            lines.append(f"⚰️ **{name}**  `{bar}`  *(downed)*")
+        elif uid == active_uid:
+            lines.append(f"🎯 **{name}**  `{bar}`  {hp}/{max_hp}")
+        elif uid in acted_uids:
+            lines.append(f"✅ {name}  `{bar}`  {hp}/{max_hp}")
+        else:
+            lines.append(f"⏳ {name}  `{bar}`  {hp}/{max_hp}")
+    for eobj in enemies:
+        if eobj["hp"] > 0:
+            ebar = _build_hp_bar(eobj["hp"], eobj["max_hp"], 8)
+            lines.append(f"{enemy_emoji} **{eobj['name']}**  `{ebar}`  {eobj['hp']}/{eobj['max_hp']}")
+        else:
+            lines.append(f"💀 ~~{eobj['name']}~~")
+    return "\n".join(lines) or "*(no participants)*"
+
+
 # ============================================================================
 # MODALS
 # ============================================================================
@@ -439,55 +503,104 @@ class EnemyTargetView(discord.ui.View):
 
 
 # ============================================================================
-# CAMPAIGN PERSISTENT VIEW  (always-on buttons on the campaign embed)
+# CAMPAIGN LAYOUT VIEW  (Components v2 — full combat UI on the campaign message)
 # ============================================================================
 
-class CampaignButtonView(discord.ui.View):
-    """Persistent view on the campaign embed: My Turn (active only) + Backpack."""
+class CampaignLayoutView(discord.ui.LayoutView):
+    """
+    Components v2 layout for the persistent campaign combat message.
+    Sections: header → turn order → combat display → roster → (log) → buttons.
+    """
 
-    def __init__(self, active_uid: str, all_uids: list[str], cog: "DungeonMasterCog", gid: str):
+    def __init__(
+        self,
+        active_uid: "str | None",
+        all_uids: list[str],
+        cog: "DungeonMasterCog",
+        gid: str,
+        *,
+        header: str,
+        turn_order_text: str,
+        combat_display: str,
+        roster_text: str,
+        image_url: "str | None" = None,
+        round_lines: "list[str] | None" = None,
+    ):
         super().__init__(timeout=None)
         self._active_uid = active_uid
-        self._all_uids   = all_uids
         self._cog        = cog
         self._gid        = gid
         self._done       = asyncio.Event()
-        self.main_action:  str | dict | None = None
-        self.bonus_action: dict | None       = None
+        self.main_action:  "str | dict | None" = None
+        self.bonus_action: "dict | None"       = None
 
-    @discord.ui.button(label="⚔️ My Turn", style=discord.ButtonStyle.danger, row=0)
-    async def my_turn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        self.add_item(discord.ui.TextDisplay(header))
+        self.add_item(discord.ui.Separator())
+        self.add_item(discord.ui.TextDisplay(turn_order_text))
+        self.add_item(discord.ui.Separator())
+        if image_url:
+            self.add_item(discord.ui.MediaGallery(discord.MediaGalleryItem(image_url)))
+        else:
+            self.add_item(discord.ui.TextDisplay(combat_display))
+        self.add_item(discord.ui.Separator())
+        self.add_item(discord.ui.TextDisplay(roster_text))
+        if round_lines:
+            self.add_item(discord.ui.Separator())
+            self.add_item(discord.ui.TextDisplay(
+                "**― Round Results ―**\n" + "\n".join(round_lines[-8:])))
+        if active_uid is not None:
+            self.add_item(discord.ui.Separator())
+            btn_turn = discord.ui.Button(label="⚔️ My Turn", style=discord.ButtonStyle.danger)
+            btn_pack = discord.ui.Button(label="🎒 Backpack", style=discord.ButtonStyle.secondary)
+            btn_turn.callback = self._on_my_turn
+            btn_pack.callback = self._on_backpack
+            self.add_item(discord.ui.ActionRow(btn_turn, btn_pack))
+
+    async def _on_my_turn(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         if uid != self._active_uid:
-            await interaction.response.send_message(
-                f"⏳ It's not your turn yet!", ephemeral=True)
+            await interaction.response.send_message("⏳ It's not your turn yet!", ephemeral=True)
             return
+        run = next(
+            (r for r in self._cog._runs.values()
+             if any(u == uid for u, _ in r["participants"])), None)
+        char_name  = next((n for u, n in run["participants"] if u == uid), uid) if run else uid
+        stats      = self._cog._get_char_combat_stats(uid, self._gid)
+        char_class = stats.get("char_class") if stats else None
+        sheet      = _build_mini_sheet(stats, char_name, char_class) if stats else "No character data."
         await interaction.response.send_message(
             embed=discord.Embed(
-                description="Choose your action — click **End Turn** when done.",
+                title="⚔️ Your Turn",
+                description=f"```\n{sheet}\n```\nChoose your action — click **End Turn** when done.",
                 color=var.COLOR_COMBAT),
             view=TurnSelectView(self, uid, self._cog, self._gid),
             ephemeral=True)
 
-    @discord.ui.button(label="🎒 Backpack", style=discord.ButtonStyle.secondary, row=0)
-    async def backpack(self, interaction: discord.Interaction, _: discord.ui.Button):
-        uid = str(interaction.user.id)
+    async def _on_backpack(self, interaction: discord.Interaction):
+        uid   = str(interaction.user.id)
+        run   = next(
+            (r for r in self._cog._runs.values()
+             if any(u == uid for u, _ in r["participants"])), None)
+        char_name  = next((n for u, n in run["participants"] if u == uid), uid) if run else uid
+        stats      = self._cog._get_char_combat_stats(uid, self._gid)
+        char_class = stats.get("char_class") if stats else None
+        lines: list[str] = []
+        if stats:
+            lines.append(f"```\n{_build_mini_sheet(stats, char_name, char_class)}\n```")
         rows = self._cog.db.execute(
             "SELECT item_id, qty, equipped FROM dnd_inventory WHERE user_id=? AND guild_id=?",
             (uid, self._gid))
-        if not rows:
-            await interaction.response.send_message(
-                embed=discord.Embed(description="Your backpack is empty.", color=var.COLOR_INFO),
-                ephemeral=True)
-            return
-        all_items = self._cog._all_char_items()
-        lines = []
-        for item_id, qty, equipped in rows:
-            item    = next((i for i in all_items if i["id"] == item_id), None)
-            label   = item["name"] if item else item_id
-            qty_txt = f" ×{qty}" if qty and qty > 1 else ""
-            eq_txt  = " *(equipped)*" if equipped else ""
-            lines.append(f"• {label}{qty_txt}{eq_txt}")
+        if rows:
+            all_items = self._cog._all_char_items()
+            lines.append("**Inventory:**")
+            for item_id, qty, equipped in rows:
+                item    = next((i for i in all_items if i["id"] == item_id), None)
+                label   = item["name"] if item else item_id
+                qty_txt = f" ×{qty}" if qty and qty > 1 else ""
+                eq_txt  = " *(equipped)*" if equipped else ""
+                lines.append(f"• {label}{qty_txt}{eq_txt}")
+        if not lines:
+            lines.append("Your backpack is empty.")
         await interaction.response.send_message(
             embed=discord.Embed(title="🎒 Backpack", description="\n".join(lines),
                                 color=var.COLOR_INFO),
@@ -501,7 +614,7 @@ class CampaignButtonView(discord.ui.View):
 class TurnSelectView(discord.ui.View):
     """Ephemeral action picker for the active player. End Turn confirms."""
 
-    def __init__(self, campaign_view: "CampaignButtonView", uid: str,
+    def __init__(self, campaign_view: "CampaignLayoutView", uid: str,
                  cog: "DungeonMasterCog", gid: str):
         super().__init__(timeout=None)
         self._cv  = campaign_view
@@ -762,7 +875,7 @@ class InitiativeEmbedView(discord.ui.View):
 
 
 # ============================================================================
-# OLD CombatView kept for compatibility (replaced by CampaignButtonView above)
+# OLD CombatView kept for compatibility (replaced by CampaignLayoutView above)
 # ============================================================================
 
 class CombatView(discord.ui.View):
@@ -3188,63 +3301,42 @@ class DungeonMasterCog(commands.Cog):
                 await asyncio.sleep(2)
                 continue
 
-            # ── Mini-sheets for the right column (rebuilt each round) ──────
-            mini_fields: list[tuple[str, str]] = []
-            for _ms_uid, _ms_name in run["participants"]:
-                _ms_stats = self._get_char_combat_stats(_ms_uid, gid)
-                if _ms_stats:
-                    _ms_class = _ms_stats.get("char_class")
-                    mini_fields.append(
-                        (f"📋 {_ms_name}", _build_mini_sheet(_ms_stats, _ms_name, _ms_class)))
-
             # Track which players have submitted this round (for ✅/⏳ indicators)
             _acted_uids: set[str] = set()
             round_lines:     list[str] = []
             dodgers:         set[str]  = set()
             cunning_dodgers: set[str]  = set()
+            all_uids_list = [u for u, _ in run["participants"]]
 
-            def _cur_combat_embed(active_uid: str | None = None) -> discord.Embed:
-                _hp_ln: list[str] = []
-                for _u, _n in run["participants"]:
-                    if _u in run["fled"]:
-                        continue
-                    _hp  = run["player_hp"].get(_u, 0)
-                    _mhp = run["player_max_hp"].get(_u, 1)
-                    _bar = _build_hp_bar(_hp, _mhp, 6)
-                    if _u in run.get("dead", set()):
-                        _hp_ln.append(f"💀 **{_n}** — dead")
-                    elif _hp <= 0:
-                        _hp_ln.append(f"⚰️ **{_n}** — downed")
-                    elif _u == active_uid:
-                        _hp_ln.append(f"🎯 **{_n}** `{_bar}` {_hp}/{_mhp}  *(your turn)*")
-                    elif _u in _acted_uids:
-                        _hp_ln.append(f"✅ **{_n}** `{_bar}` {_hp}/{_mhp}")
-                    else:
-                        _hp_ln.append(f"⏳ **{_n}** `{_bar}` {_hp}/{_mhp}")
-                _el: list[str] = []
-                for _eobj in enemies:
-                    if _eobj["hp"] > 0:
-                        _ebar = _build_hp_bar(_eobj["hp"], _eobj["max_hp"])
-                        _el.append(
-                            f"{enemy['emoji']} **{_eobj['name']}** `{_ebar}` {_eobj['hp']}/{_eobj['max_hp']}")
-                    else:
-                        _el.append(f"💀 ~~{_eobj['name']}~~")
-                _title = (f"⚡ Surprise Round  —  {encounter['name']}" if (surprise and rnd == 1)
-                          else f"⚔️ Round {rnd}  —  {encounter['name']}")
-                _desc = "\n".join(_el)
-                if _hp_ln:
-                    _desc += "\n\n" + "\n".join(_hp_ln)
-                if round_lines:
-                    _desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines[-5:])
-                _emb = discord.Embed(title=_title, description=_desc, color=var.COLOR_COMBAT)
-                for _mfn, _mfv in mini_fields:
-                    _emb.add_field(name=_mfn, value=_mfv, inline=True)
-                return _emb
+            def _mk_combat_view(active_uid: "str | None" = None) -> "CampaignLayoutView":
+                _hdr = (
+                    f"⚡ Surprise Round  ·  {encounter['name']}"
+                    if (surprise and rnd == 1)
+                    else f"⚔️ Round {rnd}  ·  {encounter['name']}"
+                )
+                if active_uid:
+                    _hdr += f"  —  🎯 **{name_map.get(active_uid, active_uid)}'s turn**"
+                _to  = _build_turn_order_text(
+                    true_order, _acted_uids, name_map, active_uid,
+                    enemy["name"], enemy["emoji"])
+                _cd  = (
+                    f"{enemy['emoji']}  **{enemy['name']}**"
+                    + (f"  ·  *{campaign['name']}*" if campaign else "")
+                )
+                _rst = _build_roster_text(
+                    run, enemies, name_map, active_uid, _acted_uids, enemy["emoji"])
+                return CampaignLayoutView(
+                    active_uid, all_uids_list, self, gid,
+                    header=_hdr,
+                    turn_order_text=_to,
+                    combat_display=_cd,
+                    roster_text=_rst,
+                    round_lines=round_lines if round_lines else None,
+                )
 
             # ── Collect actions one player at a time in true initiative order ─
-            all_uids_list = [u for u, _ in run["participants"]]
-            actions:       dict[str, str | dict | None] = {}
-            bonus_actions: dict[str, dict | None]       = {}
+            actions:       dict[str, "str | dict | None"] = {}
+            bonus_actions: dict[str, "dict | None"]       = {}
 
             for _tinit, _tbns, _ttype, _tid in true_order:
                 if _ttype != "player":
@@ -3257,10 +3349,10 @@ class DungeonMasterCog(commands.Cog):
                     _acted_uids.add(uid)
                     continue
 
-                _cv = CampaignButtonView(uid, all_uids_list, self, gid)
+                _cv = _mk_combat_view(uid)
                 if campaign_msg is not None:
                     try:
-                        await campaign_msg.edit(embed=_cur_combat_embed(uid), view=_cv)
+                        await campaign_msg.edit(content=None, embed=None, view=_cv)
                     except Exception:
                         pass
 
@@ -3271,17 +3363,17 @@ class DungeonMasterCog(commands.Cog):
 
                 _acted_uids.add(uid)
 
-                # TurnSelectView uses {"action": "attack"} dict; processing code expects "attack"
+                # TurnSelectView stores attack as dict; processing code expects "attack" string
                 _raw_main = _cv.main_action
                 if isinstance(_raw_main, dict) and _raw_main.get("action") == "attack":
                     _raw_main = "attack"
                 actions[uid]       = _raw_main
                 bonus_actions[uid] = _cv.bonus_action
 
-            # Clear view from campaign embed while processing
+            # Show processing state (all players acted — no buttons, no active player)
             if campaign_msg is not None:
                 try:
-                    await campaign_msg.edit(embed=_cur_combat_embed(None), view=None)
+                    await campaign_msg.edit(content=None, embed=None, view=_mk_combat_view(None))
                 except Exception:
                     pass
 
@@ -4436,20 +4528,31 @@ class DungeonMasterCog(commands.Cog):
             all_enemies_dead = all(e["hp"] <= 0 for e in enemies)
             color = var.COLOR_WIN if all_enemies_dead else var.COLOR_COMBAT
 
-            # Update the persistent campaign embed with round results
+            # Update the persistent campaign message with round results
             _result_title = (f"🏆 {encounter['name']} — Victory!" if all_enemies_dead
                              else f"⚔️ Round {rnd}  —  {encounter['name']}")
-            _result_desc  = "\n".join(round_lines) or "*(nothing happened)*"
-            _result_emb   = discord.Embed(title=_result_title, description=_result_desc, color=color)
-            for _mfn, _mfv in mini_fields:
-                _result_emb.add_field(name=_mfn, value=_mfv, inline=True)
+            _result_view = CampaignLayoutView(
+                None, all_uids_list, self, gid,
+                header=_result_title,
+                turn_order_text="*(round complete)*",
+                combat_display=(
+                    f"{enemy['emoji']}  **{enemy['name']}**"
+                    + (f"  ·  *{campaign['name']}*" if campaign else "")
+                ),
+                roster_text=_build_roster_text(
+                    run, enemies, name_map, None, _acted_uids, enemy["emoji"]),
+                round_lines=round_lines if round_lines else None,
+            )
             if campaign_msg is not None:
                 try:
-                    await campaign_msg.edit(embed=_result_emb, view=None)
+                    await campaign_msg.edit(content=None, embed=None, view=_result_view)
                 except Exception:
                     pass
             else:
-                await channel.send(embed=_result_emb)
+                await channel.send(embed=discord.Embed(
+                    title=_result_title,
+                    description="\n".join(round_lines) or "*(nothing happened)*",
+                    color=color))
 
             if all_enemies_dead:
                 # Kill blow messages for each enemy that died this round
@@ -4509,14 +4612,7 @@ class DungeonMasterCog(commands.Cog):
         embed.set_footer(text=f"⏱️ {var.INTERACTION_TIMEOUT}s to decide")
 
         view = InteractionView(active, encounter, self)
-        if campaign_msg is not None:
-            try:
-                await campaign_msg.edit(embed=embed, view=view)
-                msg = campaign_msg
-            except Exception:
-                msg = await channel.send(embed=embed, view=view)
-        else:
-            msg  = await channel.send(embed=embed, view=view)
+        msg  = await channel.send(embed=embed, view=view)
 
         try:
             await asyncio.wait_for(view._done.wait(), timeout=var.INTERACTION_TIMEOUT)
@@ -4601,12 +4697,9 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_WIN,
             )
-            if campaign_msg is not None:
-                try:
-                    await campaign_msg.edit(embed=res_embed, view=None)
-                except Exception:
-                    await channel.send(embed=res_embed)
-            else:
+            try:
+                await msg.edit(embed=res_embed, view=None)
+            except Exception:
                 await channel.send(embed=res_embed)
             await asyncio.sleep(2)
             return "victory"
@@ -4623,12 +4716,9 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_ERROR,
             )
-            if campaign_msg is not None:
-                try:
-                    await campaign_msg.edit(embed=res_embed, view=None)
-                except Exception:
-                    await channel.send(embed=res_embed)
-            else:
+            try:
+                await msg.edit(embed=res_embed, view=None)
+            except Exception:
                 await channel.send(embed=res_embed)
             await asyncio.sleep(2)
 
