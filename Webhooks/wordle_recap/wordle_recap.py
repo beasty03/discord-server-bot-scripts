@@ -27,7 +27,8 @@ class WordleRecap(commands.Cog):
         self._cfg        = self._load_cfg()
         self.post_hour   = int(self._cfg.get("post_hour",   var.WORDLE_POST_HOUR))
         self.post_minute = int(self._cfg.get("post_minute", var.WORDLE_POST_MINUTE))
-        self._last_posted: date | None = None
+        raw = self._cfg.get("last_posted")
+        self._last_posted: date | None = date.fromisoformat(raw) if raw else None
 
     # ── JSON config ───────────────────────────────────────────────────────────
 
@@ -76,14 +77,22 @@ class WordleRecap(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def wordle_timer(self):
-        now = datetime.now(self._get_tz())
-        if now.hour != self.post_hour or now.minute != self.post_minute:
-            return
-        yesterday = now.date() - timedelta(days=1)
-        if self._last_posted == yesterday:
-            return
-        self._last_posted = yesterday
-        await self._post_wordle_recap(yesterday)
+        try:
+            now = datetime.now(self._get_tz())
+            if now.hour != self.post_hour or now.minute != self.post_minute:
+                return
+            yesterday = now.date() - timedelta(days=1)
+            if self._last_posted == yesterday:
+                return
+            await self._post_wordle_recap(yesterday)
+            self._last_posted = yesterday
+            self._set_cfg("last_posted", yesterday.isoformat())
+        except Exception:
+            log.exception("[WordleRecap] Unhandled error in timer — will retry next minute")
+
+    @wordle_timer.error
+    async def wordle_timer_error(self, error: Exception):
+        log.error("[WordleRecap] Task error: %s", error)
 
     # ── Core logic ────────────────────────────────────────────────────────────
 
