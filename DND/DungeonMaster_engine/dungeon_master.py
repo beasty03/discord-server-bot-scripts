@@ -1716,6 +1716,12 @@ class DungeonMasterCog(commands.Cog):
         self._runs: dict[str, dict] = {}
         # active combat turns: uid → {_done, main_action, bonus_action, pending_iact, run_id, gid}
         self._combat_turns: dict[str, dict] = {}
+        # active interaction turns: run_id → {_done, result, helper_uid, helper_name, active_uids, encounter, gid}
+        self._interaction_turns: dict[str, dict] = {}
+        # active initiative rolls: run_id → {_done, rolls, active_uids, name_map, campaign_msg, gid}
+        self._initiative_state: dict[str, dict] = {}
+        # quick lookup: uid → run_id (while that player is in initiative phase)
+        self._initiative_turns: dict[str, str] = {}
         # DLC registries — populated by DND_DLC cogs via register_*
         self._extra_campaigns: list[dict] = []
         self._extra_races:     list[dict] = []
@@ -2496,9 +2502,59 @@ class DungeonMasterCog(commands.Cog):
 
     # ── /roll ─────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="roll", description="Roll dice. Examples: d20 · 2d6 · 1d8+3")
-    @app_commands.describe(dice="Dice expression (e.g. d20, 2d6, 1d8+3)")
-    async def roll(self, interaction: discord.Interaction, dice: str):
+    @app_commands.command(name="roll", description="Roll dice — or roll initiative if combat is starting. Examples: d20 · 2d6")
+    @app_commands.describe(dice="Dice expression (e.g. d20, 2d6, 1d8+3) — leave blank to roll initiative")
+    async def roll(self, interaction: discord.Interaction, dice: str = ""):
+        uid = str(interaction.user.id)
+        gid = str(interaction.guild_id)
+
+        # ── Initiative phase ────────────────────────────────────────────────
+        run_id = self._initiative_turns.get(uid)
+        if run_id and not dice:
+            istate = self._initiative_state.get(run_id)
+            if istate and uid in istate["active_uids"] and uid not in istate["rolls"]:
+                run     = self._runs.get(run_id, {})
+                stats   = self._get_char_combat_stats(uid, gid)
+                dex_mod = stats["mods"]["dexterity"] if stats else 0
+                d20     = 20 if uid in run.get("alert_uids", set()) else random.randint(1, 20)
+                total   = d20 + dex_mod
+                istate["rolls"][uid] = total
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        description=f"🎲 Rolled **{d20}** {dex_mod:+d} = **{total}**!",
+                        color=var.COLOR_COMBAT,
+                    ),
+                    ephemeral=True,
+                )
+                # Update the campaign embed to show the new roll
+                if istate.get("campaign_msg"):
+                    lines = []
+                    for u in istate["active_uids"]:
+                        n = istate["name_map"].get(u, u)
+                        if u in istate["rolls"]:
+                            lines.append(f"✅ **{n}** — **{istate['rolls'][u]}**")
+                        else:
+                            lines.append(f"⏳ **{n}** — *use `/roll` to roll initiative*")
+                    upd_embed = discord.Embed(
+                        title="🎲 Initiative",
+                        description="\n".join(lines),
+                        color=var.COLOR_COMBAT,
+                    )
+                    try:
+                        await istate["campaign_msg"].edit(embed=upd_embed, view=None)
+                    except Exception:
+                        pass
+                # Fire event when everyone has rolled
+                if set(istate["rolls"].keys()) >= istate["active_uids"]:
+                    istate["_done"].set()
+                return
+
+        # ── Regular dice roll ───────────────────────────────────────────────
+        if not dice:
+            await interaction.response.send_message(
+                embed=self._err("Specify a dice expression (e.g. `d20`, `2d6`, `1d8+3`), or wait for combat to start to roll initiative."),
+                ephemeral=True)
+            return
         total, detail = roll_expr(dice)
         if detail == "error":
             await interaction.response.send_message(
@@ -3103,30 +3159,55 @@ class DungeonMasterCog(commands.Cog):
                 true_order.append((0, _dex, "player", _uid))
 
         else:
-            # Normal initiative: players click to roll, enemy rolls automatically
-            init_view = InitiativeEmbedView(active_init, name_map, self, gid)
-            _init_embed = discord.Embed(
-                title="🎲 Initiative — Click to Roll!",
-                description="\n".join(
-                    f"⏳ **{name_map[u]}** — *waiting...*" for u in active_init),
-                color=var.COLOR_COMBAT,
-            )
+            # Normal initiative: players use /roll, enemy rolls automatically
+            _init_done = asyncio.Event()
+            _init_state: dict = {
+                "_done":        _init_done,
+                "rolls":        {},
+                "active_uids":  set(active_init),
+                "name_map":     name_map,
+                "campaign_msg": campaign_msg,
+                "gid":          gid,
+            }
+            self._initiative_state[run_id] = _init_state
+            for uid in active_init:
+                self._initiative_turns[uid] = run_id
+
+            def _build_init_embed() -> discord.Embed:
+                lines = []
+                for u in active_init:
+                    n = name_map.get(u, u)
+                    if u in _init_state["rolls"]:
+                        lines.append(f"✅ **{n}** — **{_init_state['rolls'][u]}**")
+                    else:
+                        lines.append(f"⏳ **{n}** — *use `/roll` to roll initiative*")
+                return discord.Embed(
+                    title="🎲 Initiative",
+                    description="\n".join(lines),
+                    color=var.COLOR_COMBAT,
+                )
+
             if campaign_msg is not None:
                 try:
-                    await campaign_msg.edit(embed=_init_embed, view=init_view)
+                    await campaign_msg.edit(embed=_build_init_embed(), view=None)
                 except Exception:
-                    await channel.send(embed=_init_embed, view=init_view)
+                    pass
             else:
-                await channel.send(embed=_init_embed, view=init_view)
+                await channel.send(embed=_build_init_embed())
 
             try:
-                await asyncio.wait_for(init_view._done.wait(), timeout=var.ROUND_TIMEOUT)
+                await asyncio.wait_for(_init_done.wait(), timeout=var.ROUND_TIMEOUT)
             except asyncio.TimeoutError:
                 for uid in active_init:
-                    if uid not in init_view.rolls:
+                    if uid not in _init_state["rolls"]:
                         _s      = self._get_char_combat_stats(uid, gid)
                         dex_mod = _s["mods"]["dexterity"] if _s else 0
-                        init_view.rolls[uid] = random.randint(1, 20) + dex_mod
+                        _init_state["rolls"][uid] = random.randint(1, 20) + dex_mod
+
+            # Clean up initiative tracking
+            self._initiative_state.pop(run_id, None)
+            for uid in active_init:
+                self._initiative_turns.pop(uid, None)
 
             # Enemy rolls initiative
             enemy_init_roll  = random.randint(1, 20)
@@ -3136,10 +3217,10 @@ class DungeonMasterCog(commands.Cog):
             init_rows: list[tuple[int, str]] = []
             player_inits: dict[str, int] = {}
             for uid in active_init:
-                _total  = init_view.rolls.get(uid, 0)
-                _dex    = (_init_stats[uid]["mods"]["dexterity"]
-                           if _init_stats.get(uid) else 0)
-                _name   = name_map.get(uid, uid)
+                _total   = _init_state["rolls"].get(uid, 0)
+                _dex     = (_init_stats[uid]["mods"]["dexterity"]
+                            if _init_stats.get(uid) else 0)
+                _name    = name_map.get(uid, uid)
                 player_inits[uid] = _total
                 _dex_txt = f" {_dex:+d}" if _dex != 0 else ""
                 init_rows.append((_total, f"🎲 **{_name}** — {_total}{_dex_txt} = **{_total}**"))
@@ -3171,7 +3252,7 @@ class DungeonMasterCog(commands.Cog):
             # Build true initiative order with proper tie-breaking
             _order_entries: list[tuple[int, int, str, str | int]] = []
             for uid in active_init:
-                _total = init_view.rolls.get(uid, 0)
+                _total = _init_state["rolls"].get(uid, 0)
                 _dex   = _init_stats[uid]["mods"]["dexterity"] if _init_stats.get(uid) else 0
                 _order_entries.append((_total, _dex, "player", uid))
             _order_entries.append((enemy_init_total, enemy_init_bonus, "enemy", 0))
@@ -4637,31 +4718,51 @@ class DungeonMasterCog(commands.Cog):
         if not active:
             return "defeat"
 
+        skill      = encounter["skill"]
+        cmds_hint  = f"Use `/check` to attempt the **{skill.title()}** check."
+        if len(active) > 1:
+            cmds_hint += "\nUse `/support` to give a **+4 bonus** to whoever checks."
+        if encounter.get("combat_fallback"):
+            cmds_hint += "\nUse `/engage` to draw weapons and fight instead."
+
         embed = discord.Embed(
             title=f"💬 {encounter['name']}",
-            description=f"*{encounter['intro']}*",
+            description=f"*{encounter['intro']}*\n\n{cmds_hint}",
             color=var.COLOR_INTERACTION,
         )
         if encounter.get("image"):
             embed.set_image(url=encounter["image"])
-        embed.set_footer(text=f"⏱️ {var.INTERACTION_TIMEOUT}s to decide")
 
-        view = InteractionView(active, encounter, self)
-        msg  = await channel.send(embed=embed, view=view)
+        _iact_done = asyncio.Event()
+        _iact_state: dict = {
+            "_done":       _iact_done,
+            "result":      None,
+            "helper_uid":  None,
+            "helper_name": None,
+            "active_uids": set(str(u) for u in active),
+            "encounter":   encounter,
+            "gid":         gid,
+        }
+        self._interaction_turns[run_id] = _iact_state
+
+        if campaign_msg is not None:
+            try:
+                await campaign_msg.edit(embed=embed, view=None)
+            except Exception:
+                pass
+        else:
+            await channel.send(embed=embed)
 
         try:
-            await asyncio.wait_for(view._done.wait(), timeout=var.INTERACTION_TIMEOUT)
+            await asyncio.wait_for(_iact_done.wait(), timeout=var.INTERACTION_TIMEOUT)
         except asyncio.TimeoutError:
-            view.result = {"action": "timeout", "uid": active[0], "flavor": None}
+            _iact_state["result"] = {"action": "timeout", "uid": active[0], "flavor": None}
 
-        for item in view.children:
-            item.disabled = True
-        try:
-            await msg.edit(view=view)
-        except Exception:
-            pass
+        self._interaction_turns.pop(run_id, None)
 
-        result = view.result or {"action": "timeout", "uid": active[0], "flavor": None}
+        result      = _iact_state["result"] or {"action": "timeout", "uid": active[0], "flavor": None}
+        helper_uid  = _iact_state["helper_uid"]
+        helper_name = _iact_state["helper_name"]
 
         # Fight branch
         if result["action"] == "fight":
@@ -4682,15 +4783,13 @@ class DungeonMasterCog(commands.Cog):
         flavor      = result.get("flavor")
         roller_name = next((n for u, n in run["participants"] if u == roller_uid), roller_uid)
         stats       = self._get_char_combat_stats(roller_uid, gid)
-        skill       = encounter["skill"]
         mod         = stats["mods"][skill] if stats else 0
         roll        = random.randint(1, 20)
         # Proficiency bonus if the checked ability is a saving throw proficiency for the class
         char_class  = stats.get("char_class") if stats else None
         prof_bonus  = stats["prof"] if (stats and skill in _CLASS_SAVE_PROFS.get(char_class or "", [])) else 0
-        # Apply Help bonus: +4 from a party member who clicked Help (must be a different player)
-        helper_uid  = view.helper_uid
-        help_bonus  = 4 if (helper_uid and helper_uid != roller_uid) else 0
+        # Apply Help bonus: +4 from a party member who used /support (must be a different player)
+        help_bonus    = 4 if (helper_uid and helper_uid != roller_uid) else 0
         # Ranger Natural Explorer (Lv 1+): +1 to all skill checks
         explore_bonus = 1 if (stats and stats["char_class"] == "ranger") else 0
         total       = roll + mod + prof_bonus + help_bonus + explore_bonus
@@ -4698,7 +4797,7 @@ class DungeonMasterCog(commands.Cog):
         success     = total >= dc
 
         prof_line    = f"\n⭐ *Proficient — +{prof_bonus} proficiency bonus*\n" if prof_bonus else ""
-        help_line    = (f"\n🤝 **{view.helper_name}** helped — +{help_bonus} bonus!\n"
+        help_line    = (f"\n🤝 **{helper_name}** helped — +{help_bonus} bonus!\n"
                         if help_bonus else "")
         explore_line = "\n🌿 *Natural Explorer — +1 to skill check*\n" if explore_bonus else ""
         flavor_line  = f'\n*"{flavor}"*\n' if flavor else ""
@@ -4732,9 +4831,12 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_WIN,
             )
-            try:
-                await msg.edit(embed=res_embed, view=None)
-            except Exception:
+            if campaign_msg is not None:
+                try:
+                    await campaign_msg.edit(embed=res_embed, view=None)
+                except Exception:
+                    await channel.send(embed=res_embed)
+            else:
                 await channel.send(embed=res_embed)
             await asyncio.sleep(2)
             return "victory"
@@ -4751,9 +4853,12 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_ERROR,
             )
-            try:
-                await msg.edit(embed=res_embed, view=None)
-            except Exception:
+            if campaign_msg is not None:
+                try:
+                    await campaign_msg.edit(embed=res_embed, view=None)
+                except Exception:
+                    await channel.send(embed=res_embed)
+            else:
                 await channel.send(embed=res_embed)
             await asyncio.sleep(2)
 
@@ -4836,11 +4941,96 @@ class DungeonMasterCog(commands.Cog):
         return "victory", chosen.get("encounters", [])
 
 
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _find_interaction_turn(self, uid: str, gid: str) -> "tuple[str, dict | None]":
+        for run_id, iact in self._interaction_turns.items():
+            if iact["gid"] == gid and uid in iact["active_uids"]:
+                return run_id, iact
+        return "", None
+
+    # ── Interaction slash commands ─────────────────────────────────────────
+
+    @app_commands.command(name="check", description="Attempt the skill check during an interaction encounter.")
+    @app_commands.describe(flavor="Describe what you do or say (optional)")
+    async def check(self, interaction: discord.Interaction, flavor: str = ""):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        _, iact = self._find_interaction_turn(uid, gid)
+        if not iact:
+            await interaction.response.send_message(
+                embed=self._err("No active skill check right now."), ephemeral=True)
+            return
+        if iact["_done"].is_set():
+            await interaction.response.send_message(
+                embed=self._err("Already resolved."), ephemeral=True)
+            return
+        iact["result"] = {"action": "skill", "uid": uid, "flavor": flavor.strip() or None}
+        await interaction.response.send_message(
+            embed=discord.Embed(description="🎲 Rolling…", color=var.COLOR_INTERACTION),
+            ephemeral=True,
+        )
+        iact["_done"].set()
+
+    @app_commands.command(name="support", description="Help a party member with their skill check (+4 bonus).")
+    async def support(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        name = interaction.user.display_name
+        _, iact = self._find_interaction_turn(uid, gid)
+        if not iact:
+            await interaction.response.send_message(
+                embed=self._err("No active skill check right now."), ephemeral=True)
+            return
+        if iact["_done"].is_set():
+            await interaction.response.send_message(
+                embed=self._err("Already resolved."), ephemeral=True)
+            return
+        if iact["helper_uid"] is not None:
+            await interaction.response.send_message(
+                embed=self._err("Someone is already helping."), ephemeral=True)
+            return
+        if _is_help_used(self.db, uid, gid):
+            await interaction.response.send_message(
+                embed=self._err("Help already used this long rest — use `/rest` to recover it."),
+                ephemeral=True)
+            return
+        _set_help_used(self.db, uid, gid)
+        iact["helper_uid"]  = uid
+        iact["helper_name"] = name
+        await interaction.response.send_message(
+            f"🤝 **{name}** steps up to help! +4 bonus to the skill check.")
+
+    @app_commands.command(name="engage", description="Choose to fight instead of attempting the skill check.")
+    async def engage(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        _, iact = self._find_interaction_turn(uid, gid)
+        if not iact:
+            await interaction.response.send_message(
+                embed=self._err("No active encounter right now."), ephemeral=True)
+            return
+        if iact["_done"].is_set():
+            await interaction.response.send_message(
+                embed=self._err("Already resolved."), ephemeral=True)
+            return
+        if not iact["encounter"].get("combat_fallback"):
+            await interaction.response.send_message(
+                embed=self._err("Can't fight here — no combat option for this encounter."),
+                ephemeral=True)
+            return
+        iact["result"] = {"action": "fight", "uid": uid, "flavor": None}
+        await interaction.response.send_message(
+            embed=discord.Embed(description="⚔️ Drawing weapons…", color=var.COLOR_COMBAT),
+            ephemeral=True,
+        )
+        iact["_done"].set()
+
     # ── Combat slash commands ─────────────────────────────────────────────
 
-    @app_commands.command(name="fight", description="Queue an attack for your combat turn.")
-    @app_commands.describe(enemy="Name or number of the enemy to attack (leave blank if only one)")
-    async def fight(self, interaction: discord.Interaction, enemy: str = ""):
+    @app_commands.command(name="attack", description="Queue an attack for your combat turn.")
+    @app_commands.describe(enemy="Enemy to attack (auto-completes with live enemies)")
+    async def attack(self, interaction: discord.Interaction, enemy: str = ""):
         uid  = str(interaction.user.id)
         turn = self._combat_turns.get(uid)
         if not turn:
@@ -4870,6 +5060,23 @@ class DungeonMasterCog(commands.Cog):
             ephemeral=True,
         )
         turn["pending_iact"].append(interaction)
+
+    @attack.autocomplete("enemy")
+    async def attack_autocomplete(self, interaction: discord.Interaction, current: str):
+        uid          = str(interaction.user.id)
+        turn         = self._combat_turns.get(uid)
+        if not turn:
+            return []
+        run          = self._runs.get(turn["run_id"], {})
+        live_enemies = [e for e in run.get("combat_enemies", []) if e["hp"] > 0]
+        return [
+            app_commands.Choice(
+                name=f"{e['name']}  ({e['hp']}/{e['max_hp']} HP)",
+                value=e["name"],
+            )
+            for e in live_enemies
+            if current.lower() in e["name"].lower()
+        ][:25]
 
     @app_commands.command(name="dodge", description="Take a defensive stance on your combat turn.")
     async def dodge(self, interaction: discord.Interaction):
@@ -4932,7 +5139,7 @@ class DungeonMasterCog(commands.Cog):
         turn["pending_iact"].append(interaction)
 
     @app_commands.command(name="item", description="Use a consumable item on your combat turn.")
-    @app_commands.describe(name="Item name (e.g. healing_potion)", target="Ally to use it on (leave blank for yourself)")
+    @app_commands.describe(name="Item from your backpack (auto-completes)", target="Ally to use it on (leave blank for yourself)")
     async def item_action(self, interaction: discord.Interaction, name: str, target: discord.Member | None = None):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
@@ -4941,20 +5148,15 @@ class DungeonMasterCog(commands.Cog):
             await interaction.response.send_message(
                 embed=self._err("It's not your turn right now."), ephemeral=True)
             return
-        item_id = name.lower().replace(" ", "_")
-        rows    = self.db.execute(
+        # Match the typed/chosen value against the player's inventory
+        item_id   = name.lower().replace(" ", "_")
+        rows      = self.db.execute(
             "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
             (uid, gid),
         )
         inventory = {r["item_id"]: r["qty"] for r in rows}
-        matched   = None
-        if item_id in inventory:
-            matched = item_id
-        else:
-            for iid in inventory:
-                if item_id in iid or iid in item_id:
-                    matched = iid
-                    break
+        matched   = item_id if item_id in inventory else next(
+            (iid for iid in inventory if item_id in iid or iid in item_id), None)
         if not matched:
             await interaction.response.send_message(
                 embed=self._err(f"You don't have `{name}` in your inventory."), ephemeral=True)
@@ -4971,6 +5173,23 @@ class DungeonMasterCog(commands.Cog):
             ephemeral=True,
         )
         turn["pending_iact"].append(interaction)
+
+    @item_action.autocomplete("name")
+    async def item_autocomplete(self, interaction: discord.Interaction, current: str):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        rows = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid),
+        )
+        return [
+            app_commands.Choice(
+                name=f"{r['item_id'].replace('_', ' ').title()}  (×{r['qty']})",
+                value=r["item_id"],
+            )
+            for r in rows
+            if current.lower() in r["item_id"].lower()
+        ][:25]
 
     @app_commands.command(name="bonus", description="Use a bonus action on your combat turn.")
     async def bonus(self, interaction: discord.Interaction):
