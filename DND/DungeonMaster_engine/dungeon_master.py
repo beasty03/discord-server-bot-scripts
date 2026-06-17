@@ -1546,7 +1546,7 @@ class WanderJoinView(discord.ui.View):
             return
         self._joiner_set.add(uid)
         gid = str(interaction.guild_id)
-        char_name = self._cog._char_display_name(uid, gid, interaction.user.display_name)
+        char_name = self.cog._char_display_name(uid, gid, interaction.user.display_name)
         self.joiners.append((uid, char_name))
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
         if self._joiner_set >= set(self.party_members):
@@ -1714,6 +1714,8 @@ class DungeonMasterCog(commands.Cog):
         self.db   = ForgeDB.get()
         # in-memory run state: run_id → {gid, participants, player_hp, player_max_hp, fled, log}
         self._runs: dict[str, dict] = {}
+        # active combat turns: uid → {_done, main_action, bonus_action, pending_iact, run_id, gid}
+        self._combat_turns: dict[str, dict] = {}
         # DLC registries — populated by DND_DLC cogs via register_*
         self._extra_campaigns: list[dict] = []
         self._extra_races:     list[dict] = []
@@ -3308,31 +3310,45 @@ class DungeonMasterCog(commands.Cog):
             cunning_dodgers: set[str]  = set()
             all_uids_list = [u for u, _ in run["participants"]]
 
-            def _mk_combat_view(active_uid: "str | None" = None) -> "CampaignLayoutView":
-                _hdr = (
+            def _cur_combat_embed(active_uid: "str | None" = None) -> discord.Embed:
+                _hp_ln: list[str] = []
+                for _u, _n in run["participants"]:
+                    if _u in run["fled"]:
+                        continue
+                    _hp  = run["player_hp"].get(_u, 0)
+                    _mhp = run["player_max_hp"].get(_u, 1)
+                    _bar = _build_hp_bar(_hp, _mhp, 8)
+                    if _u in run.get("dead", set()):
+                        _hp_ln.append(f"💀 ~~{_n}~~")
+                    elif _hp <= 0:
+                        _hp_ln.append(f"⚰️ **{_n}**  `{_bar}`  *(downed)*")
+                    elif _u == active_uid:
+                        _hp_ln.append(f"🎯 **{_n}**  `{_bar}`  {_hp}/{_mhp}")
+                    elif _u in _acted_uids:
+                        _hp_ln.append(f"✅ {_n}  `{_bar}`  {_hp}/{_mhp}")
+                    else:
+                        _hp_ln.append(f"⏳ {_n}  `{_bar}`  {_hp}/{_mhp}")
+                _el: list[str] = []
+                for _eobj in enemies:
+                    if _eobj["hp"] > 0:
+                        _ebar = _build_hp_bar(_eobj["hp"], _eobj["max_hp"], 8)
+                        _el.append(f"{enemy['emoji']} **{_eobj['name']}**  `{_ebar}`  {_eobj['hp']}/{_eobj['max_hp']}")
+                    else:
+                        _el.append(f"💀 ~~{_eobj['name']}~~")
+                _title = (
                     f"⚡ Surprise Round  ·  {encounter['name']}"
                     if (surprise and rnd == 1)
                     else f"⚔️ Round {rnd}  ·  {encounter['name']}"
                 )
+                _desc = "\n".join(_el)
+                if _hp_ln:
+                    _desc += "\n\n" + "\n".join(_hp_ln)
                 if active_uid:
-                    _hdr += f"  —  🎯 **{name_map.get(active_uid, active_uid)}'s turn**"
-                _to  = _build_turn_order_text(
-                    true_order, _acted_uids, name_map, active_uid,
-                    enemy["name"], enemy["emoji"])
-                _cd  = (
-                    f"{enemy['emoji']}  **{enemy['name']}**"
-                    + (f"  ·  *{campaign['name']}*" if campaign else "")
-                )
-                _rst = _build_roster_text(
-                    run, enemies, name_map, active_uid, _acted_uids, enemy["emoji"])
-                return CampaignLayoutView(
-                    active_uid, all_uids_list, self, gid,
-                    header=_hdr,
-                    turn_order_text=_to,
-                    combat_display=_cd,
-                    roster_text=_rst,
-                    round_lines=round_lines if round_lines else None,
-                )
+                    _active_name = name_map.get(active_uid, active_uid)
+                    _desc += f"\n\n🎯 **{_active_name}**'s turn — use `/fight`, `/dodge`, `/flee`, or `/endturn`"
+                if round_lines:
+                    _desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines[-5:])
+                return discord.Embed(title=_title, description=_desc, color=var.COLOR_COMBAT)
 
             # ── Collect actions one player at a time in true initiative order ─
             actions:       dict[str, "str | dict | None"] = {}
@@ -3349,31 +3365,38 @@ class DungeonMasterCog(commands.Cog):
                     _acted_uids.add(uid)
                     continue
 
-                _cv = _mk_combat_view(uid)
+                _turn_done = asyncio.Event()
+                _turn_data: dict = {
+                    "_done": _turn_done,
+                    "main_action": None,
+                    "bonus_action": None,
+                    "pending_iact": [],
+                    "run_id": run_id,
+                    "gid": gid,
+                }
+                self._combat_turns[uid] = _turn_data
+
                 if campaign_msg is not None:
                     try:
-                        await campaign_msg.edit(content=None, embed=None, view=_cv)
+                        await campaign_msg.edit(embed=_cur_combat_embed(uid), view=None)
                     except Exception:
                         pass
 
                 try:
-                    await asyncio.wait_for(_cv._done.wait(), timeout=var.ROUND_TIMEOUT)
+                    await asyncio.wait_for(_turn_done.wait(), timeout=var.ROUND_TIMEOUT)
                 except asyncio.TimeoutError:
-                    _cv.main_action = "dodge"
+                    _turn_data["main_action"] = "dodge"
 
+                self._combat_turns.pop(uid, None)
                 _acted_uids.add(uid)
 
-                # TurnSelectView stores attack as dict; processing code expects "attack" string
-                _raw_main = _cv.main_action
-                if isinstance(_raw_main, dict) and _raw_main.get("action") == "attack":
-                    _raw_main = "attack"
-                actions[uid]       = _raw_main
-                bonus_actions[uid] = _cv.bonus_action
+                actions[uid]       = _turn_data["main_action"]
+                bonus_actions[uid] = _turn_data["bonus_action"]
 
-            # Show processing state (all players acted — no buttons, no active player)
+            # Show processing state (all players acted)
             if campaign_msg is not None:
                 try:
-                    await campaign_msg.edit(content=None, embed=None, view=_mk_combat_view(None))
+                    await campaign_msg.edit(embed=_cur_combat_embed(None), view=None)
                 except Exception:
                     pass
 
@@ -3565,7 +3588,8 @@ class DungeonMasterCog(commands.Cog):
                     if uid not in run.get("raging_uids", set()):
                         round_lines.append(f"🔥 **{name}** tried Frenzy but isn't raging!")
                     elif stats:
-                        _fa_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
+                        _fa_act   = actions.get(uid)
+                        _fa_tidx  = _clamp_to_alive(_fa_act.get("target_idx", 0) if isinstance(_fa_act, dict) else 0)
                         fr = random.randint(1, 20)
                         ft = fr + stats["atk_bonus"]
                         if fr == 20 or ft >= enemy["ac"]:
@@ -3585,7 +3609,8 @@ class DungeonMasterCog(commands.Cog):
                                            "feature": fid, "round": rnd})
 
                 elif fid == "eldritch_spell":
-                    _es_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
+                    _es_act  = actions.get(uid)
+                    _es_tidx = _clamp_to_alive(_es_act.get("target_idx", 0) if isinstance(_es_act, dict) else 0)
                     es_dmg = random.randint(1, 8)
                     enemies[_es_tidx]["hp"] = max(0, enemies[_es_tidx]["hp"] - es_dmg)
                     last_hitter = (uid, name)
@@ -3639,14 +3664,14 @@ class DungeonMasterCog(commands.Cog):
 
                 # ── EK: War Magic bonus weapon attack ─────────────────────────
                 elif fid == "war_magic_atk" and stats:
-                    main_act = view.actions.get(uid)
+                    main_act    = actions.get(uid)
                     fire_bolted = (isinstance(main_act, dict)
                                    and main_act.get("feature_id") == "fire_bolt")
                     if not fire_bolted:
                         round_lines.append(
                             f"⚔️ **{name}** War Magic Strike — no spell cast this round *(fizzles)*")
                     else:
-                        _wm_tidx = _clamp_to_alive(view.enemy_targets.get(uid, 0))
+                        _wm_tidx = _clamp_to_alive(main_act.get("target_idx", 0) if isinstance(main_act, dict) else 0)
                         wm_r = random.randint(1, 20)
                         wm_t = wm_r + stats["atk_bonus"]
                         if wm_r == 20 or wm_t >= enemy["ac"]:
@@ -3781,8 +3806,7 @@ class DungeonMasterCog(commands.Cog):
 
                 elif action == "attack" or (isinstance(action, dict) and action.get("action") == "attack"):
                     _atk_tidx = _clamp_to_alive(
-                        action.get("target_idx", 0) if isinstance(action, dict) else
-                        view.enemy_targets.get(uid, 0))
+                        action.get("target_idx", 0) if isinstance(action, dict) else 0)
                     e_hp = enemies[_atk_tidx]["hp"]
                     stats = self._get_char_combat_stats(uid, gid)
                     if stats:
@@ -4531,28 +4555,39 @@ class DungeonMasterCog(commands.Cog):
             # Update the persistent campaign message with round results
             _result_title = (f"🏆 {encounter['name']} — Victory!" if all_enemies_dead
                              else f"⚔️ Round {rnd}  —  {encounter['name']}")
-            _result_view = CampaignLayoutView(
-                None, all_uids_list, self, gid,
-                header=_result_title,
-                turn_order_text="*(round complete)*",
-                combat_display=(
-                    f"{enemy['emoji']}  **{enemy['name']}**"
-                    + (f"  ·  *{campaign['name']}*" if campaign else "")
-                ),
-                roster_text=_build_roster_text(
-                    run, enemies, name_map, None, _acted_uids, enemy["emoji"]),
-                round_lines=round_lines if round_lines else None,
-            )
+            _hp_ln2: list[str] = []
+            for _u2, _n2 in run["participants"]:
+                if _u2 in run["fled"]:
+                    continue
+                _hp2  = run["player_hp"].get(_u2, 0)
+                _mhp2 = run["player_max_hp"].get(_u2, 1)
+                _bar2 = _build_hp_bar(_hp2, _mhp2, 8)
+                if _u2 in run.get("dead", set()):
+                    _hp_ln2.append(f"💀 ~~{_n2}~~")
+                elif _hp2 <= 0:
+                    _hp_ln2.append(f"⚰️ **{_n2}**  `{_bar2}`  *(downed)*")
+                else:
+                    _hp_ln2.append(f"✅ {_n2}  `{_bar2}`  {_hp2}/{_mhp2}")
+            _el2: list[str] = []
+            for _eobj2 in enemies:
+                if _eobj2["hp"] > 0:
+                    _ebar2 = _build_hp_bar(_eobj2["hp"], _eobj2["max_hp"], 8)
+                    _el2.append(f"{enemy['emoji']} **{_eobj2['name']}**  `{_ebar2}`  {_eobj2['hp']}/{_eobj2['max_hp']}")
+                else:
+                    _el2.append(f"💀 ~~{_eobj2['name']}~~")
+            _result_desc = "\n".join(_el2)
+            if _hp_ln2:
+                _result_desc += "\n\n" + "\n".join(_hp_ln2)
+            if round_lines:
+                _result_desc += "\n\n**― Actions ―**\n" + "\n".join(round_lines[-8:])
+            _result_embed = discord.Embed(title=_result_title, description=_result_desc, color=color)
             if campaign_msg is not None:
                 try:
-                    await campaign_msg.edit(content=None, embed=None, view=_result_view)
+                    await campaign_msg.edit(embed=_result_embed, view=None)
                 except Exception:
                     pass
             else:
-                await channel.send(embed=discord.Embed(
-                    title=_result_title,
-                    description="\n".join(round_lines) or "*(nothing happened)*",
-                    color=color))
+                await channel.send(embed=_result_embed)
 
             if all_enemies_dead:
                 # Kill blow messages for each enemy that died this round
@@ -4799,6 +4834,229 @@ class DungeonMasterCog(commands.Cog):
         ))
         await asyncio.sleep(1)
         return "victory", chosen.get("encounters", [])
+
+
+    # ── Combat slash commands ─────────────────────────────────────────────
+
+    @app_commands.command(name="fight", description="Queue an attack for your combat turn.")
+    @app_commands.describe(enemy="Name or number of the enemy to attack (leave blank if only one)")
+    async def fight(self, interaction: discord.Interaction, enemy: str = ""):
+        uid  = str(interaction.user.id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        if turn["main_action"] is not None:
+            await interaction.response.send_message(
+                embed=self._err("You already queued an action. Use `/endturn` to confirm it."),
+                ephemeral=True)
+            return
+        run          = self._runs.get(turn["run_id"], {})
+        live_enemies = [e for e in run.get("combat_enemies", []) if e["hp"] > 0]
+        target_idx   = 0
+        if enemy and len(live_enemies) > 1:
+            for i, e in enumerate(live_enemies):
+                if enemy.lower() in e["name"].lower() or enemy == str(i + 1):
+                    target_idx = i
+                    break
+        target = live_enemies[target_idx] if live_enemies else None
+        turn["main_action"] = {"action": "attack", "target_idx": target_idx}
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"⚔️ Attack on **{target['name'] if target else 'enemy'}** queued — use `/endturn` to confirm.",
+                color=var.COLOR_COMBAT,
+            ),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="dodge", description="Take a defensive stance on your combat turn.")
+    async def dodge(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        turn["main_action"] = "dodge"
+        await interaction.response.send_message(
+            embed=discord.Embed(description="🛡️ Dodge queued — use `/endturn` to confirm.", color=var.COLOR_COMBAT),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="flee", description="Attempt to flee from combat on your turn.")
+    async def flee(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        turn["main_action"] = "flee"
+        await interaction.response.send_message(
+            embed=discord.Embed(description="🏃 Flee queued — use `/endturn` to confirm.", color=var.COLOR_COMBAT),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="assist", description="Help an ally on your combat turn.")
+    @app_commands.describe(ally="The ally to help (leave blank to help the most wounded)")
+    async def assist(self, interaction: discord.Interaction, ally: discord.Member | None = None):
+        uid  = str(interaction.user.id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        run = self._runs.get(turn["run_id"])
+        if not run:
+            await interaction.response.send_message(
+                embed=self._err("No active combat found."), ephemeral=True)
+            return
+        if ally:
+            t_uid = str(ally.id)
+        else:
+            candidates = [u for u, _ in run["participants"] if u != uid and u not in run["fled"]]
+            t_uid = min(candidates, key=lambda u: run["player_hp"].get(u, 0), default=uid) if candidates else uid
+        t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+        turn["main_action"] = {"action": "help", "target_uid": t_uid}
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"🤝 Help **{t_name}** queued — use `/endturn` to confirm.",
+                color=var.COLOR_COMBAT,
+            ),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="item", description="Use a consumable item on your combat turn.")
+    @app_commands.describe(name="Item name (e.g. healing_potion)", target="Ally to use it on (leave blank for yourself)")
+    async def item_action(self, interaction: discord.Interaction, name: str, target: discord.Member | None = None):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        item_id = name.lower().replace(" ", "_")
+        rows    = self.db.execute(
+            "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",
+            (uid, gid),
+        )
+        inventory = {r["item_id"]: r["qty"] for r in rows}
+        matched   = None
+        if item_id in inventory:
+            matched = item_id
+        else:
+            for iid in inventory:
+                if item_id in iid or iid in item_id:
+                    matched = iid
+                    break
+        if not matched:
+            await interaction.response.send_message(
+                embed=self._err(f"You don't have `{name}` in your inventory."), ephemeral=True)
+            return
+        target_uid = str(target.id) if target else uid
+        turn["main_action"] = {"action": "use_item", "item_id": matched, "target_uid": target_uid}
+        item_label = matched.replace("_", " ").title()
+        t_name     = target.display_name if target else interaction.user.display_name
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"💉 **{item_label}** → **{t_name}** queued — use `/endturn` to confirm.",
+                color=var.COLOR_COMBAT,
+            ),
+            ephemeral=True,
+        )
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="bonus", description="Use a bonus action on your combat turn.")
+    async def bonus(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        if turn["bonus_action"] is not None:
+            await interaction.response.send_message(
+                embed=self._err("You already queued a bonus action."), ephemeral=True)
+            return
+        char       = self._fetch_char_basic(uid, gid)
+        char_class = (char["char_class"] or "").lower() if char else ""
+        _class_bonus: dict[str, list[tuple[str, str]]] = {
+            "barbarian": [("rage", "💢 Rage"), ("frenzy", "🔥 Frenzy Attack")],
+            "fighter":   [("second_wind", "🌬️ Second Wind")],
+            "rogue":     [("cunning_dodge", "🕵️ Cunning Dodge")],
+            "ranger":    [("hunters_mark", "🎯 Hunter's Mark"), ("ensnaring_strike", "🌿 Ensnaring Strike"), ("hail_of_thorns", "🌪️ Hail of Thorns")],
+            "druid":     [("beast_protect", "🛡️ Beast Guard")],
+            "wizard":    [("mage_hand", "🎩 Mage Hand Distraction")],
+            "cleric":    [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
+            "paladin":   [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
+            "warlock":   [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell"), ("eldritch_blast", "🔮 War Magic")],
+            "bard":      [("healing_word", "💚 Healing Word"), ("cure_wounds", "💚 Cure Wounds")],
+            "sorcerer":  [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell")],
+        }
+        universal  = [("flee", "🏃 Flee (bonus)"), ("help", "🤝 Help Ally (bonus)")]
+        bonus_list = _class_bonus.get(char_class, []) + universal
+        options    = [discord.SelectOption(label=lbl, value=fid) for fid, lbl in bonus_list[:25]]
+        select     = discord.ui.Select(placeholder="Choose a bonus action…", options=options)
+        view       = discord.ui.View(timeout=60)
+        view.add_item(select)
+
+        async def _on_select(sel_iact: discord.Interaction):
+            chosen = select.values[0] if select.values else None
+            if not chosen:
+                await sel_iact.response.defer()
+                return
+            bonus_payload: dict = {"action": chosen}
+            if chosen in ("help", "flee"):
+                pass  # no extra data needed for these at this stage
+            turn["bonus_action"] = bonus_payload
+            await sel_iact.response.edit_message(
+                embed=discord.Embed(
+                    description=f"✅ Bonus action **{chosen.replace('_', ' ').title()}** queued — use `/endturn` to confirm.",
+                    color=var.COLOR_COMBAT,
+                ),
+                view=None,
+            )
+
+        select.callback = _on_select
+        await interaction.response.send_message(view=view, ephemeral=True)
+        turn["pending_iact"].append(interaction)
+
+    @app_commands.command(name="endturn", description="Finalize your turn and execute all queued actions.")
+    async def endturn(self, interaction: discord.Interaction):
+        uid  = str(interaction.user.id)
+        turn = self._combat_turns.get(uid)
+        if not turn:
+            await interaction.response.send_message(
+                embed=self._err("It's not your turn right now."), ephemeral=True)
+            return
+        if turn["main_action"] is None:
+            turn["main_action"] = "dodge"
+        await interaction.response.send_message(
+            embed=discord.Embed(description="✅ Turn ended!", color=var.COLOR_WIN),
+            ephemeral=True,
+        )
+        turn["_done"].set()
+        pending = list(turn["pending_iact"])
+
+        async def _cleanup():
+            for iact in pending:
+                try:
+                    await iact.delete_original_response()
+                except Exception:
+                    pass
+            try:
+                await interaction.delete_original_response()
+            except Exception:
+                pass
+
+        asyncio.create_task(_cleanup())
 
 
 async def setup(bot: commands.Bot):
