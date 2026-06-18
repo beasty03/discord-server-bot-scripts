@@ -1973,12 +1973,15 @@ class DungeonMasterCog(commands.Cog):
                 )
 
             # Save current HP to DB for all participants.
-            # Dead players (hp=0) save at 1 so they're not stuck — they need /rest to recover.
+            # Dead players respawn at full HP — the 50 % gold penalty is the real death cost.
+            dead_set = run.get("dead", set())
             for p_uid, _ in participants:
                 final_hp = run["player_hp"].get(p_uid, 0)
+                if p_uid in dead_set:
+                    final_hp = run["player_max_hp"].get(p_uid, final_hp)
                 self.db.execute(
                     "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
-                    (max(1, final_hp), p_uid, gid))
+                    (max(0, final_hp), p_uid, gid))
 
             result_embed.set_footer(text=var.SERVER_NAME)
             await interaction.channel.send(embed=result_embed)

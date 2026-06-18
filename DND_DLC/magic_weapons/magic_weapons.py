@@ -1,0 +1,35 @@
+import logging
+from pathlib import Path
+import importlib.util as _ilu
+from discord.ext import commands
+
+_spec = _ilu.spec_from_file_location('magic_weapons_variables', Path(__file__).parent / 'variables.py')
+var = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(var)
+
+log = logging.getLogger("launcher")
+
+
+class MagicWeaponsDLC(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+
+async def setup(bot: commands.Bot):
+    char = bot.get_cog("CharacterCog")
+    shop = bot.get_cog("ShopCog")
+
+    if char:
+        for weapon in var.WEAPONS:
+            char.register_item(weapon)
+    else:
+        log.warning("Magic Weapons DLC: CharacterCog not loaded — weapons not registered.")
+
+    if shop:
+        for item in var.SHOP_ITEMS:
+            shop.register_item(item)
+    else:
+        log.warning("Magic Weapons DLC: ShopCog not loaded — shop listings not registered.")
+
+    await bot.add_cog(MagicWeaponsDLC(bot))
+    log.info("✅ DND_DLC/magic_weapons loaded")
