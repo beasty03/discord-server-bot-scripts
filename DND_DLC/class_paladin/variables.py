@@ -160,7 +160,7 @@ WEAPONS = [
 SHOP_ITEMS = [
     {"id": "warhammer",    "name": "Warhammer",    "emoji": "🔨",
      "description": "A heavy martial weapon. 1d8 bludgeoning, one-handed.",
-     "price": 25, "max_qty": 1, "tier": "common"},
+     "price": 25, "max_qty": 1, "tier": "uncommon"},
     {"id": "morningstar",  "name": "Morningstar",  "emoji": "🪨",
      "description": "Spiked and brutal — 1d8 piercing, one-handed.",
      "price": 35, "max_qty": 1, "tier": "uncommon"},
@@ -169,5 +169,5 @@ SHOP_ITEMS = [
      "price": 1500, "max_qty": 1, "tier": "legendary"},
     {"id": "holy_symbol",  "name": "Holy Symbol",  "emoji": "✝️",
      "description": "A divine focus worn by those sworn to a deity.",
-     "price": 15, "max_qty": 1, "tier": "common"},
+     "price": 15, "max_qty": 1, "tier": "uncommon"},
 ]
