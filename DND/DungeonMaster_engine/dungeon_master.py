@@ -4396,20 +4396,39 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.command(name="forcestop", description="[Admin] Force-stop a stuck campaign in this server.")
     @app_commands.default_permissions(administrator=True)
     async def forcestop(self, interaction: discord.Interaction):
-        gid          = str(interaction.guild_id)
-        target_runs  = {rid: run for rid, run in self._runs.items() if run.get("gid") == gid}
+        gid = str(interaction.guild_id)
 
-        if not target_runs:
+        # Source of truth: the DB (in-memory _runs may already be gone after a crash)
+        db_rows = self.db.execute(
+            "SELECT DISTINCT run_id, user_id, campaign_id FROM dnd_active_runs WHERE guild_id=?",
+            (gid,)) or []
+
+        # Also grab any in-memory runs the DB may have missed
+        mem_run_ids = {rid for rid, run in self._runs.items() if run.get("gid") == gid}
+        db_run_ids  = {row[0] for row in db_rows}
+        db_users    = [row[1] for row in db_rows]
+        all_run_ids = mem_run_ids | db_run_ids
+
+        if not all_run_ids:
             await interaction.response.send_message(
-                embed=self._err("No active campaign running in this server."), ephemeral=True)
+                embed=self._err("No active campaign found in this server."), ephemeral=True)
             return
 
         stopped: list[str] = []
-        for run_id, run in list(target_runs.items()):
-            stopped.append(run.get("campaign", {}).get("name", run_id))
+        for run_id in all_run_ids:
+            run = self._runs.get(run_id)
+
+            # Best-effort campaign name
+            if run:
+                stopped.append(run.get("campaign", {}).get("name", run_id))
+            else:
+                cid = next((row[2] for row in db_rows if row[0] == run_id), run_id)
+                all_camps = var.CAMPAIGNS + self._extra_campaigns
+                camp_name = next((c["name"] for c in all_camps if c["id"] == cid), cid)
+                stopped.append(camp_name)
 
             # Unblock any waiting combat turns
-            for uid in [u for u, t in self._combat_turns.items() if t.get("run_id") == run_id]:
+            for uid in [u for u, t in list(self._combat_turns.items()) if t.get("run_id") == run_id]:
                 turn = self._combat_turns.pop(uid, None)
                 if turn:
                     turn["main_action"] = turn["main_action"] or "dodge"
@@ -4423,24 +4442,32 @@ class DungeonMasterCog(commands.Cog):
             istate = self._initiative_state.pop(run_id, None)
             if istate:
                 istate["_done"].set()
-            for uid in [u for u, rid in self._initiative_turns.items() if rid == run_id]:
+            for uid in [u for u, rid in list(self._initiative_turns.items()) if rid == run_id]:
                 self._initiative_turns.pop(uid, None)
 
             cstate = self._choice_turns.pop(run_id, None)
             if cstate:
                 cstate["_done"].set()
 
-            # Release party lock for all participants
+            # Release party lock for in-memory participants
             parties_cog = self._parties_cog()
-            if parties_cog:
+            if run and parties_cog:
                 for uid, _ in run.get("participants", []):
                     party = parties_cog._member_party(gid, uid)
                     if party and party.get("active_run") is not None:
                         party["active_run"] = None
 
-            # Clear DB slot and in-memory run
+            # Always clear the DB row (this is the lock that blocks /wander)
             self._clear_run(run_id)
             self._runs.pop(run_id, None)
+
+        # Clear party locks for users found in the DB but whose run wasn't in memory
+        parties_cog = self._parties_cog()
+        if parties_cog:
+            for uid in db_users:
+                party = parties_cog._member_party(gid, uid)
+                if party and party.get("active_run") is not None:
+                    party["active_run"] = None
 
         names = ", ".join(f"**{n}**" for n in stopped)
         await interaction.response.send_message(
