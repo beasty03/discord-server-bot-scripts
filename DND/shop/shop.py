@@ -48,7 +48,7 @@ def _add_chunked_field(embed: discord.Embed, base_name: str, lines: list[str], m
     if current:
         chunks.append(current)
     for i, chunk in enumerate(chunks):
-        name = base_name if len(chunks) == 1 else f"{base_name} ({i + 1}/{len(chunks)})"
+        name = base_name if i == 0 else "↳ continued"
         embed.add_field(name=name, value="\n".join(chunk), inline=False)
 
 
