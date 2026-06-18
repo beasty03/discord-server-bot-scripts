@@ -437,56 +437,68 @@ class ShopCog(commands.Cog):
     @app_commands.command(name="shop_restock", description="[Admin] Force-restock the shop with new items today.")
     @app_commands.default_permissions(administrator=True)
     async def restock_store(self, interaction: discord.Interaction):
-        today = date.today().isoformat()
-        self.db.execute("DELETE FROM dnd_shop_stock WHERE date=?", (today,))
-        self._generate_daily_stock(today)
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                description="🛒 Shop restocked for today! Use `/shop` to see the new inventory.",
-                color=var.COLOR_WIN),
-            ephemeral=True)
+        try:
+            today = date.today().isoformat()
+            self.db.execute("DELETE FROM dnd_shop_stock WHERE date=?", (today,))
+            self._generate_daily_stock(today)
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="🛒 Shop restocked for today! Use `/shop` to see the new inventory.",
+                    color=var.COLOR_WIN),
+                ephemeral=True)
+        except Exception as e:
+            log.exception("shop_restock error")
+            await interaction.response.send_message(
+                embed=discord.Embed(description=f"❌ Error: `{e}`", color=var.COLOR_ERROR),
+                ephemeral=True)
 
     # ── /shop_list ────────────────────────────────────────────────────────────
 
     @app_commands.command(name="shop_list", description="[Admin] List every item in the shop rotation with tier and spawn weight.")
     @app_commands.default_permissions(administrator=True)
     async def shop_list(self, interaction: discord.Interaction):
-        all_items   = self._all_shop_items()
-        all_bundles = self._all_shop_bundles()
+        try:
+            all_items   = self._all_shop_items()
+            all_bundles = self._all_shop_bundles()
 
-        total_item_weight   = sum(_tier(i)["weight"] for i in all_items)
-        total_bundle_weight = sum(_tier(b)["weight"] for b in all_bundles)
+            total_item_weight   = sum(_tier(i)["weight"] for i in all_items)
+            total_bundle_weight = sum(_tier(b)["weight"] for b in all_bundles)
 
-        def _chance(item: dict, total: int) -> str:
-            w = _tier(item)["weight"]
-            pct = (w / total * 100) if total else 0
-            return f"{pct:.0f}%"
+            def _chance(item: dict, total: int) -> str:
+                w = _tier(item)["weight"]
+                pct = (w / total * 100) if total else 0
+                return f"{pct:.0f}%"
 
-        item_lines = [
-            f"{i['emoji']} **{i['name']}** — {_tier(i)['emoji']} {_tier(i)['label']} "
-            f"(weight {_tier(i)['weight']}, ~{_chance(i, total_item_weight)} of item pool)"
-            for i in all_items
-        ]
-        bundle_lines = [
-            f"{b['emoji']} **{b['name']}** — {_tier(b)['emoji']} {_tier(b)['label']} "
-            f"(weight {_tier(b)['weight']}, ~{_chance(b, total_bundle_weight)} of bundle pool)"
-            for b in all_bundles
-        ]
+            item_lines = [
+                f"{i['emoji']} **{i['name']}** — {_tier(i)['emoji']} {_tier(i)['label']} "
+                f"(weight {_tier(i)['weight']}, ~{_chance(i, total_item_weight)} of item pool)"
+                for i in all_items
+            ]
+            bundle_lines = [
+                f"{b['emoji']} **{b['name']}** — {_tier(b)['emoji']} {_tier(b)['label']} "
+                f"(weight {_tier(b)['weight']}, ~{_chance(b, total_bundle_weight)} of bundle pool)"
+                for b in all_bundles
+            ]
 
-        embed = discord.Embed(
-            title="🏪 Shop Rotation — All Items",
-            description=(
-                f"**{var.MAX_SHOP_ITEMS}** items and **{var.MAX_SHOP_BUNDLES}** bundles are picked each day "
-                f"by weighted random draw. Higher weight = more likely to appear."
-            ),
-            color=var.COLOR_SHOP,
-        )
-        if item_lines:
-            _add_chunked_field(embed, f"🛒 Items ({len(all_items)} total)", item_lines)
-        if bundle_lines:
-            _add_chunked_field(embed, f"📦 Bundles ({len(all_bundles)} total)", bundle_lines)
-        embed.set_footer(text=var.SERVER_NAME)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            embed = discord.Embed(
+                title="🏪 Shop Rotation — All Items",
+                description=(
+                    f"**{var.MAX_SHOP_ITEMS}** items and **{var.MAX_SHOP_BUNDLES}** bundles are picked each day "
+                    f"by weighted random draw. Higher weight = more likely to appear."
+                ),
+                color=var.COLOR_SHOP,
+            )
+            if item_lines:
+                _add_chunked_field(embed, f"🛒 Items ({len(all_items)} total)", item_lines)
+            if bundle_lines:
+                _add_chunked_field(embed, f"📦 Bundles ({len(all_bundles)} total)", bundle_lines)
+            embed.set_footer(text=var.SERVER_NAME)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except Exception as e:
+            log.exception("shop_list error")
+            await interaction.response.send_message(
+                embed=discord.Embed(description=f"❌ Error: `{e}`", color=var.COLOR_ERROR),
+                ephemeral=True)
 
     # ── /shop_sell ─────────────────────────────────────────────────────────────
 
