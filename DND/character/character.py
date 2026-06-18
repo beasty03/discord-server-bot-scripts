@@ -422,13 +422,46 @@ class CharacterCog(commands.Cog):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _engine_cog(self):
+        return self.bot.cogs.get("DungeonMasterCog")
+
     def _extra_races(self) -> list:
-        dm = self.bot.cogs.get("DungeonMasterCog")
+        dm = self._engine_cog()
         return dm._extra_races if dm else []
 
     def _extra_classes(self) -> list:
-        dm = self.bot.cogs.get("DungeonMasterCog")
+        dm = self._engine_cog()
         return dm._extra_classes if dm else []
+
+    def _class_features(self, class_id: str) -> list:
+        dm = self._engine_cog()
+        if dm:
+            return dm._get_class_features(class_id)
+        return var.CLASS_FEATURES.get(class_id, [])
+
+    def _race_traits(self, race_id: str) -> list:
+        dm = self._engine_cog()
+        if dm:
+            return dm._get_race_traits(race_id)
+        return var.RACE_TRAITS.get(race_id, [])
+
+    def _combat_features(self, class_id: str) -> list:
+        dm = self._engine_cog()
+        if dm:
+            return dm._get_combat_features(class_id)
+        return var.COMBAT_FEATURES.get(class_id, [])
+
+    def _subclass_combat_features(self, subclass_id: str) -> list:
+        dm = self._engine_cog()
+        if dm:
+            return dm._get_subclass_combat_features(subclass_id)
+        return var.SUBCLASS_COMBAT_FEATURES.get(subclass_id, [])
+
+    def _level_up_choice(self, key: tuple) -> "dict | None":
+        dm = self._engine_cog()
+        if dm:
+            return dm._get_level_up_choice(key)
+        return var.LEVEL_UP_CHOICES.get(key)
 
     def _derive_char(self, char: dict) -> dict:
         return _derive(char, self._extra_races(), self._extra_classes())
@@ -862,7 +895,7 @@ class CharacterCog(commands.Cog):
             return
 
         c        = _get_class(cid, self._extra_classes())
-        features = _class_features(cid, self._extra_classes())
+        features = self._class_features(cid)
 
         by_level = defaultdict(list)
         for f in features:
@@ -939,7 +972,7 @@ class CharacterCog(commands.Cog):
             return
 
         r      = _get_race(rid, self._extra_races())
-        traits = _race_traits(rid, self._extra_races())
+        traits = self._race_traits(rid)
         bonus  = ", ".join(f"+{v} {var.ABILITY_ABBR[k]}" for k, v in r["mods"].items())
 
         lines = [f"**{t['name']}** — {t['desc']}" for t in traits]
