@@ -384,6 +384,28 @@ class CharacterCog(commands.Cog):
             self._extra_shop_items.append(data)
             log.info("Character: proxied DLC shop item '%s'", data["id"])
 
+    def _scan_dlc_items(self):
+        """Scan DND_DLC/*/variables.py for WEAPONS, CHAR_ITEMS, and SHOP_ITEMS and register them.
+
+        This runs at cog_load so all DLC items are available regardless of whether
+        the launcher discovers the individual DLC folder.
+        """
+        dlc_dir = Path(__file__).parent.parent.parent / "DND_DLC"
+        if not dlc_dir.is_dir():
+            return
+        for var_file in sorted(dlc_dir.glob("*/variables.py")):
+            folder = var_file.parent.name
+            try:
+                spec = _ilu.spec_from_file_location(f"dlc_{folder}_vars", var_file)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                for item in getattr(mod, "WEAPONS", []) + getattr(mod, "CHAR_ITEMS", []):
+                    self.register_item(item)
+                for item in getattr(mod, "SHOP_ITEMS", []):
+                    self.register_shop_item(item)
+            except Exception as exc:
+                log.warning("Character: DLC scan failed for '%s': %s", folder, exc)
+
     def _item(self, iid: str) -> dict | None:
         return next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)
 
@@ -426,6 +448,7 @@ class CharacterCog(commands.Cog):
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+        self._scan_dlc_items()
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
