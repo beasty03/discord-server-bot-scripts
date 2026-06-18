@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-
 import importlib.util as _ilu
 from discord.ext import commands
 
@@ -20,5 +19,9 @@ async def setup(bot: commands.Bot):
     dm = bot.get_cog("DungeonMasterCog")
     if dm:
         dm.register_race(var.RACE)
+        dm.register_race_traits("gnome", var.TRAITS)
+    else:
+        log.warning("Gnome DLC: DungeonMasterCog not loaded — race not registered.")
+
     await bot.add_cog(GnomeDLC(bot))
     log.info("✅ DND_DLC/race_gnome loaded")
