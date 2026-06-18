@@ -13,7 +13,8 @@ log = logging.getLogger("launcher")
 
 class BeastHuntDLC(commands.Cog):
     """DLC campaign — no slash commands, exists only to register content."""
-    pass
+    _dlc_shop_items   = [var.SHOP_ITEM]    # discovered by ShopCog without load-order dependency
+    _dlc_shop_bundles = [var.SHOP_BUNDLE]
 
 
 async def setup(bot: commands.Bot):

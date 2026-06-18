@@ -11,6 +11,8 @@ log = logging.getLogger("launcher")
 
 
 class MagicWeaponsDLC(commands.Cog):
+    _dlc_shop_items = var.SHOP_ITEMS   # discovered by ShopCog without load-order dependency
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 

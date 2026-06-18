@@ -73,6 +73,8 @@ async def _handle_holy_light(run, action, uid, name, stats, enemies, target_idx,
 # ============================================================================
 
 class PaladinDLC(commands.Cog):
+    _dlc_shop_items = var.SHOP_ITEMS   # discovered by ShopCog without load-order dependency
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 

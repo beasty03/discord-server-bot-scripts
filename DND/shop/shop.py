@@ -244,6 +244,38 @@ class ShopCog(commands.Cog):
         char_cog = self.bot.cogs.get("CharacterCog")
         return char_cog._extra_items if char_cog else []
 
+    def _all_shop_items(self) -> list[dict]:
+        """Base items + explicitly registered + scanned from DLC cogs.
+        Scanning at call time avoids load-order issues where DLC setup() runs
+        before ShopCog is available."""
+        seen: set[str] = set()
+        result: list[dict] = []
+        for item in var.SHOP_ITEMS + self._extra_items:
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                result.append(item)
+        for cog in self.bot.cogs.values():
+            for item in getattr(cog, "_dlc_shop_items", []):
+                if item["id"] not in seen:
+                    seen.add(item["id"])
+                    result.append(item)
+        return result
+
+    def _all_shop_bundles(self) -> list[dict]:
+        """Base bundles + explicitly registered + scanned from DLC cogs."""
+        seen: set[str] = set()
+        result: list[dict] = []
+        for b in var.SHOP_BUNDLES + self._extra_bundles:
+            if b["id"] not in seen:
+                seen.add(b["id"])
+                result.append(b)
+        for cog in self.bot.cogs.values():
+            for b in getattr(cog, "_dlc_shop_bundles", []):
+                if b["id"] not in seen:
+                    seen.add(b["id"])
+                    result.append(b)
+        return result
+
     async def cog_load(self):
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS dnd_shop_stock (
@@ -276,8 +308,8 @@ class ShopCog(commands.Cog):
         cutoff = date.fromordinal(date.today().toordinal() - 7).isoformat()
         self.db.execute("DELETE FROM dnd_shop_stock WHERE date < ?", (cutoff,))
 
-        all_items   = var.SHOP_ITEMS   + self._extra_items
-        all_bundles = var.SHOP_BUNDLES + self._extra_bundles
+        all_items   = self._all_shop_items()
+        all_bundles = self._all_shop_bundles()
 
         selected_items   = _weighted_sample(all_items,   rng, var.MAX_SHOP_ITEMS)
         selected_bundles = _weighted_sample(all_bundles, rng, var.MAX_SHOP_BUNDLES)
@@ -316,8 +348,8 @@ class ShopCog(commands.Cog):
             return
 
         stock_map, today = self._get_today()
-        all_items   = {i["id"]: i for i in var.SHOP_ITEMS   + self._extra_items}
-        all_bundles = {b["id"]: b for b in var.SHOP_BUNDLES + self._extra_bundles}
+        all_items   = {i["id"]: i for i in self._all_shop_items()}
+        all_bundles = {b["id"]: b for b in self._all_shop_bundles()}
 
         balance = self.db.get_balance(uid, gid)
 
@@ -399,8 +431,8 @@ class ShopCog(commands.Cog):
     @app_commands.command(name="shop_list", description="[Admin] List every item in the shop rotation with tier and spawn weight.")
     @app_commands.default_permissions(administrator=True)
     async def shop_list(self, interaction: discord.Interaction):
-        all_items   = var.SHOP_ITEMS   + self._extra_items
-        all_bundles = var.SHOP_BUNDLES + self._extra_bundles
+        all_items   = self._all_shop_items()
+        all_bundles = self._all_shop_bundles()
 
         total_item_weight   = sum(_tier(i)["weight"] for i in all_items)
         total_bundle_weight = sum(_tier(b)["weight"] for b in all_bundles)
