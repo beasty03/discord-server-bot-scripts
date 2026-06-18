@@ -32,6 +32,26 @@ def _item_name(item_id: str, extra_items: list = ()) -> str:
 def _tier(data: dict) -> dict:
     return var.TIERS.get(data.get("tier", "common"), var.TIERS["common"])
 
+def _add_chunked_field(embed: discord.Embed, base_name: str, lines: list[str], max_chars: int = 1024):
+    """Add embed field(s) for lines, splitting into multiple fields if needed."""
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        needed = len(line) + 1  # +1 for the newline
+        if current_len + needed > max_chars and current:
+            chunks.append(current)
+            current = []
+            current_len = 0
+        current.append(line)
+        current_len += needed
+    if current:
+        chunks.append(current)
+    for i, chunk in enumerate(chunks):
+        name = base_name if len(chunks) == 1 else f"{base_name} ({i + 1}/{len(chunks)})"
+        embed.add_field(name=name, value="\n".join(chunk), inline=False)
+
+
 def _weighted_sample(pool: list[dict], rng: _random.Random, n: int) -> list[dict]:
     """Pick up to n items from pool without replacement, weighted by tier."""
     pool    = list(pool)
@@ -398,9 +418,9 @@ class ShopCog(commands.Cog):
                 item_lines.append(line)
 
         if item_lines:
-            embed.add_field(name="🛒 Items", value="\n".join(item_lines), inline=False)
+            _add_chunked_field(embed, "🛒 Items", item_lines)
         if bundle_lines:
-            embed.add_field(name="📦 Bundles", value="\n".join(bundle_lines), inline=False)
+            _add_chunked_field(embed, "📦 Bundles", bundle_lines)
 
         if not item_lines and not bundle_lines:
             embed.description = "The shop is empty today. Check back tomorrow!"
@@ -462,17 +482,9 @@ class ShopCog(commands.Cog):
             color=var.COLOR_SHOP,
         )
         if item_lines:
-            embed.add_field(
-                name=f"🛒 Items ({len(all_items)} total)",
-                value="\n".join(item_lines) or "—",
-                inline=False,
-            )
+            _add_chunked_field(embed, f"🛒 Items ({len(all_items)} total)", item_lines)
         if bundle_lines:
-            embed.add_field(
-                name=f"📦 Bundles ({len(all_bundles)} total)",
-                value="\n".join(bundle_lines) or "—",
-                inline=False,
-            )
+            _add_chunked_field(embed, f"📦 Bundles ({len(all_bundles)} total)", bundle_lines)
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
