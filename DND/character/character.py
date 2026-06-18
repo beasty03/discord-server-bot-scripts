@@ -368,14 +368,21 @@ _CHAR_COLS = [
 class CharacterCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
-        self.bot          = bot
-        self.db           = ForgeDB.get()
-        self._extra_items: list[dict] = []
+        self.bot               = bot
+        self.db                = ForgeDB.get()
+        self._extra_items:     list[dict] = []
+        self._extra_shop_items: list[dict] = []  # proxy for DLC shop items (avoids ShopCog load-order issue)
 
     def register_item(self, data: dict):
         if not any(i["id"] == data["id"] for i in self._extra_items):
             self._extra_items.append(data)
             log.info("Character: registered DLC item '%s'", data["id"])
+
+    def register_shop_item(self, data: dict):
+        """Register a shop listing via CharacterCog so ShopCog can discover it at query time."""
+        if not any(i["id"] == data["id"] for i in self._extra_shop_items):
+            self._extra_shop_items.append(data)
+            log.info("Character: proxied DLC shop item '%s'", data["id"])
 
     def _item(self, iid: str) -> dict | None:
         return next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)

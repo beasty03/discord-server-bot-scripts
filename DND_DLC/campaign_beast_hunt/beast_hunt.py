@@ -13,8 +13,9 @@ log = logging.getLogger("launcher")
 
 class BeastHuntDLC(commands.Cog):
     """DLC campaign — no slash commands, exists only to register content."""
-    _dlc_shop_items   = [var.SHOP_ITEM]    # discovered by ShopCog without load-order dependency
+    _dlc_shop_items   = [var.SHOP_ITEM, var.RECIPE_SHOP_ITEM]
     _dlc_shop_bundles = [var.SHOP_BUNDLE]
+    _dlc_recipes      = [var.RECIPE]
 
 
 async def setup(bot: commands.Bot):
@@ -23,6 +24,21 @@ async def setup(bot: commands.Bot):
         dm.register_campaign(var.CAMPAIGN)
     else:
         log.warning("BeastHunt DLC: DungeonMasterCog not loaded — campaign not registered.")
+
+    char = bot.get_cog("CharacterCog")
+    if char:
+        for item in var.CHAR_ITEMS:
+            char.register_item(item)
+        for shop_item in [var.SHOP_ITEM, var.RECIPE_SHOP_ITEM]:
+            char.register_shop_item(shop_item)
+    else:
+        log.warning("BeastHunt DLC: CharacterCog not loaded — items not registered.")
+
+    recipes_cog = bot.get_cog("RecipesCog")
+    if recipes_cog:
+        recipes_cog.register_recipe(var.RECIPE)
+    else:
+        log.warning("BeastHunt DLC: RecipesCog not loaded — recipe not registered.")
 
     shop = bot.get_cog("ShopCog")
     if shop:

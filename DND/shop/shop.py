@@ -265,9 +265,8 @@ class ShopCog(commands.Cog):
         return char_cog._extra_items if char_cog else []
 
     def _all_shop_items(self) -> list[dict]:
-        """Base items + explicitly registered + scanned from DLC cogs.
-        Scanning at call time avoids load-order issues where DLC setup() runs
-        before ShopCog is available."""
+        """Base + explicitly registered + DLC cog attributes + CharacterCog proxy.
+        Multiple discovery paths ensure items show regardless of load order."""
         seen: set[str] = set()
         result: list[dict] = []
         for item in var.SHOP_ITEMS + self._extra_items:
@@ -279,10 +278,16 @@ class ShopCog(commands.Cog):
                 if item["id"] not in seen:
                     seen.add(item["id"])
                     result.append(item)
+        char_cog = self.bot.cogs.get("CharacterCog")
+        if char_cog:
+            for item in getattr(char_cog, "_extra_shop_items", []):
+                if item["id"] not in seen:
+                    seen.add(item["id"])
+                    result.append(item)
         return result
 
     def _all_shop_bundles(self) -> list[dict]:
-        """Base bundles + explicitly registered + scanned from DLC cogs."""
+        """Base + explicitly registered + DLC cog attributes."""
         seen: set[str] = set()
         result: list[dict] = []
         for b in var.SHOP_BUNDLES + self._extra_bundles:
@@ -465,7 +470,7 @@ class ShopCog(commands.Cog):
             total_bundle_weight = sum(_tier(b)["weight"] for b in all_bundles)
 
             def _chance(item: dict, total: int) -> str:
-                w = _tier(item)["weight"]
+                w   = _tier(item)["weight"]
                 pct = (w / total * 100) if total else 0
                 return f"{pct:.0f}%"
 
@@ -480,18 +485,20 @@ class ShopCog(commands.Cog):
                 for b in all_bundles
             ]
 
+            sections: list[str] = [
+                f"**{var.MAX_SHOP_ITEMS}** items and **{var.MAX_SHOP_BUNDLES}** bundles are picked each day "
+                f"by weighted random draw. Higher weight = more likely to appear."
+            ]
+            if item_lines:
+                sections.append(f"\n**🛒 Items ({len(all_items)} total)**\n" + "\n".join(item_lines))
+            if bundle_lines:
+                sections.append(f"\n**📦 Bundles ({len(all_bundles)} total)**\n" + "\n".join(bundle_lines))
+
             embed = discord.Embed(
                 title="🏪 Shop Rotation — All Items",
-                description=(
-                    f"**{var.MAX_SHOP_ITEMS}** items and **{var.MAX_SHOP_BUNDLES}** bundles are picked each day "
-                    f"by weighted random draw. Higher weight = more likely to appear."
-                ),
+                description="\n".join(sections),
                 color=var.COLOR_SHOP,
             )
-            if item_lines:
-                _add_chunked_field(embed, f"🛒 Items ({len(all_items)} total)", item_lines)
-            if bundle_lines:
-                _add_chunked_field(embed, f"📦 Bundles ({len(all_bundles)} total)", bundle_lines)
             embed.set_footer(text=var.SERVER_NAME)
             await interaction.response.send_message(embed=embed, ephemeral=True)
         except Exception as e:

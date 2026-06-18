@@ -120,7 +120,7 @@ class CraftSelectView(discord.ui.View):
         self._cog = cog
         self._uid = uid
         self._gid = gid
-        self._all = var.RECIPES + cog._extra_recipes
+        self._all = cog._all_recipes()
 
         options = [
             discord.SelectOption(
@@ -172,7 +172,7 @@ class LearnSelectView(discord.ui.View):
         self._cog  = cog
         self._uid  = uid
         self._gid  = gid
-        all_recipes = var.RECIPES + cog._extra_recipes
+        all_recipes = cog._all_recipes()
 
         extra   = cog._char_extra_items()
         options = []
@@ -194,7 +194,7 @@ class LearnSelectView(discord.ui.View):
     async def _on_scroll(self, interaction: discord.Interaction):
         scroll_id   = interaction.data["values"][0]
         uid, gid    = self._uid, self._gid
-        all_recipes = var.RECIPES + self._cog._extra_recipes
+        all_recipes = self._cog._all_recipes()
 
         recipe = next((r for r in all_recipes if r.get("unlock") == scroll_id), None)
         if not recipe:
@@ -270,6 +270,16 @@ class RecipesCog(commands.Cog):
             self._extra_recipes.append(data)
             log.info(f"Recipes: registered DLC recipe '{data['id']}'")
 
+    def _all_recipes(self) -> list[dict]:
+        result = list(var.RECIPES) + list(self._extra_recipes)
+        seen = {r["id"] for r in result}
+        for cog in self.bot.cogs.values():
+            for r in getattr(cog, "_dlc_recipes", []):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    result.append(r)
+        return result
+
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _is_unlocked(self, uid: str, gid: str, recipe_id: str) -> bool:
@@ -279,7 +289,7 @@ class RecipesCog(commands.Cog):
 
     def unlock_recipe(self, uid: str, gid: str, recipe_id: str) -> bool:
         """External call (e.g. from /backpack_use on a scroll). Returns True if newly unlocked."""
-        all_recipes = var.RECIPES + self._extra_recipes
+        all_recipes = self._all_recipes()
         if not any(r["id"] == recipe_id for r in all_recipes):
             return False
         if self._is_unlocked(uid, gid, recipe_id):
@@ -294,9 +304,8 @@ class RecipesCog(commands.Cog):
         return char_cog._extra_items if char_cog else []
 
     def _get_known_recipes(self, uid: str, gid: str) -> list[dict]:
-        all_recipes = var.RECIPES + self._extra_recipes
         return [
-            r for r in all_recipes
+            r for r in self._all_recipes()
             if r.get("unlock") is None or self._is_unlocked(uid, gid, r["id"])
         ]
 
@@ -307,7 +316,7 @@ class RecipesCog(commands.Cog):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
         inv = _get_inv(self.db, uid, gid)
-        all_recipes = var.RECIPES + self._extra_recipes
+        all_recipes = self._all_recipes()
 
         embed = discord.Embed(title="📖 Recipes", color=var.COLOR_RECIPES)
 
@@ -387,7 +396,7 @@ class RecipesCog(commands.Cog):
     async def learn_recipe(self, interaction: discord.Interaction):
         uid         = str(interaction.user.id)
         gid         = str(interaction.guild_id)
-        all_recipes = var.RECIPES + self._extra_recipes
+        all_recipes = self._all_recipes()
 
         rows   = self.db.execute(
             "SELECT item_id, qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND qty>0",

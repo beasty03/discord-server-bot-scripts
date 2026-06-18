@@ -19,19 +19,16 @@ class MagicWeaponsDLC(commands.Cog):
 
 async def setup(bot: commands.Bot):
     char = bot.get_cog("CharacterCog")
-    shop = bot.get_cog("ShopCog")
 
     if char:
         for weapon in var.WEAPONS:
             char.register_item(weapon)
+        # Proxy shop listings through CharacterCog — ShopCog reads them at query
+        # time via _extra_shop_items, so load order doesn't matter.
+        for item in var.SHOP_ITEMS:
+            char.register_shop_item(item)
     else:
         log.warning("Magic Weapons DLC: CharacterCog not loaded — weapons not registered.")
 
-    if shop:
-        for item in var.SHOP_ITEMS:
-            shop.register_item(item)
-    else:
-        log.warning("Magic Weapons DLC: ShopCog not loaded — shop listings not registered.")
-
     await bot.add_cog(MagicWeaponsDLC(bot))
-    log.info("✅ DND_DLC/magic_weapons loaded")
+    log.info("✅ DND_DLC/class_magic_weapons loaded")

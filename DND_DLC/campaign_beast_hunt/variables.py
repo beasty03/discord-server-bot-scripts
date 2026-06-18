@@ -5,6 +5,49 @@ config      = load_config()
 GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_id', 0))
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
+# ── Character items (registered with CharacterCog) ────────────────────────────
+
+CHAR_ITEMS = [
+    {
+        "id":          "boar_tusk_charm",
+        "name":        "Boar Tusk Charm",
+        "emoji":       "🐗",
+        "slot":        "material",
+        "description": "A trophy from the Boar King. A rare crafting material.",
+        "sell":        35,
+    },
+    {
+        "id":          "recipe_boar_kings_draught",
+        "name":        "Recipe: Boar King's Draught",
+        "emoji":       "📜",
+        "slot":        "recipe",
+        "description": "Ancient brewing method passed down through monster hunters.",
+        "sell":        100,
+    },
+    {
+        "id":          "boar_kings_draught",
+        "name":        "Boar King's Draught",
+        "emoji":       "🍺",
+        "slot":        "consumable",
+        "heal_expr":   "3d8+3",
+        "description": "A potent tonic brewed from the Boar King's tusk. Restores 3d8+3 HP.",
+        "sell":        80,
+    },
+]
+
+# ── Recipe ────────────────────────────────────────────────────────────────────
+
+RECIPE = {
+    "id":          "boar_kings_draught",
+    "name":        "Boar King's Draught",
+    "emoji":       "🍺",
+    "tier":        "rare",
+    "unlock":      "recipe_boar_kings_draught",
+    "inputs":      [("boar_tusk_charm", 1), ("herb", 4), ("leather_scrap", 2)],
+    "output":      ("boar_kings_draught", 1),
+    "description": "A potent tonic brewed from the Boar King's tusk. Restores 3d8+3 HP.",
+}
+
 # ── Shop DLC items ────────────────────────────────────────────────────────────
 
 SHOP_ITEM = {
@@ -15,6 +58,16 @@ SHOP_ITEM = {
     "price":       75,
     "max_qty":     1,
     "tier":        "uncommon",
+}
+
+RECIPE_SHOP_ITEM = {
+    "id":          "recipe_boar_kings_draught",
+    "name":        "Recipe: Boar King's Draught",
+    "emoji":       "📜",
+    "description": "Ancient brewing method for the Hunter's tonic. Consume to learn the craft.",
+    "price":       350,
+    "max_qty":     1,
+    "tier":        "rare",
 }
 
 SHOP_BUNDLE = {
@@ -106,9 +159,10 @@ CAMPAIGN = {
                 "atk_bonus": 6,
                 "dmg":       "2d8+4",
                 "drops":     [
-                    {"id": "boar_tusk_charm", "chance": 100},
-                    {"id": "leather_scrap",   "chance": 90},
-                    {"id": "herb",            "chance": 60},
+                    {"id": "boar_tusk_charm",          "chance": 100},
+                    {"id": "recipe_boar_kings_draught", "chance": 20},
+                    {"id": "leather_scrap",             "chance": 90},
+                    {"id": "herb",                      "chance": 60},
                 ],
             },
         },
