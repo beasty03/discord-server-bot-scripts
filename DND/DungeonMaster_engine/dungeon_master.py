@@ -1944,7 +1944,7 @@ class DungeonMasterCog(commands.Cog):
         #   Elites (31-60 HP)→ 1 for solo/duo, 2 for 3-4 players; HP distributed
         #   Bosses (>60 HP)  → always 1 enemy, scale HP with party size (old behavior)
         if _base_hp <= 30:
-            n_enemies = min(party_size, 3)
+            n_enemies = max(2, min(party_size, 3))  # always at least 2 mooks so /attack autocomplete has targets
             _per_hp   = _base_hp
         elif _base_hp <= 60:
             n_enemies = 1 if party_size <= 2 else 2

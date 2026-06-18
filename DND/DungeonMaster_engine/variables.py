@@ -236,7 +236,7 @@ CAMPAIGNS = [
         "id":              "crossroads",
         "name":            "The Crossroads",
         "emoji":           "🛤️",
-        "min_level":       1,
+        "min_level":       2,
         "min_players":     1,
         "max_players":     4,
         "difficulty":      "Medium",
