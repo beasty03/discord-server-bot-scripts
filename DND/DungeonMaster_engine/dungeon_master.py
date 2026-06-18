@@ -226,111 +226,6 @@ def _build_hp_bar(hp: int, max_hp: int, length: int = 8) -> str:
     return "█" * filled + "░" * (length - filled)
 
 
-def _build_mini_sheet(stats: dict, name: str, char_class: str | None) -> str:
-    """Compact character sheet for embed right column."""
-    mods    = stats["mods"]
-    scores  = {}
-    for ab, mod in mods.items():
-        scores[ab] = 10 + mod * 2 + (mod % 1)
-    prof    = stats["prof"]
-    profs   = _CLASS_SAVE_PROFS.get(char_class or "", [])
-    lines   = [f"AC {stats['ac']}  ·  ATK {stats['atk_bonus']:+d}"]
-    for ab in ("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"):
-        mod   = mods[ab]
-        short = _ABILITY_SHORT[ab]
-        score = 10 + mod * 2
-        star  = "*" if ab in profs else ""
-        lines.append(f"{short} {score:2d} ({mod:+d}){star}")
-    weapon_row = stats.get("dmg_expr", "")
-    if weapon_row:
-        lines.append(weapon_row)
-    return "\n".join(lines)
-
-
-def _build_campaign_embed(
-    campaign_name: str,
-    encounter_name: str,
-    encounter_emoji: str,
-    description: str,
-    section_title: str,
-    section_body: str,
-    sheet_fields: list[tuple[str, str]],
-    color: int,
-) -> discord.Embed:
-    """Build the single persistent campaign embed."""
-    embed = discord.Embed(
-        title=f"{encounter_emoji} {encounter_name}  ·  {campaign_name}",
-        description=description,
-        color=color,
-    )
-    embed.add_field(name=section_title, value=section_body or "​", inline=False)
-    for field_name, field_value in sheet_fields:
-        embed.add_field(name=field_name, value=field_value, inline=True)
-    return embed
-
-
-def _build_turn_order_text(
-    true_order: list[tuple[int, int, str, "str | int"]],
-    acted_uids: set[str],
-    name_map: dict[str, str],
-    active_uid: "str | None",
-    enemy_name: str,
-    enemy_emoji: str,
-) -> str:
-    """Horizontal sliding turn order — max 4 actors, acted ones slide off left."""
-    remaining: list[tuple[str, str]] = []
-    enemy_shown = False
-    for _, _, typ, tid in true_order:
-        if typ == "player":
-            if str(tid) not in acted_uids:
-                remaining.append(("player", str(tid)))
-        elif not enemy_shown:
-            remaining.append(("enemy", "0"))
-            enemy_shown = True
-    parts: list[str] = []
-    for typ, tid in remaining[:4]:
-        if typ == "player":
-            n = name_map.get(tid, tid)
-            parts.append(f"🎯 **{n}**" if tid == active_uid else f"⏳ {n}")
-        else:
-            parts.append(f"{enemy_emoji} {enemy_name}")
-    return " → ".join(parts) if parts else "*(round complete)*"
-
-
-def _build_roster_text(
-    run: dict,
-    enemies: list[dict],
-    name_map: dict[str, str],
-    active_uid: "str | None",
-    acted_uids: set[str],
-    enemy_emoji: str,
-) -> str:
-    """Compact one-line-per-actor roster with HP bars."""
-    lines: list[str] = []
-    for uid, name in run["participants"]:
-        if uid in run["fled"]:
-            lines.append(f"🏃 ~~{name}~~ *(fled)*")
-            continue
-        hp    = run["player_hp"].get(uid, 0)
-        max_hp = run["player_max_hp"].get(uid, 1)
-        bar   = _build_hp_bar(hp, max_hp, 8)
-        if uid in run.get("dead", set()):
-            lines.append(f"💀 ~~{name}~~")
-        elif hp <= 0:
-            lines.append(f"⚰️ **{name}**  `{bar}`  *(downed)*")
-        elif uid == active_uid:
-            lines.append(f"🎯 **{name}**  `{bar}`  {hp}/{max_hp}")
-        elif uid in acted_uids:
-            lines.append(f"✅ {name}  `{bar}`  {hp}/{max_hp}")
-        else:
-            lines.append(f"⏳ {name}  `{bar}`  {hp}/{max_hp}")
-    for eobj in enemies:
-        if eobj["hp"] > 0:
-            ebar = _build_hp_bar(eobj["hp"], eobj["max_hp"], 8)
-            lines.append(f"{enemy_emoji} **{eobj['name']}**  `{ebar}`  {eobj['hp']}/{eobj['max_hp']}")
-        else:
-            lines.append(f"💀 ~~{eobj['name']}~~")
-    return "\n".join(lines) or "*(no participants)*"
 
 
 # ============================================================================
@@ -1825,7 +1720,7 @@ class DungeonMasterCog(commands.Cog):
                 encounter = enc_queue[enc_idx]
                 if encounter["type"] == "combat":
                     result = await self._run_combat(
-                        interaction.channel, encounter, run_id, campaign_msg, campaign)
+                        interaction.channel, encounter, run_id, campaign)
                 elif encounter["type"] == "choice":
                     result, extra, campaign_msg = await self._run_choice(
                         interaction.channel, encounter, run_id, campaign_msg)
@@ -1833,7 +1728,7 @@ class DungeonMasterCog(commands.Cog):
                         enc_queue[enc_idx + 1:enc_idx + 1] = extra
                 else:
                     result = await self._run_interaction(
-                        interaction.channel, encounter, run_id, campaign_msg, campaign)
+                        interaction.channel, encounter, run_id, campaign)
 
                 if result in ("defeat", "all_fled"):
                     success = False
@@ -1914,7 +1809,6 @@ class DungeonMasterCog(commands.Cog):
 
     async def _run_combat(self, channel: discord.TextChannel,
                           encounter: dict, run_id: str,
-                          campaign_msg: discord.Message | None = None,
                           campaign: dict | None = None) -> str:
         run   = self._runs[run_id]
         gid   = run["gid"]
@@ -1987,7 +1881,7 @@ class DungeonMasterCog(commands.Cog):
         ]
         run["combat_enemies"]     = enemies
         run["combat_enemy_base"]  = enemy  # base dict with emoji, ac, atk_bonus etc.
-        e_max  = _per_hp           # kept for any leftover refs; use enemies[x]["hp"] instead
+        e_max  = _per_hp           # used by Colossus Slayer to check if enemy has already taken damage
         e_hp   = _per_hp           # placeholder; overwritten per-player each round
         rnd    = 0
         last_hitter: tuple | None              = None
@@ -3706,7 +3600,6 @@ class DungeonMasterCog(commands.Cog):
 
     async def _run_interaction(self, channel: discord.TextChannel,
                                 encounter: dict, run_id: str,
-                                campaign_msg: discord.Message | None = None,
                                 campaign: dict | None = None) -> str:
         run    = self._runs[run_id]
         gid    = run["gid"]
@@ -3766,7 +3659,7 @@ class DungeonMasterCog(commands.Cog):
                     "enemy": fallback,
                 }
                 run["log"].append({"type": "interaction_fight", "encounter": encounter["name"]})
-                return await self._run_combat(channel, fight_enc, run_id, campaign_msg, campaign)
+                return await self._run_combat(channel, fight_enc, run_id, campaign)
             return "victory"
 
         # Skill check branch
@@ -3863,7 +3756,7 @@ class DungeonMasterCog(commands.Cog):
                     "enemy":          fallback,
                     "enemy_surprise": True,
                 }
-                return await self._run_combat(channel, fight_enc, run_id, campaign_msg, campaign)
+                return await self._run_combat(channel, fight_enc, run_id, campaign)
 
             # No combat fallback — punish with HP damage scaled to DC
             n_dice    = max(1, dc // 5)

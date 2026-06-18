@@ -39,33 +39,14 @@ ROLL_METHOD    = "roll"
 STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]
 
 # ============================================================================
-# RACES — Fighter/Human come from DungeonMaster_data; others stay inline until
-# they get their own data files.
+# RACES — human, dwarf, elf from DungeonMaster_data. Extra races via DND_DLC.
 # ============================================================================
-
-# _OTHER_RACES = [
-#     {"id": "halfling", "name": "Halfling", "emoji": "🧒",
-#      "mods": {"dexterity": 2, "charisma": 1}},
-#     {"id": "half_orc", "name": "Half-Orc", "emoji": "👹",
-#      "mods": {"strength": 2, "constitution": 1}},
-#     {"id": "tiefling", "name": "Tiefling", "emoji": "😈",
-#      "mods": {"charisma": 2, "intelligence": 1}},
-# ]
 
 RACES = _dm_data.RACES
 
 # ============================================================================
-# CLASSES — Fighter, Ranger, Wizard come from DungeonMaster_data.
+# CLASSES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
 # ============================================================================
-
-# _OTHER_CLASSES = [
-#     {"id": "barbarian", "name": "Barbarian", "emoji": "🪓", "hit_die": 12, "armor": 2,
-#      "primary": "strength",  "start_items": ["greataxe"],               "weapon_profs": ["simple", "martial"]},
-#     {"id": "rogue",     "name": "Rogue",     "emoji": "🗡️", "hit_die": 8,  "armor": 1,
-#      "primary": "dexterity", "start_items": ["dagger", "leather_armor"],"weapon_profs": ["simple", "longsword", "shortsword", "rapier"]},
-#     {"id": "cleric",    "name": "Cleric",    "emoji": "✨", "hit_die": 8,  "armor": 4,
-#      "primary": "wisdom",    "start_items": ["mace", "shield"],          "weapon_profs": ["simple"]},
-# ]
 
 CLASSES = _dm_data.CLASSES
 
@@ -142,232 +123,34 @@ XP_THRESHOLDS = [
 MAX_LEVEL = 20
 
 # ============================================================================
-# CLASS FEATURES — Fighter from data file; others stay inline.
+# CLASS FEATURES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
 # ============================================================================
 
-CLASS_FEATURES = {
-    **_dm_data.CLASS_FEATURES,
-    "barbarian": [
-        {"level":  1, "name": "Rage",                    "desc": "Bonus action: STR adv, bonus STR dmg, resistance to B/P/S damage"},
-        {"level":  1, "name": "Unarmored Defense",       "desc": "AC = 10 + DEX mod + CON mod when wearing no armor"},
-        {"level":  2, "name": "Reckless Attack",         "desc": "Attack with adv; attackers also gain adv against you until next turn"},
-        {"level":  2, "name": "Danger Sense",            "desc": "Advantage on DEX saves against visible effects"},
-        {"level":  3, "name": "Primal Path",             "desc": "Choose a subclass: Berserker, Totem Warrior"},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  5, "name": "Extra Attack",            "desc": "Attack twice with the Attack action"},
-        {"level":  5, "name": "Fast Movement",           "desc": "+10 ft movement speed when not in heavy armor"},
-        {"level":  6, "name": "Path Feature",            "desc": "Gain your subclass's Lv 6 feature"},
-        {"level":  7, "name": "Feral Instinct",          "desc": "Advantage on initiative; act normally if surprised while raging"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  9, "name": "Brutal Critical",         "desc": "+1 weapon damage die on melee crits"},
-        {"level": 10, "name": "Path Feature",            "desc": "Gain your subclass's Lv 10 feature"},
-        {"level": 11, "name": "Relentless Rage",         "desc": "CON save to drop to 1 HP instead of 0 while raging"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 13, "name": "Brutal Critical (2)",     "desc": "+2 weapon damage dice on melee crits"},
-        {"level": 14, "name": "Path Feature",            "desc": "Gain your subclass's Lv 14 feature"},
-        {"level": 15, "name": "Persistent Rage",         "desc": "Rage no longer ends early if you haven't attacked or taken damage"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 17, "name": "Brutal Critical (3)",     "desc": "+3 weapon damage dice on melee crits"},
-        {"level": 18, "name": "Indomitable Might",       "desc": "Use your STR score (not roll) for STR checks if the roll is lower"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Primal Champion",         "desc": "+4 STR, +4 CON; unlimited Rage uses"},
-    ],
-    "rogue": [
-        {"level":  1, "name": "Expertise",               "desc": "Double proficiency on two skills or one skill + thieves' tools"},
-        {"level":  1, "name": "Sneak Attack",            "desc": "1d6 extra damage when you have adv or an ally flanks the target"},
-        {"level":  1, "name": "Thieves' Cant",           "desc": "Secret language and signs shared among rogues"},
-        {"level":  2, "name": "Cunning Action",          "desc": "Bonus action: Dash, Disengage, or Hide"},
-        {"level":  3, "name": "Roguish Archetype",       "desc": "Choose a subclass: Thief, Assassin, Arcane Trickster"},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  5, "name": "Uncanny Dodge",           "desc": "Reaction: halve damage from one visible attacker's hit"},
-        {"level":  6, "name": "Expertise",               "desc": "Double proficiency on two more skills"},
-        {"level":  7, "name": "Evasion",                 "desc": "No damage on successful DEX saves; half on failed ones"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  9, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 9 feature"},
-        {"level": 10, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 11, "name": "Reliable Talent",         "desc": "Treat any roll below 10 as a 10 for proficient skill checks"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 13, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 13 feature"},
-        {"level": 14, "name": "Blindsense",              "desc": "Detect hidden creatures within 10 ft if you can hear"},
-        {"level": 15, "name": "Slippery Mind",           "desc": "Gain proficiency in WIS saving throws"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 17, "name": "Archetype Feature",       "desc": "Gain your subclass's Lv 17 feature"},
-        {"level": 18, "name": "Elusive",                 "desc": "Attackers never have advantage on rolls against you"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Stroke of Luck",          "desc": "Once per long rest: turn a miss into a hit, or treat a roll as 20"},
-    ],
-    "cleric": [
-        {"level":  1, "name": "Spellcasting",            "desc": "WIS-based spellcasting; domain spells always prepared"},
-        {"level":  1, "name": "Divine Domain",           "desc": "Choose a domain subclass: Life, Light, Knowledge, War, etc."},
-        {"level":  2, "name": "Channel Divinity (1×)",   "desc": "Turn Undead + domain option, once per short rest"},
-        {"level":  2, "name": "Domain Feature",          "desc": "Gain your domain's Lv 2 feature"},
-        {"level":  4, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  5, "name": "Destroy Undead (CR ½)",   "desc": "Turn Undead instantly destroys undead of CR ½ or lower"},
-        {"level":  6, "name": "Channel Divinity (2×)",   "desc": "Use Channel Divinity twice per short rest"},
-        {"level":  6, "name": "Domain Feature",          "desc": "Gain your domain's Lv 6 feature"},
-        {"level":  8, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level":  8, "name": "Destroy Undead (CR 1)",   "desc": "Turn Undead destroys undead of CR 1 or lower"},
-        {"level":  8, "name": "Domain Feature",          "desc": "Gain your domain's Lv 8 feature"},
-        {"level": 10, "name": "Divine Intervention",     "desc": "Call on your deity; success chance = cleric level %"},
-        {"level": 11, "name": "Destroy Undead (CR 2)",   "desc": "Turn Undead destroys undead of CR 2 or lower"},
-        {"level": 12, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 14, "name": "Destroy Undead (CR 3)",   "desc": "Turn Undead destroys undead of CR 3 or lower"},
-        {"level": 16, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 17, "name": "Destroy Undead (CR 4)",   "desc": "Turn Undead destroys undead of CR 4 or lower"},
-        {"level": 17, "name": "Domain Feature",          "desc": "Gain your domain's Lv 17 feature"},
-        {"level": 18, "name": "Channel Divinity (3×)",   "desc": "Use Channel Divinity three times per short rest"},
-        {"level": 19, "name": "Ability Score Improvement","desc": "+2 to one ability, or +1 to two"},
-        {"level": 20, "name": "Divine Intervention",     "desc": "Divine Intervention automatically succeeds"},
-    ],
-}
+CLASS_FEATURES = _dm_data.CLASS_FEATURES
 
 # ============================================================================
-# RACE TRAITS — Human from data file; others stay inline.
+# RACE TRAITS — human, dwarf, elf from DungeonMaster_data. Extra races via DND_DLC.
 # ============================================================================
 
-RACE_TRAITS = {
-    **_dm_data.RACE_TRAITS,
-    "halfling": [
-        {"name": "Lucky",              "desc": "Reroll 1s on attack rolls, ability checks, and saving throws."},
-        {"name": "Brave",              "desc": "Advantage on saving throws against being frightened."},
-        {"name": "Halfling Nimbleness","desc": "Move through the space of any creature larger than you."},
-    ],
-    "half_orc": [
-        {"name": "Darkvision",          "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Menacing",            "desc": "Proficiency in the Intimidation skill."},
-        {"name": "Relentless Endurance","desc": "Drop to 1 HP instead of 0 once per long rest (not while already at 0)."},
-        {"name": "Savage Attacks",      "desc": "On a melee critical hit, roll one additional weapon damage die."},
-    ],
-    "tiefling": [
-        {"name": "Darkvision",       "desc": "See in dim light as bright light; in darkness as dim light, within 60 ft."},
-        {"name": "Hellish Resistance","desc": "Resistance to fire damage."},
-        {"name": "Infernal Legacy",  "desc": "Thaumaturgy cantrip; Hellish Rebuke 1×/day at Lv 3; Darkness 1×/day at Lv 5."},
-    ],
-}
+RACE_TRAITS = _dm_data.RACE_TRAITS
 
 # ============================================================================
-# COMBAT FEATURES — Fighter from data file; others stay inline.
+# COMBAT FEATURES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
 # ============================================================================
 
-COMBAT_FEATURES = {
-    **_dm_data.COMBAT_FEATURES,
-    "barbarian": [
-        {"id": "rage", "name": "Rage", "label": "💢 Rage",
-         "action_type": "bonus", "level_req": 1, "once_per": "combat",
-         "desc": "Enter rage — ×2 damage all combat (bonus action)"},
-    ],
-    "rogue": [
-        {"id": "sneak_attack",   "name": "Sneak Attack",   "label": "🗡️ Sneak Attack",
-         "action_type": "action", "level_req": 1, "once_per": None,
-         "desc": "Attack + 1d6 per 2 levels bonus damage (main action)"},
-        {"id": "cunning_action", "name": "Cunning Action", "label": "🕵️ Cunning Action",
-         "action_type": "bonus",  "level_req": 2, "once_per": None,
-         "desc": "Dodge as a bonus action — halve enemy damage this round"},
-    ],
-    "cleric": [
-        {"id": "sacred_flame", "name": "Sacred Flame", "label": "🔥 Sacred Flame",
-         "action_type": "action", "level_req": 1, "once_per": None,
-         "desc": "Radiant blast — 1d8 + WIS, auto-hit (main action)"},
-        {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
-         "action_type": "bonus",  "level_req": 1, "once_per": "combat",
-         "desc": "Restore 1d8 + WIS HP to yourself or an ally (bonus action)"},
-        {"id": "healing_word", "name": "Healing Word",  "label": "🙏 Healing Word",
-         "action_type": "bonus",  "level_req": 2, "once_per": None,
-         "desc": "Heal yourself or an ally 1d4 + WIS HP (bonus action)"},
-    ],
-    "paladin": [
-        {"id": "lay_on_hands", "name": "Lay on Hands", "label": "✨ Lay on Hands",
-         "action_type": "bonus",  "level_req": 1, "once_per": "combat",
-         "desc": "Restore 1d8 + CHA HP to yourself or an ally (bonus action)"},
-        {"id": "divine_smite", "name": "Divine Smite",  "label": "⚡ Divine Smite",
-         "action_type": "action", "level_req": 2, "once_per": None,
-         "desc": "Attack + 2d8 radiant damage; crits deal 4d8 (main action)"},
-    ],
-}
+COMBAT_FEATURES = _dm_data.COMBAT_FEATURES
 
 # ============================================================================
-# SUBCLASS COMBAT FEATURES — Fighter subclasses from data file; others inline.
+# SUBCLASS COMBAT FEATURES — fighter/ranger/wizard subclasses from DungeonMaster_data. Extra via DND_DLC.
 # ============================================================================
 
-SUBCLASS_COMBAT_FEATURES = {
-    **_dm_data.SUBCLASS_COMBAT_FEATURES,
-    "berserker": [
-        {"id": "frenzy_attack", "name": "Frenzy", "label": "🔥 Frenzy",
-         "action_type": "bonus", "level_req": 3, "once_per": "combat",
-         "desc": "Extra melee attack while raging — rage damage applies (once per combat)"},
-    ],
-    "totem_warrior":    [],
-    "thief":            [],
-    "assassin":         [],
-    "arcane_trickster": [
-        {"id": "mage_hand", "name": "Mage Hand", "label": "🎩 Mage Hand",
-         "action_type": "bonus", "level_req": 3, "once_per": "combat",
-         "desc": "Distract the enemy — they attack with disadvantage next hit (once per combat)"},
-    ],
-    "life":         [],
-    "light":        [],
-    "knowledge":    [],
-    "war": [
-        {"id": "guided_strike", "name": "Guided Strike", "label": "✝️ Guided Strike",
-         "action_type": "bonus", "level_req": 1, "once_per": "combat",
-         "desc": "+10 to your next attack roll (once per combat)"},
-    ],
-    "devotion": [
-        {"id": "sacred_weapon", "name": "Sacred Weapon", "label": "✨ Sacred Weapon",
-         "action_type": "bonus", "level_req": 3, "once_per": "combat",
-         "desc": "Add CHA mod to all attack rolls for the rest of combat (once per combat)"},
-    ],
-    "ancients": [
-        {"id": "natures_wrath", "name": "Nature's Wrath", "label": "🌿 Nature's Wrath",
-         "action_type": "bonus", "level_req": 3, "once_per": "combat",
-         "desc": "Restrain the enemy — they attack at −2 next round (once per combat)"},
-    ],
-    "vengeance": [
-        {"id": "vow_of_enmity", "name": "Vow of Enmity", "label": "⚡ Vow of Enmity",
-         "action_type": "bonus", "level_req": 3, "once_per": "combat",
-         "desc": "Advantage on all attacks this combat (once per combat)"},
-    ],
-}
+SUBCLASS_COMBAT_FEATURES = _dm_data.SUBCLASS_COMBAT_FEATURES
 
 # ============================================================================
-# LEVEL-UP CHOICES — Fighter+Human from data file; others inline.
+# LEVEL-UP CHOICES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
 # ============================================================================
 
-LEVEL_UP_CHOICES = {
-    **_dm_data.LEVEL_UP_CHOICES,
-    ("barbarian", 3): {
-        "key": "subclass", "prompt": "Choose your Primal Path:",
-        "options": [
-            {"id": "berserker",    "label": "Berserker",    "desc": "Frenzy — extra melee attack as bonus action while raging"},
-            {"id": "totem_warrior","label": "Totem Warrior","desc": "Spirit totems — Bear (resistance), Eagle (mobility), Wolf (pack)"},
-        ],
-    },
-    ("rogue", 3): {
-        "key": "subclass", "prompt": "Choose your Roguish Archetype:",
-        "options": [
-            {"id": "thief",           "label": "Thief",           "desc": "Fast Hands — bonus-action item use and object interaction"},
-            {"id": "assassin",        "label": "Assassin",        "desc": "Crit on surprised creatures; create convincing false identities"},
-            {"id": "arcane_trickster","label": "Arcane Trickster","desc": "INT-based wizard spells; Mage Hand Legerdemain pickpocket"},
-        ],
-    },
-    ("cleric", 1): {
-        "key": "subclass", "prompt": "Choose your Divine Domain:",
-        "options": [
-            {"id": "life",     "label": "Life",     "desc": "Heals restore extra HP — Disciple of Life"},
-            {"id": "light",    "label": "Light",    "desc": "Warding Flare — impose disadvantage on an incoming attack"},
-            {"id": "knowledge","label": "Knowledge","desc": "Extra languages, tool proficiencies, and arcane insight"},
-            {"id": "war",      "label": "War",      "desc": "Guided Strike +10 to hit; War God's Blessing reaction"},
-        ],
-    },
-    ("paladin", 3): {
-        "key": "subclass", "prompt": "Choose your Sacred Oath:",
-        "options": [
-            {"id": "devotion", "label": "Oath of Devotion",    "desc": "Sacred Weapon; Turn the Unholy — channel radiant energy"},
-            {"id": "ancients", "label": "Oath of the Ancients","desc": "Nature's Wrath; Turn the Faithless — preserve the ancient light"},
-            {"id": "vengeance","label": "Oath of Vengeance",   "desc": "Vow of Enmity — advantage on attacks against one chosen foe"},
-        ],
-    },
-}
+LEVEL_UP_CHOICES = _dm_data.LEVEL_UP_CHOICES
 
 # ============================================================================
 # SHEET DELETION 
