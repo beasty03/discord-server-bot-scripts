@@ -2444,7 +2444,7 @@ class DungeonMasterCog(commands.Cog):
                 if not bonus:
                     continue
                 bonus_act = bonus.get("action")
-                fid       = bonus.get("feature_id")
+                fid       = bonus.get("feature_id") or bonus_act  # /bonus stores id as "action"
                 stats     = self._get_char_combat_stats(uid, gid)
                 level     = stats["level"] if stats else 1
                 wis       = stats["mods"]["wisdom"]   if stats else 0
@@ -4240,16 +4240,16 @@ class DungeonMasterCog(commands.Cog):
             "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
         char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
         _class_bonus: dict[str, list[tuple[str, str]]] = {
-            "barbarian": [("rage", "💢 Rage"), ("frenzy", "🔥 Frenzy Attack")],
+            "barbarian": [("rage", "💢 Rage"), ("frenzy_attack", "🔥 Frenzy Attack")],
             "fighter":   [("second_wind", "🌬️ Second Wind")],
-            "rogue":     [("cunning_dodge", "🕵️ Cunning Dodge")],
+            "rogue":     [("cunning_action", "🕵️ Cunning Action — Dodge")],
             "ranger":    [("hunters_mark", "🎯 Hunter's Mark"), ("ensnaring_strike", "🌿 Ensnaring Strike"), ("hail_of_thorns", "🌪️ Hail of Thorns")],
             "druid":     [("beast_protect", "🛡️ Beast Guard")],
             "wizard":    [("mage_hand", "🎩 Mage Hand Distraction")],
             "cleric":    [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
             "paladin":   [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
-            "warlock":   [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell"), ("eldritch_blast", "🔮 War Magic")],
-            "bard":      [("healing_word", "💚 Healing Word"), ("cure_wounds", "💚 Cure Wounds")],
+            "warlock":   [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell"), ("eldritch_spell", "🔮 War Magic — Booming Blade")],
+            "bard":      [("healing_word", "💚 Healing Word")],
             "sorcerer":  [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell")],
         }
         universal  = [("flee", "🏃 Flee (bonus)"), ("help", "🤝 Help Ally (bonus)")]
