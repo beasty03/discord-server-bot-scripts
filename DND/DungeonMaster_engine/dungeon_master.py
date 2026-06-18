@@ -4391,6 +4391,68 @@ class DungeonMasterCog(commands.Cog):
         asyncio.create_task(_cleanup())
 
 
+    # ── Admin commands ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="forcestop", description="[Admin] Force-stop a stuck campaign in this server.")
+    @app_commands.default_permissions(administrator=True)
+    async def forcestop(self, interaction: discord.Interaction):
+        gid          = str(interaction.guild_id)
+        target_runs  = {rid: run for rid, run in self._runs.items() if run.get("gid") == gid}
+
+        if not target_runs:
+            await interaction.response.send_message(
+                embed=self._err("No active campaign running in this server."), ephemeral=True)
+            return
+
+        stopped: list[str] = []
+        for run_id, run in list(target_runs.items()):
+            stopped.append(run.get("campaign", {}).get("name", run_id))
+
+            # Unblock any waiting combat turns
+            for uid in [u for u, t in self._combat_turns.items() if t.get("run_id") == run_id]:
+                turn = self._combat_turns.pop(uid, None)
+                if turn:
+                    turn["main_action"] = turn["main_action"] or "dodge"
+                    turn["_done"].set()
+
+            # Unblock interaction / initiative / choice waits
+            iact = self._interaction_turns.pop(run_id, None)
+            if iact:
+                iact["_done"].set()
+
+            istate = self._initiative_state.pop(run_id, None)
+            if istate:
+                istate["_done"].set()
+            for uid in [u for u, rid in self._initiative_turns.items() if rid == run_id]:
+                self._initiative_turns.pop(uid, None)
+
+            cstate = self._choice_turns.pop(run_id, None)
+            if cstate:
+                cstate["_done"].set()
+
+            # Release party lock for all participants
+            parties_cog = self._parties_cog()
+            if parties_cog:
+                for uid, _ in run.get("participants", []):
+                    party = parties_cog._member_party(gid, uid)
+                    if party and party.get("active_run") is not None:
+                        party["active_run"] = None
+
+            # Clear DB slot and in-memory run
+            self._clear_run(run_id)
+            self._runs.pop(run_id, None)
+
+        names = ", ".join(f"**{n}**" for n in stopped)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="🛑 Campaign Force-Stopped",
+                description=f"Stopped {names}.\nAll player locks and combat states have been released.",
+                color=var.COLOR_ERROR,
+            ),
+            ephemeral=True,
+        )
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(DungeonMasterCog(bot))
     log.info("✅ DND/DungeonMaster cog loaded")
