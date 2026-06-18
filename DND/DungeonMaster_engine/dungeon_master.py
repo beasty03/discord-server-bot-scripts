@@ -951,7 +951,7 @@ class DungeonMasterCog(commands.Cog):
             "prof":       prof,
             "ac":         ac,
             "max_hp":     max_hp,
-            "current_hp": current_hp or max_hp,
+            "current_hp": current_hp if current_hp is not None else max_hp,
             "atk_bonus":  atk_bonus,
             "dmg_expr":   f"{dmg_expr}+{mods[atk_ability]}" if mods[atk_ability] >= 0
                           else f"{dmg_expr}{mods[atk_ability]}",
@@ -1972,12 +1972,13 @@ class DungeonMasterCog(commands.Cog):
                     color=var.COLOR_ERROR,
                 )
 
-            # Save current HP to DB for all participants
+            # Save current HP to DB for all participants.
+            # Dead players (hp=0) save at 1 so they're not stuck — they need /rest to recover.
             for p_uid, _ in participants:
                 final_hp = run["player_hp"].get(p_uid, 0)
                 self.db.execute(
                     "UPDATE dnd_characters SET hp=? WHERE user_id=? AND guild_id=?",
-                    (max(0, final_hp), p_uid, gid))
+                    (max(1, final_hp), p_uid, gid))
 
             result_embed.set_footer(text=var.SERVER_NAME)
             await interaction.channel.send(embed=result_embed)
@@ -4460,17 +4461,17 @@ class DungeonMasterCog(commands.Cog):
         t_name     = target.display_name if target else interaction.user.display_name
         action_payload = {"action": "use_item", "item_id": matched, "target_uid": target_uid}
         if _pre_queue:
-            self._combat_queued.setdefault(uid, {})["main_action"] = action_payload
+            self._combat_queued.setdefault(uid, {})["bonus_action"] = action_payload
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    description=f"⏳ **{item_label}** → **{t_name}** pre-queued — fires when your turn starts.",
+                    description=f"⏳ **{item_label}** → **{t_name}** pre-queued as bonus action — fires when your turn starts.",
                     color=var.COLOR_COMBAT,
                 ), ephemeral=True)
             return
-        turn["main_action"] = action_payload
+        turn["bonus_action"] = action_payload
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=f"💉 **{item_label}** → **{t_name}** queued — use `/endturn` to confirm.",
+                description=f"💉 **{item_label}** → **{t_name}** queued as bonus action — still need `/attack`, `/ability`, or `/endturn` to finish your turn.",
                 color=var.COLOR_COMBAT,
             ),
             ephemeral=True,
