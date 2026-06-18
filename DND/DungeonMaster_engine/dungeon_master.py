@@ -1999,13 +1999,7 @@ class DungeonMasterCog(commands.Cog):
         )
         if encounter.get("image"):
             intro_embed.set_image(url=encounter["image"])
-        if campaign_msg is not None:
-            try:
-                await campaign_msg.edit(embed=intro_embed, view=None)
-            except Exception:
-                await channel.send(embed=intro_embed)
-        else:
-            await channel.send(embed=intro_embed)
+        campaign_msg = await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
 
         if run["disadvantage_uids"]:
@@ -3112,16 +3106,17 @@ class DungeonMasterCog(commands.Cog):
 
                         ann_sfx = (f" {first_ann}" if first_ann else "")
                         if n_atk == 1 and fs != "two_weapon_fighting":
-                            result = hit_parts[0] if hit_parts else "miss"
-                            if result == "miss":
+                            player_result  = hit_parts[0] if hit_parts else "miss"
+                            companion_str  = (" | " + " | ".join(hit_parts[1:])) if len(hit_parts) > 1 else ""
+                            if player_result == "miss":
                                 round_lines.append(
-                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → MISS")
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → MISS{companion_str}")
                                 run["log"].append({"type": "attack", "uid": uid, "name": name,
-                                    "roll": first_roll, "total": first_total, "dmg": 0,
+                                    "roll": first_roll, "total": first_total, "dmg": total_dmg,
                                     "hit": False, "crit": False, "round": rnd, "enemy": enemy["name"]})
                             else:
                                 round_lines.append(
-                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → {result}{rage_txt}")
+                                    f"⚔️ **{name}** rolled {first_roll}{help_txt} {b_txt} = **{first_total}**{ann_sfx} vs AC {enemy['ac']} → {player_result}{rage_txt}{companion_str}")
                                 run["log"].append({"type": "attack", "uid": uid, "name": name,
                                     "roll": first_roll, "total": first_total, "dmg": total_dmg,
                                     "hit": True, "crit": first_crit, "round": rnd, "enemy": enemy["name"]})
@@ -3700,13 +3695,7 @@ class DungeonMasterCog(commands.Cog):
         }
         self._interaction_turns[run_id] = _iact_state
 
-        if campaign_msg is not None:
-            try:
-                await campaign_msg.edit(embed=embed, view=None)
-            except Exception:
-                pass
-        else:
-            await channel.send(embed=embed)
+        campaign_msg = await channel.send(embed=embed)
 
         try:
             await asyncio.wait_for(_iact_done.wait(), timeout=var.INTERACTION_TIMEOUT)
