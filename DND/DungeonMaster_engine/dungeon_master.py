@@ -1800,7 +1800,8 @@ class DungeonMasterCog(commands.Cog):
                     result = await self._run_combat(
                         interaction.channel, encounter, run_id, campaign_msg, campaign)
                 elif encounter["type"] == "choice":
-                    result, extra = await self._run_choice(interaction.channel, encounter, run_id)
+                    result, extra, campaign_msg = await self._run_choice(
+                        interaction.channel, encounter, run_id, campaign_msg)
                     if extra and result == "victory":
                         enc_queue[enc_idx + 1:enc_idx + 1] = extra
                 else:
@@ -3847,13 +3848,15 @@ class DungeonMasterCog(commands.Cog):
     # ── Choice / branching node ───────────────────────────────────────────────
 
     async def _run_choice(self, channel: discord.TextChannel,
-                          encounter: dict, run_id: str) -> tuple[str, list]:
+                          encounter: dict, run_id: str,
+                          campaign_msg: discord.Message | None = None,
+                          ) -> tuple[str, list, discord.Message | None]:
         run    = self._runs[run_id]
         gid    = run["gid"]
         active = [uid for uid, _ in run["participants"]
                   if uid not in run["fled"] and run["player_hp"].get(uid, 0) > 0]
         if not active:
-            return "defeat", []
+            return "defeat", [], campaign_msg
 
         options = encounter["options"][:4]
         opts_text = "\n".join(
@@ -3876,7 +3879,15 @@ class DungeonMasterCog(commands.Cog):
         }
         self._choice_turns[run_id] = _choice_state
 
-        msg = await channel.send(embed=embed)
+        # Edit campaign_msg in-place so the choice stays at the bottom of chat
+        if campaign_msg is not None:
+            try:
+                await campaign_msg.edit(embed=embed, view=None)
+            except Exception:
+                campaign_msg = await channel.send(embed=embed)
+        else:
+            campaign_msg = await channel.send(embed=embed)
+
         try:
             await asyncio.wait_for(_choice_done.wait(), timeout=var.INTERACTION_TIMEOUT)
         except asyncio.TimeoutError:
@@ -3886,12 +3897,20 @@ class DungeonMasterCog(commands.Cog):
 
         chosen = _choice_state["chosen"] or options[0]
         result_text = chosen.get("result_text", "The party presses on.")
-        await channel.send(embed=discord.Embed(
+        result_embed = discord.Embed(
             description=f"**{chosen['label']}** — *{result_text}*",
             color=var.COLOR_WIN,
-        ))
-        await asyncio.sleep(1)
-        return "victory", chosen.get("encounters", [])
+        )
+        if campaign_msg is not None:
+            try:
+                await campaign_msg.edit(embed=result_embed, view=None)
+            except Exception:
+                campaign_msg = await channel.send(embed=result_embed)
+        else:
+            campaign_msg = await channel.send(embed=result_embed)
+
+        await asyncio.sleep(2)
+        return "victory", chosen.get("encounters", []), campaign_msg
 
 
     # ── Helpers ───────────────────────────────────────────────────────────
