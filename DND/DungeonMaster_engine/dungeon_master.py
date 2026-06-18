@@ -7,6 +7,7 @@ import re
 import uuid
 from datetime import date, datetime
 from pathlib import Path
+from typing import Callable
 
 import discord
 from discord import app_commands
@@ -675,6 +676,25 @@ class DungeonMasterCog(commands.Cog):
         self._extra_races:     list[dict] = []
         self._extra_classes:   list[dict] = []
 
+        # DLC display data registries
+        self._class_features_reg:           dict[str, list]     = {}
+        self._race_traits_reg:              dict[str, list]     = {}
+        self._combat_features_reg:          dict[str, list]     = {}
+        self._subclass_combat_features_reg: dict[str, list]     = {}
+        self._level_up_choices_reg:         dict[tuple, dict]   = {}
+
+        # DLC mechanic registries
+        self._ability_handlers:       dict[str, Callable] = {}
+        self._subclass_passives:      dict[str, dict]     = {}
+        self._fighting_style_handlers:dict[str, dict]     = {}
+        self._spell_handlers:         dict[str, Callable] = {}
+        self._weapon_hit_handlers:    dict[str, Callable] = {}
+        self._level_up_effects:       dict[tuple, list]   = {}   # (class_id, level) -> [fn]
+        self._event_hooks:            dict[str, list]     = {}   # event_name -> [fn]
+
+        # Register base-game defaults
+        self._register_default_handlers()
+
     async def cog_load(self):
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS dnd_active_runs (
@@ -720,6 +740,175 @@ class DungeonMasterCog(commands.Cog):
     def register_class(self, klass: dict):
         self._extra_classes.append(klass)
         log.info("DungeonMaster: registered DLC class '%s'", klass.get("name"))
+
+    # ── DLC display-data registration ─────────────────────────────────────────
+
+    def register_class_features(self, class_id: str, features: list):
+        self._class_features_reg[class_id] = features
+
+    def register_race_traits(self, race_id: str, traits: list):
+        self._race_traits_reg[race_id] = traits
+
+    def register_combat_features(self, class_id: str, features: list):
+        self._combat_features_reg[class_id] = features
+
+    def register_subclass_combat_features(self, subclass_id: str, features: list):
+        self._subclass_combat_features_reg[subclass_id] = features
+
+    def register_level_up_choice(self, key: tuple, choice: dict):
+        self._level_up_choices_reg[key] = choice
+
+    # ── DLC mechanic registration ─────────────────────────────────────────────
+
+    def register_ability_handler(self, fid: str, fn: Callable):
+        self._ability_handlers[fid] = fn
+
+    def register_spell_handler(self, spell_id: str, fn: Callable):
+        self._spell_handlers[spell_id] = fn
+
+    def register_subclass_passive(self, subclass_id: str, passive: dict):
+        """passive is a dict of optional callables:
+          on_crit_threshold(level) -> int
+          on_attack_roll(run, uid, roll, is_ranged) -> int
+          on_damage(run, uid, base_dmg, enemy, crit) -> int
+          on_round_start(run, uid, turn_data) -> None
+          on_survivor_check(run, uid) -> None
+        """
+        self._subclass_passives[subclass_id] = passive
+
+    def register_fighting_style_handler(self, style_id: str, handler: dict):
+        """handler keys (all optional callables):
+          on_attack_bonus(is_ranged) -> int
+          on_damage_bonus(handed, is_ranged, weapon) -> int
+          on_damage_roll_reroll(roll, faces) -> int
+          on_bonus_attack_trigger(crit, killed) -> bool
+          on_ac_bonus(armor_equipped) -> int
+        """
+        self._fighting_style_handlers[style_id] = handler
+
+    def register_weapon_hit_handler(self, weapon_id: str, fn: Callable):
+        """fn(run, attacker_uid, enemy, dmg, crit) -> extra_dmg: int"""
+        self._weapon_hit_handlers[weapon_id] = fn
+
+    def register_level_up_effect(self, class_id: str, level: int, fn: Callable):
+        """fn(char, run_id) called after level-up processing"""
+        self._level_up_effects.setdefault((class_id, level), []).append(fn)
+
+    def register_event_hook(self, event: str, fn: Callable):
+        """Events: on_enemy_killed, on_levelup, on_combat_start, on_combat_end, on_round_start"""
+        self._event_hooks.setdefault(event, []).append(fn)
+
+    # ── Display-data registry helpers (fall back to char_var if no DLC override) ─
+
+    def _get_class_features(self, class_id: str) -> list:
+        if class_id in self._class_features_reg:
+            return self._class_features_reg[class_id]
+        return char_var.CLASS_FEATURES.get(class_id, [])
+
+    def _get_race_traits(self, race_id: str) -> list:
+        if race_id in self._race_traits_reg:
+            return self._race_traits_reg[race_id]
+        return char_var.RACE_TRAITS.get(race_id, [])
+
+    def _get_combat_features(self, class_id: str) -> list:
+        if class_id in self._combat_features_reg:
+            return self._combat_features_reg[class_id]
+        return char_var.COMBAT_FEATURES.get(class_id, [])
+
+    def _get_subclass_combat_features(self, subclass_id: str) -> list:
+        if subclass_id in self._subclass_combat_features_reg:
+            return self._subclass_combat_features_reg[subclass_id]
+        return char_var.SUBCLASS_COMBAT_FEATURES.get(subclass_id, [])
+
+    def _get_level_up_choice(self, key: tuple) -> "dict | None":
+        if key in self._level_up_choices_reg:
+            return self._level_up_choices_reg[key]
+        return char_var.LEVEL_UP_CHOICES.get(key)
+
+    # ── Default handler registration (base game) ──────────────────────────────
+
+    def _register_default_handlers(self):
+        """Register all base-game subclass passives and fighting-style handlers.
+        Called once from __init__ so DLC plugins can override/extend afterwards."""
+
+        # ── Subclass passives ─────────────────────────────────────────────────
+        self.register_subclass_passive("champion", {
+            "on_crit_threshold": lambda level: 18 if level >= 15 else (19 if level >= 3 else 20),
+            "on_survivor_check": self._champion_survivor_passive,
+        })
+        self.register_subclass_passive("divination", {
+            "on_attack_roll": self._divination_portent_passive,
+        })
+        self.register_subclass_passive("assassin", {
+            "on_crit_threshold": lambda level: 1,  # sentinel: crit on surprise rnd 1
+        })
+        self.register_subclass_passive("illusion", {
+            "on_attack_roll": self._illusion_passive,
+        })
+        self.register_subclass_passive("knowledge", {
+            "on_attack_roll": self._knowledge_passive,
+        })
+        self.register_subclass_passive("totem_warrior", {
+            "on_damage_taken": self._totem_warrior_passive,
+        })
+
+        # ── Fighting-style handlers ───────────────────────────────────────────
+        self.register_fighting_style_handler("archery", {
+            "on_attack_bonus": lambda is_ranged: 2 if is_ranged else 0,
+        })
+        self.register_fighting_style_handler("defense", {
+            "on_ac_bonus": lambda armor_equipped: 1 if armor_equipped else 0,
+        })
+        self.register_fighting_style_handler("dueling", {
+            "on_damage_bonus": lambda handed, is_ranged, weapon: (
+                2 if (not is_ranged and handed == 1) else 0),
+        })
+        self.register_fighting_style_handler("great_weapon_fighting", {
+            "on_damage_roll_reroll": lambda roll, faces: (
+                random.randint(1, faces) if roll <= 2 else roll),
+        })
+        self.register_fighting_style_handler("two_weapon_fighting", {
+            "on_bonus_attack_trigger": lambda crit, killed: True,
+        })
+        self.register_fighting_style_handler("protection", {
+            "on_ac_bonus": lambda armor_equipped: 0,  # handled via protection_uids set
+        })
+
+    # ── Subclass passive implementations (base game) ──────────────────────────
+
+    def _champion_survivor_passive(self, run: dict, uid: str) -> "int | None":
+        """Return HP to regain if below half max, else None."""
+        s_max = run["player_max_hp"].get(uid, 1)
+        s_hp  = run["player_hp"].get(uid, 0)
+        if s_hp > 0 and s_hp <= s_max // 2:
+            stats   = self._get_char_combat_stats(uid, run["gid"])
+            con_mod = stats["mods"]["constitution"] if stats else 0
+            return max(1, 5 + con_mod)
+        return None
+
+    def _divination_portent_passive(self, run: dict, uid: str, roll: int,
+                                     is_ranged: bool) -> int:
+        """Return a replacement roll using Portent (take best of two) — once per round."""
+        if uid not in run.get("portent_used", set()):
+            roll2 = random.randint(1, 20)
+            new_roll = max(roll, roll2)
+            run.setdefault("portent_used", set()).add(uid)
+            return new_roll
+        return roll
+
+    def _illusion_passive(self, run: dict, uid: str, roll: int,
+                           is_ranged: bool) -> int:
+        """Illusion: +4 to attack total on first attack of round 1 (applied at total level)."""
+        return roll  # bonus is applied to total, not raw roll — handled in attack loop
+
+    def _knowledge_passive(self, run: dict, uid: str, roll: int,
+                            is_ranged: bool) -> int:
+        """Knowledge: +2 to every attack total — handled in attack loop."""
+        return roll
+
+    def _totem_warrior_passive(self, run: dict, uid: str, dmg: int) -> int:
+        """Totem Warrior (Bear): half physical damage while raging."""
+        return max(1, dmg // 2)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -850,8 +1039,10 @@ class DungeonMasterCog(commands.Cog):
         fs         = _get_fighting_style(self.db, uid, gid, char_class)
         feat       = _get_human_feat(self.db, uid, gid)
         dwarf_tr   = _get_dwarf_trait(self.db, uid, gid)
-        if fs == "defense" and klass and klass.get("armor", 0) > 0:
-            ac += 1
+        _def_fs_handler = self._fighting_style_handlers.get(fs or "", {})
+        _ac_bonus_fn    = _def_fs_handler.get("on_ac_bonus")
+        if _ac_bonus_fn and klass and klass.get("armor", 0) > 0:
+            ac += _ac_bonus_fn(True)
         if feat == "tough":
             max_hp += 2 * max(1, level or 1)
         if dwarf_tr == "dwarven_toughness":
@@ -963,7 +1154,7 @@ class DungeonMasterCog(commands.Cog):
         """Post a level-up embed and handle any subclass/archetype choice prompts."""
         # Collect features gained across all gained levels.
         # CLASS_FEATURES is {class: [{"level": N, "name": "...", "desc": "..."}, ...]}
-        all_feats = char_var.CLASS_FEATURES.get(char_class, [])
+        all_feats = self._get_class_features(char_class)
         gained_features: list[str] = [
             f["name"]
             for f in all_feats
@@ -984,7 +1175,7 @@ class DungeonMasterCog(commands.Cog):
         # Check whether any level gained triggers a subclass choice
         choice_info: dict | None = None
         for lvl in range(old_level + 1, new_level + 1):
-            info = char_var.LEVEL_UP_CHOICES.get((char_class, lvl))
+            info = self._get_level_up_choice((char_class, lvl))
             if info:
                 choice_info = info
                 break  # handle one choice at a time (multiple level-ups are rare)
@@ -1081,7 +1272,7 @@ class DungeonMasterCog(commands.Cog):
         choice_info: dict | None = None
         choice_key:  str  | None = None
         for lvl in range(1, (level or 1) + 1):
-            info = char_var.LEVEL_UP_CHOICES.get((char_class, lvl))
+            info = self._get_level_up_choice((char_class, lvl))
             if not info:
                 continue
             key = f"{char_class}_{info['key']}"
@@ -1105,7 +1296,7 @@ class DungeonMasterCog(commands.Cog):
                 label_key = ck.replace(f"{char_class}_", "").replace("_", " ").title()
                 # Try to find a human-readable label from LEVEL_UP_CHOICES options
                 for lvl2 in range(1, (level or 1) + 1):
-                    info2 = char_var.LEVEL_UP_CHOICES.get((char_class, lvl2))
+                    info2 = self._get_level_up_choice((char_class, lvl2))
                     if info2 and f"{char_class}_{info2['key']}" == ck:
                         opt = next((o for o in info2["options"] if o["id"] == cv), None)
                         if opt:
@@ -1903,6 +2094,20 @@ class DungeonMasterCog(commands.Cog):
                     await self._handle_levelup(
                         interaction.channel,
                         lu_uid, lu_name, lu_class, lu_old, lu_new, gid)
+                    # Fire on_levelup hooks
+                    for _hook_fn in self._event_hooks.get("on_levelup", []):
+                        try:
+                            await _hook_fn(run_id, lu_uid, lu_name, lu_class, lu_old, lu_new)
+                        except Exception as _hook_exc:
+                            log.warning("on_levelup hook error: %s", _hook_exc)
+                    # Fire registered level-up effects for this class+level
+                    for _new_lvl in range(lu_old + 1, lu_new + 1):
+                        for _eff_fn in self._level_up_effects.get((lu_class, _new_lvl), []):
+                            try:
+                                _char_data = self._fetch_char_basic(lu_uid, gid)
+                                await _eff_fn(_char_data, run_id)
+                            except Exception as _eff_exc:
+                                log.warning("level_up_effect hook error: %s", _eff_exc)
 
         finally:
             self._clear_run(run_id)
@@ -2028,6 +2233,13 @@ class DungeonMasterCog(commands.Cog):
             intro_embed.set_image(url=encounter["image"])
         campaign_msg = await channel.send(embed=intro_embed)
         await asyncio.sleep(1)
+
+        # Fire on_combat_start hooks
+        for _hook_fn in self._event_hooks.get("on_combat_start", []):
+            try:
+                await _hook_fn(run, encounter, run_id)
+            except Exception as _hook_exc:
+                log.warning("on_combat_start hook error: %s", _hook_exc)
 
         if run["disadvantage_uids"]:
             await channel.send(embed=discord.Embed(
@@ -2242,6 +2454,13 @@ class DungeonMasterCog(commands.Cog):
             rnd += 1
 
             # ── Per-round state reset ─────────────────────────────────────────
+            # Fire on_round_start event hooks
+            for _hook_fn in self._event_hooks.get("on_round_start", []):
+                try:
+                    await _hook_fn(run, rnd, run_id)
+                except Exception as _hook_exc:
+                    log.warning("on_round_start hook error: %s", _hook_exc)
+
             run["sharpshooter_stance"] = set()
             run["bm_riposte_set"]      = set()
             run["shield_spell_ac"]     = set()
@@ -2253,22 +2472,24 @@ class DungeonMasterCog(commands.Cog):
             run["counterspell_uids"]   = set()
             run["misty_step_uids"]     = set()
 
-            # ── Champion Survivor (Lv18) — regain HP at round start ───────────
+            # ── Per-round subclass passive: on_survivor_check (e.g. Champion Survivor Lv18) ──
             surv_lines: list[str] = []
             if rnd > 1:
                 for s_uid, s_name in run["participants"]:
-                    if s_uid not in run.get("survivor_uids", set()):
-                        continue
                     if run["player_hp"].get(s_uid, 0) <= 0:
                         continue
-                    s_max = run["player_max_hp"].get(s_uid, 1)
-                    s_hp  = run["player_hp"].get(s_uid, 0)
-                    if s_hp <= s_max // 2:
-                        s_stats = self._get_char_combat_stats(s_uid, gid)
-                        con_mod = s_stats["mods"]["constitution"] if s_stats else 0
-                        regain  = max(1, 5 + con_mod)
-                        run["player_hp"][s_uid] = min(s_max, s_hp + regain)
-                        surv_lines.append(f"💚 **{s_name}** Survivor — regains **{regain} HP**")
+                    s_stats  = self._get_char_combat_stats(s_uid, gid)
+                    s_sc     = _get_subclass(self.db, s_uid, gid,
+                                             s_stats["char_class"] if s_stats else "") if s_stats else None
+                    s_passive = self._subclass_passives.get(s_sc or "", {})
+                    surv_fn   = s_passive.get("on_survivor_check")
+                    if surv_fn:
+                        regain = surv_fn(run, s_uid)
+                        if regain is not None:
+                            s_max = run["player_max_hp"].get(s_uid, 1)
+                            run["player_hp"][s_uid] = min(s_max,
+                                                          run["player_hp"].get(s_uid, 0) + regain)
+                            surv_lines.append(f"💚 **{s_name}** Survivor — regains **{regain} HP**")
 
             # ── Death saving throws ───────────────────────────────────────────
             downed = run.setdefault("downed", {})
@@ -2556,7 +2777,14 @@ class DungeonMasterCog(commands.Cog):
                 # ── Class feature bonus actions ───────────────────────────────
                 run["features_used"].setdefault(uid, set()).add(fid)
 
-                if fid == "second_wind":
+                # DLC ability handler for bonus actions (if registered, takes priority)
+                _bonus_dlc = self._ability_handlers.get(fid)
+                if _bonus_dlc:
+                    _feat_tidx_b = _first_alive_idx()
+                    await _bonus_dlc(
+                        run, bonus, uid, name, stats, enemies, _feat_tidx_b,
+                        round_lines, run_id, gid, rnd, enemy)
+                elif fid == "second_wind":
                     heal   = _roll(f"1d10+{level}")
                     max_hp = run["player_max_hp"].get(uid, 999)
                     old_hp = run["player_hp"].get(uid, 0)
@@ -2898,8 +3126,10 @@ class DungeonMasterCog(commands.Cog):
                         rage_txt   = " 💢*(rage ×2)*" if is_raging else ""
                         help_txt   = f" 🤝*(+{help_bonus})*" if help_bonus else ""
 
-                        subclass           = _get_subclass(self.db, uid, gid, char_class)
-                        crit_thresh        = (18 if level >= 15 else 19) if subclass == "champion" else 20
+                        subclass    = _get_subclass(self.db, uid, gid, char_class)
+                        _sc_passive = self._subclass_passives.get(subclass or "", {})
+                        _crit_fn    = _sc_passive.get("on_crit_threshold")
+                        crit_thresh = _crit_fn(level) if _crit_fn else 20
                         hunter_slayer_used = False
                         cha_mod            = stats["mods"]["charisma"]
                         is_ranged          = stats.get("is_ranged", False)
@@ -2930,24 +3160,29 @@ class DungeonMasterCog(commands.Cog):
                                     roll = roll2b
                                     atk_ann.append("*(Vow of Enmity)*")
 
-                            if subclass == "divination" and uid not in run.get("portent_used", set()) and i == 0:
-                                roll2  = random.randint(1, 20)
-                                roll   = max(roll, roll2)
-                                run.setdefault("portent_used", set()).add(uid)
-                                atk_ann.append("*(Portent)*")
+                            if i == 0:
+                                _sc_atk_passive = self._subclass_passives.get(subclass or "", {})
+                                _atk_roll_fn    = _sc_atk_passive.get("on_attack_roll")
+                                if _atk_roll_fn and uid not in run.get("portent_used", set()):
+                                    _new_roll = _atk_roll_fn(run, uid, roll, is_ranged)
+                                    if _new_roll != roll:
+                                        roll = _new_roll
+                                        atk_ann.append(f"*({(subclass or '').replace('_',' ').title()})*")
 
                             if subclass == "assassin" and surprise and rnd == 1:
-                                crit = True
+                                crit = True  # Assassin auto-crits on surprise round 1
                             else:
                                 crit = roll >= crit_thresh
 
                             total = roll + stats["atk_bonus"] + bonus
 
                             if subclass == "illusion" and rnd == 1 and i == 0:
+                                # Illusion: +4 to hit on first attack of round 1
                                 total += 4
                                 atk_ann.append("*(+4 Illusion)*")
 
                             if subclass == "knowledge":
+                                # Knowledge: +2 to every attack
                                 total += 2
                                 atk_ann.append("*(+2 Knowledge)*")
 
@@ -2960,10 +3195,14 @@ class DungeonMasterCog(commands.Cog):
                                 total += cha_mod
                                 atk_ann.append("*(Sacred Weapon)*")
 
-                            # Fighting style: Archery +2 ranged ATK
-                            if fs == "archery" and is_ranged:
-                                total += 2
-                                atk_ann.append("*(+2 Archery)*")
+                            # Fighting style: attack bonus (e.g. Archery +2 ranged)
+                            _fs_handler   = self._fighting_style_handlers.get(fs or "", {})
+                            _atk_bonus_fn = _fs_handler.get("on_attack_bonus")
+                            if _atk_bonus_fn:
+                                _fs_atk = _atk_bonus_fn(is_ranged)
+                                if _fs_atk:
+                                    total += _fs_atk
+                                    atk_ann.append(f"*(+{_fs_atk} {(fs or '').replace('_',' ').title()})*")
 
                             # Dwarf Battle-Born: +1 melee ATK
                             if dwarf_tr == "battle_born" and not is_ranged:
@@ -2994,8 +3233,9 @@ class DungeonMasterCog(commands.Cog):
 
                             eff_ac = enemy["ac"] - run.get("enemy_ac_penalty", 0)
                             if crit or total >= eff_ac:
-                                # Damage roll — GWF rerolls 1s and 2s
-                                if fs == "great_weapon_fighting" and not is_ranged:
+                                # Damage roll — use GWF reroll if handler provides it
+                                _gwf_handler = self._fighting_style_handlers.get(fs or "", {})
+                                if _gwf_handler.get("on_damage_roll_reroll") and not is_ranged:
                                     dmg1 = _roll_gwf(stats["dmg_expr"])
                                 else:
                                     dmg1 = _roll(stats["dmg_expr"])
@@ -3009,9 +3249,9 @@ class DungeonMasterCog(commands.Cog):
                                 if subclass == "hunter" and e_hp < e_max and not hunter_slayer_used:
                                     cs_add = random.randint(1, 8)
                                     hunter_slayer_used = True
-                                # Dueling: +2 dmg for one-handed melee
-                                duel_add = (2 if fs == "dueling" and not is_ranged
-                                               and handed == 1 else 0)
+                                # Fighting style: damage bonus (e.g. Dueling +2)
+                                _dmg_bonus_fn = _gwf_handler.get("on_damage_bonus")
+                                duel_add = _dmg_bonus_fn(handed, is_ranged, weapon) if _dmg_bonus_fn else 0
                                 # Sharpshooter +10 on hit
                                 ss_dmg = 10 if ss_active else 0
                                 # BM on-hit effects
@@ -3042,7 +3282,7 @@ class DungeonMasterCog(commands.Cog):
                                     run["ensnaring_uids"].discard(uid)
                                     ensnare_txt = "🌿*(restrained!)*"
                                 if crit:
-                                    if fs == "great_weapon_fighting" and not is_ranged:
+                                    if _gwf_handler.get("on_damage_roll_reroll") and not is_ranged:
                                         dmg2 = _roll_gwf(stats["dmg_expr"])
                                     else:
                                         dmg2      = _roll(stats["dmg_expr"])
@@ -3132,8 +3372,10 @@ class DungeonMasterCog(commands.Cog):
                             if e_hp <= 0:
                                 break
 
-                        # TWF: auto offhand attack for two_weapon_fighting + melee
-                        if fs == "two_weapon_fighting" and not is_ranged and e_hp > 0:
+                        # TWF: auto offhand attack if fighting style has bonus-attack trigger
+                        _twf_handler   = self._fighting_style_handlers.get(fs or "", {})
+                        _twf_trigger   = _twf_handler.get("on_bonus_attack_trigger")
+                        if _twf_trigger and _twf_trigger(any_crit, e_hp <= 0) and not is_ranged and e_hp > 0:
                             twf_r = random.randint(1, 20)
                             twf_t = twf_r + stats["atk_bonus"]
                             if twf_r == 20 or twf_t >= enemy["ac"]:
@@ -3152,7 +3394,8 @@ class DungeonMasterCog(commands.Cog):
                                 hit_parts.append("⚔️Offhand miss")
 
                         ann_sfx = (f" {first_ann}" if first_ann else "")
-                        if n_atk == 1 and fs != "two_weapon_fighting":
+                        _has_twf_bonus = bool(_twf_trigger)
+                        if n_atk == 1 and not _has_twf_bonus:
                             player_result  = hit_parts[0] if hit_parts else "miss"
                             companion_str  = (" | " + " | ".join(hit_parts[1:])) if len(hit_parts) > 1 else ""
                             if player_result == "miss":
@@ -3191,17 +3434,26 @@ class DungeonMasterCog(commands.Cog):
                     else:
                         run["features_used"].setdefault(uid, set()).add(fid)
 
-                    if fid == "action_surge" and stats:
+                    # ── DLC ability/spell handler check (takes priority) ──────
+                    _dlc_handler = self._ability_handlers.get(fid) or self._spell_handlers.get(fid)
+                    if _dlc_handler:
+                        await _dlc_handler(
+                            run, action, uid, name, stats, enemies, _feat_tidx,
+                            round_lines, run_id, gid, rnd, enemy)
+                        # Handler is responsible for updating enemies[_feat_tidx]["hp"] if needed
+                    elif fid == "action_surge" and stats:
                         surge_n    = max(2, _n_attacks(stats["char_class"], stats["level"]))
                         surge_hits: list[str] = []
                         fs_surge   = run.get("fighting_style", {}).get(uid)
                         is_ranged_s = stats.get("is_ranged", False)
                         subclass_s  = _get_subclass(self.db, uid, gid, stats["char_class"])
+                        _surge_fs_handler = self._fighting_style_handlers.get(fs_surge or "", {})
+                        _surge_atk_fn     = _surge_fs_handler.get("on_attack_bonus")
                         for _ in range(surge_n):
                             r = random.randint(1, 20)
                             t = r + stats["atk_bonus"]
-                            if fs_surge == "archery" and is_ranged_s:
-                                t += 2
+                            if _surge_atk_fn:
+                                t += _surge_atk_fn(is_ranged_s)
                             c = r == 20
                             if c or t >= enemy["ac"]:
                                 d1 = _roll(stats["dmg_expr"])
@@ -3425,11 +3677,13 @@ class DungeonMasterCog(commands.Cog):
                             vol_fe = run.get("favored_enemy", {}).get(uid)
                             vol_fe_add = 2 if vol_fe and _enemy_matches_type(enemy["name"], vol_fe) else 0
                             is_marked_v = uid in run.get("hunters_mark_uids", set())
+                            _vol_fs_handler = self._fighting_style_handlers.get(vol_fs or "", {})
+                            _vol_atk_fn     = _vol_fs_handler.get("on_attack_bonus")
                             for _ in range(2):
                                 vr = random.randint(1, 20)
                                 vt = vr + stats["atk_bonus"]
-                                if vol_fs == "archery":
-                                    vt += 2
+                                if _vol_atk_fn:
+                                    vt += _vol_atk_fn(True)  # volley is always ranged
                                 if vr == 20 or vt >= enemy["ac"]:
                                     vd1 = _roll(stats["dmg_expr"])
                                     v_mark = random.randint(1, 6) if is_marked_v else 0
@@ -3540,8 +3794,10 @@ class DungeonMasterCog(commands.Cog):
                                 run["beast_protect_uids"].discard(target_uid)
                                 ret_notes.append("*(Beast Guard — half dmg)*")
                                 note_sfx = (" " + " ".join(ret_notes)).rstrip()
-                            if target_uid in run.get("raging_uids", set()) and t_sc == "totem_warrior":
-                                dmg = max(1, dmg // 2)
+                            _tw_passive   = self._subclass_passives.get(t_sc or "", {})
+                            _tw_dmg_taken = _tw_passive.get("on_damage_taken")
+                            if target_uid in run.get("raging_uids", set()) and _tw_dmg_taken:
+                                dmg = _tw_dmg_taken(run, target_uid, dmg)
                                 ret_notes.append("*(Bear — half dmg)*")
                                 note_sfx = (" " + " ".join(ret_notes)).rstrip()
                             # Protection fighting style: other fighter with shield reduces dmg
@@ -3674,6 +3930,13 @@ class DungeonMasterCog(commands.Cog):
                         continue
                     if _ke["hp"] <= 0:
                         already_killed.add(_ke_idx)
+                        # Fire on_enemy_killed hooks
+                        if last_hitter:
+                            for _hook_fn in self._event_hooks.get("on_enemy_killed", []):
+                                try:
+                                    await _hook_fn(run, last_hitter[0], _ke["name"], rnd)
+                                except Exception as _hook_exc:
+                                    log.warning("on_enemy_killed hook error: %s", _hook_exc)
                 if last_hitter:
                     kill_entry = {
                         "type": "kill", "uid": last_hitter[0], "name": last_hitter[1],
@@ -3688,6 +3951,12 @@ class DungeonMasterCog(commands.Cog):
                         view=KillConfirmView(last_hitter[0], enemy["name"], kill_entry),
                     )
                 await self._drop_materials(channel, run, gid, enemy)
+                # Fire on_combat_end hooks
+                for _hook_fn in self._event_hooks.get("on_combat_end", []):
+                    try:
+                        await _hook_fn(run, encounter, run_id, "victory")
+                    except Exception as _hook_exc:
+                        log.warning("on_combat_end hook error: %s", _hook_exc)
                 await asyncio.sleep(2)
                 return "victory"
 
