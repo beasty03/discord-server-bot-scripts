@@ -763,6 +763,12 @@ class CharacterCog(commands.Cog):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — gear can't be swapped mid-adventure.", color=0xe74c3c),
+                ephemeral=True)
+            return
+
         char = self._fetch_char(uid, gid)
         if not char:
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
@@ -963,6 +969,12 @@ class CharacterCog(commands.Cog):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — rest when the adventure is over.", color=0xe74c3c),
+                ephemeral=True)
+            return
+
         char = self._fetch_char(uid, gid)
         if not char:
             await interaction.response.send_message(embed=self._no_char_embed(), ephemeral=True)
@@ -1019,6 +1031,13 @@ class CharacterCog(commands.Cog):
                            item: str, target: discord.Member | None = None):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
+
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — use `/item` to consume items in combat.", color=0xe74c3c),
+                ephemeral=True)
+            return
+
         tgt  = target or interaction.user
         t_uid = str(tgt.id)
 
@@ -1095,6 +1114,12 @@ class CharacterCog(commands.Cog):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
         t_uid = str(target.id)
+
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — items can't be traded mid-adventure.", color=0xe74c3c),
+                ephemeral=True)
+            return
 
         if target == interaction.user:
             await interaction.response.send_message(

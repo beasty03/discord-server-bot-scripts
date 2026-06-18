@@ -660,6 +660,8 @@ class DungeonMasterCog(commands.Cog):
         self._runs: dict[str, dict] = {}
         # active combat turns: uid → {_done, main_action, bonus_action, pending_iact, run_id, gid}
         self._combat_turns: dict[str, dict] = {}
+        # pre-queued actions for players waiting for their turn: uid → {main_action, bonus_action}
+        self._combat_queued: dict[str, dict] = {}
         # active interaction turns: run_id → {_done, result, helper_uid, helper_name, active_uids, encounter, gid}
         self._interaction_turns: dict[str, dict] = {}
         # active initiative rolls: run_id → {_done, rolls, active_uids, name_map, campaign_msg, gid}
@@ -743,6 +745,13 @@ class DungeonMasterCog(commands.Cog):
     def _is_in_run(self, uid: str, gid: str) -> bool:
         return bool(self.db.execute(
             "SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)))
+
+    def _get_active_run_id(self, uid: str, gid: str) -> "str | None":
+        """Return the run_id for a user currently in a campaign in this guild (in-memory only)."""
+        for rid, run in self._runs.items():
+            if run.get("gid") == gid and any(u == uid for u, _ in run.get("participants", [])):
+                return rid
+        return None
 
     def _claim_slot(self, uid: str, gid: str, run_id: str, campaign_id: str) -> bool:
         try:
@@ -1048,6 +1057,12 @@ class DungeonMasterCog(commands.Cog):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
+        if self._is_in_run(uid, gid):
+            await interaction.response.send_message(
+                embed=self._err("You're on an active campaign — subclass selection is locked until the adventure ends."),
+                ephemeral=True)
+            return
+
         rows = self.db.execute(
             "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
             (uid, gid))
@@ -1132,6 +1147,12 @@ class DungeonMasterCog(commands.Cog):
     async def prepare_spells(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
+
+        if self._is_in_run(uid, gid):
+            await interaction.response.send_message(
+                embed=self._err("You're on an active campaign — spells can't be swapped mid-adventure."),
+                ephemeral=True)
+            return
 
         rows = self.db.execute(
             "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?",
@@ -1273,6 +1294,12 @@ class DungeonMasterCog(commands.Cog):
     async def learn_spell(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
+
+        if self._is_in_run(uid, gid):
+            await interaction.response.send_message(
+                embed=self._err("You're on an active campaign — spells can't be learned mid-adventure."),
+                ephemeral=True)
+            return
 
         rows = self.db.execute(
             "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?",
@@ -2405,6 +2432,26 @@ class DungeonMasterCog(commands.Cog):
                     "gid": gid,
                 }
                 self._combat_turns[uid] = _turn_data
+
+                # Auto-apply any action the player pre-queued while waiting for their turn
+                if uid in self._combat_queued:
+                    _q = self._combat_queued.pop(uid)
+                    if _q.get("main_action") is not None:
+                        _turn_data["main_action"] = _q["main_action"]
+                    if _q.get("bonus_action") is not None:
+                        _q_bonus = _q["bonus_action"]
+                        # Deferred 'help' targeting: resolve now against live HP values
+                        if (isinstance(_q_bonus, dict)
+                                and _q_bonus.get("action") == "help"
+                                and _q_bonus.get("target_uid") is None):
+                            _cands = [u for u, _ in run["participants"]
+                                      if u != uid and u not in run["fled"]]
+                            _q_bonus["target_uid"] = (
+                                min(_cands, key=lambda u: run["player_hp"].get(u, 0))
+                                if _cands else uid)
+                        _turn_data["bonus_action"] = _q_bonus
+                    if _turn_data["main_action"] is not None:
+                        _turn_done.set()
 
                 if campaign_msg is not None:
                     try:
@@ -4062,10 +4109,29 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.describe(enemy="Enemy to attack (auto-completes with live enemies)")
     async def attack(self, interaction: discord.Interaction, enemy: str = ""):
         uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
         if not turn:
+            run_id = self._get_active_run_id(uid, gid)
+            run    = self._runs.get(run_id, {}) if run_id else {}
+            if not run_id or not run.get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            live_enemies = [e for e in run["combat_enemies"] if e["hp"] > 0]
+            target_idx   = 0
+            if enemy and len(live_enemies) > 1:
+                for i, e in enumerate(live_enemies):
+                    if enemy.lower() in e["name"].lower() or enemy == str(i + 1):
+                        target_idx = i
+                        break
+            target = live_enemies[target_idx] if live_enemies else None
+            self._combat_queued.setdefault(uid, {})["main_action"] = {"action": "attack", "target_idx": target_idx}
             await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
+                embed=discord.Embed(
+                    description=f"⏳ Attack on **{target['name'] if target else 'enemy'}** pre-queued — fires when your turn starts.",
+                    color=var.COLOR_COMBAT,
+                ), ephemeral=True)
             return
         run          = self._runs.get(turn["run_id"], {})
         live_enemies = [e for e in run.get("combat_enemies", []) if e["hp"] > 0]
@@ -4088,11 +4154,14 @@ class DungeonMasterCog(commands.Cog):
 
     @attack.autocomplete("enemy")
     async def attack_autocomplete(self, interaction: discord.Interaction, current: str):
-        uid          = str(interaction.user.id)
-        turn         = self._combat_turns.get(uid)
-        if not turn:
-            return []
-        run          = self._runs.get(turn["run_id"], {})
+        uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
+        turn = self._combat_turns.get(uid)
+        if turn:
+            run = self._runs.get(turn["run_id"], {})
+        else:
+            run_id = self._get_active_run_id(uid, gid)
+            run    = self._runs.get(run_id, {}) if run_id else {}
         live_enemies = [e for e in run.get("combat_enemies", []) if e["hp"] > 0]
         return [
             app_commands.Choice(
@@ -4106,10 +4175,18 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.command(name="dodge", description="Take a defensive stance on your combat turn.")
     async def dodge(self, interaction: discord.Interaction):
         uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
         if not turn:
+            run_id = self._get_active_run_id(uid, gid)
+            if not run_id or not self._runs.get(run_id, {}).get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            self._combat_queued.setdefault(uid, {})["main_action"] = "dodge"
             await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
+                embed=discord.Embed(description="⏳ Dodge pre-queued — fires when your turn starts.", color=var.COLOR_COMBAT),
+                ephemeral=True)
             return
         turn["main_action"] = "dodge"
         await interaction.response.send_message(
@@ -4121,10 +4198,18 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.command(name="flee", description="Attempt to flee from combat on your turn.")
     async def flee(self, interaction: discord.Interaction):
         uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
         if not turn:
+            run_id = self._get_active_run_id(uid, gid)
+            if not run_id or not self._runs.get(run_id, {}).get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            self._combat_queued.setdefault(uid, {})["main_action"] = "flee"
             await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
+                embed=discord.Embed(description="⏳ Flee pre-queued — fires when your turn starts.", color=var.COLOR_COMBAT),
+                ephemeral=True)
             return
         turn["main_action"] = "flee"
         await interaction.response.send_message(
@@ -4137,10 +4222,28 @@ class DungeonMasterCog(commands.Cog):
     @app_commands.describe(ally="The ally to help (leave blank to help the most wounded)")
     async def assist(self, interaction: discord.Interaction, ally: discord.Member | None = None):
         uid  = str(interaction.user.id)
+        gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
         if not turn:
+            run_id = self._get_active_run_id(uid, gid)
+            run    = self._runs.get(run_id) if run_id else None
+            if not run or not run.get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            if ally:
+                t_uid = str(ally.id)
+                t_name = ally.display_name
+            else:
+                candidates = [u for u, _ in run["participants"] if u != uid and u not in run["fled"]]
+                t_uid  = min(candidates, key=lambda u: run["player_hp"].get(u, 0), default=uid) if candidates else uid
+                t_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
+            self._combat_queued.setdefault(uid, {})["main_action"] = {"action": "help", "target_uid": t_uid}
             await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
+                embed=discord.Embed(
+                    description=f"⏳ Help **{t_name}** pre-queued — fires when your turn starts.",
+                    color=var.COLOR_COMBAT,
+                ), ephemeral=True)
             return
         run = self._runs.get(turn["run_id"])
         if not run:
@@ -4169,10 +4272,14 @@ class DungeonMasterCog(commands.Cog):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
+        _pre_queue = False
         if not turn:
-            await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
-            return
+            run_id = self._get_active_run_id(uid, gid)
+            if not run_id or not self._runs.get(run_id, {}).get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            _pre_queue = True
         # Match the typed/chosen value against the player's inventory
         item_id   = name.lower().replace(" ", "_")
         rows      = self.db.execute(
@@ -4187,9 +4294,18 @@ class DungeonMasterCog(commands.Cog):
                 embed=self._err(f"You don't have `{name}` in your inventory."), ephemeral=True)
             return
         target_uid = str(target.id) if target else uid
-        turn["main_action"] = {"action": "use_item", "item_id": matched, "target_uid": target_uid}
         item_label = matched.replace("_", " ").title()
         t_name     = target.display_name if target else interaction.user.display_name
+        action_payload = {"action": "use_item", "item_id": matched, "target_uid": target_uid}
+        if _pre_queue:
+            self._combat_queued.setdefault(uid, {})["main_action"] = action_payload
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"⏳ **{item_label}** → **{t_name}** pre-queued — fires when your turn starts.",
+                    color=var.COLOR_COMBAT,
+                ), ephemeral=True)
+            return
+        turn["main_action"] = action_payload
         await interaction.response.send_message(
             embed=discord.Embed(
                 description=f"💉 **{item_label}** → **{t_name}** queued — use `/endturn` to confirm.",
@@ -4221,10 +4337,13 @@ class DungeonMasterCog(commands.Cog):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
+        _pre_queue_run_id: "str | None" = None
         if not turn:
-            await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
-            return
+            _pre_queue_run_id = self._get_active_run_id(uid, gid)
+            if not _pre_queue_run_id or not self._runs.get(_pre_queue_run_id, {}).get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
         _cls_rows  = self.db.execute(
             "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
         char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
@@ -4254,26 +4373,35 @@ class DungeonMasterCog(commands.Cog):
                 await sel_iact.response.defer()
                 return
             bonus_payload: dict = {"action": chosen}
+            _run = self._runs.get(turn["run_id"]) if turn else self._runs.get(_pre_queue_run_id)
             if chosen == "help":
-                _run = self._runs.get(turn["run_id"])
                 if _run:
                     _candidates = [u for u, _ in _run["participants"]
                                    if u != uid and u not in _run["fled"]]
                     _t = min(_candidates, key=lambda u: _run["player_hp"].get(u, 0),
                              default=uid) if _candidates else uid
                     bonus_payload["target_uid"] = _t
-            turn["bonus_action"] = bonus_payload
-            await sel_iact.response.edit_message(
-                embed=discord.Embed(
-                    description=f"✅ Bonus action **{chosen.replace('_', ' ').title()}** queued — use `/endturn` to confirm.",
-                    color=var.COLOR_COMBAT,
-                ),
-                view=None,
-            )
+                else:
+                    bonus_payload["target_uid"] = None  # resolved at turn-start
+            if _pre_queue_run_id:
+                self._combat_queued.setdefault(uid, {})["bonus_action"] = bonus_payload
+                await sel_iact.response.edit_message(
+                    embed=discord.Embed(
+                        description=f"⏳ Bonus **{chosen.replace('_', ' ').title()}** pre-queued — fires when your turn starts.",
+                        color=var.COLOR_COMBAT,
+                    ), view=None)
+            else:
+                turn["bonus_action"] = bonus_payload
+                await sel_iact.response.edit_message(
+                    embed=discord.Embed(
+                        description=f"✅ Bonus action **{chosen.replace('_', ' ').title()}** queued — use `/endturn` to confirm.",
+                        color=var.COLOR_COMBAT,
+                    ), view=None)
 
         select.callback = _on_select
         await interaction.response.send_message(view=view, ephemeral=True)
-        turn["pending_iact"].append(interaction)
+        if turn:
+            turn["pending_iact"].append(interaction)
 
     # Class-specific main action feature lists (fid, display label)
     _CLASS_MAIN_FEATS: dict[str, list[tuple[str, str]]] = {
@@ -4310,10 +4438,14 @@ class DungeonMasterCog(commands.Cog):
         uid  = str(interaction.user.id)
         gid  = str(interaction.guild_id)
         turn = self._combat_turns.get(uid)
+        _pre_queue = False
         if not turn:
-            await interaction.response.send_message(
-                embed=self._err("It's not your turn right now."), ephemeral=True)
-            return
+            run_id = self._get_active_run_id(uid, gid)
+            if not run_id or not self._runs.get(run_id, {}).get("combat_enemies"):
+                await interaction.response.send_message(
+                    embed=self._err("It's not your turn right now."), ephemeral=True)
+                return
+            _pre_queue = True
         _cls_rows  = self.db.execute(
             "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
         char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
@@ -4325,7 +4457,6 @@ class DungeonMasterCog(commands.Cog):
                     "Try `/attack` or `/item` instead."),
                 ephemeral=True)
             return
-        # Match by feature id or display label
         chosen_fid = feats[0][0]
         chosen_lbl = feats[0][1]
         for fid, lbl in feats:
@@ -4333,7 +4464,16 @@ class DungeonMasterCog(commands.Cog):
                 chosen_fid = fid
                 chosen_lbl = lbl
                 break
-        turn["main_action"] = {"action": "feature", "feature_id": chosen_fid}
+        action_payload = {"action": "feature", "feature_id": chosen_fid}
+        if _pre_queue:
+            self._combat_queued.setdefault(uid, {})["main_action"] = action_payload
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"⏳ **{chosen_lbl}** pre-queued — fires when your turn starts.",
+                    color=var.COLOR_COMBAT,
+                ), ephemeral=True)
+            return
+        turn["main_action"] = action_payload
         await interaction.response.send_message(
             embed=discord.Embed(
                 description=f"✨ **{chosen_lbl}** queued — use `/endturn` to confirm.",
@@ -4424,12 +4564,14 @@ class DungeonMasterCog(commands.Cog):
                 camp_name = next((c["name"] for c in all_camps if c["id"] == cid), cid)
                 stopped.append(camp_name)
 
-            # Unblock any waiting combat turns
+            # Unblock any waiting combat turns and clear pre-queued actions
             for uid in [u for u, t in list(self._combat_turns.items()) if t.get("run_id") == run_id]:
                 turn = self._combat_turns.pop(uid, None)
                 if turn:
                     turn["main_action"] = turn["main_action"] or "dodge"
                     turn["_done"].set()
+            for uid, _ in (run.get("participants", []) if run else []):
+                self._combat_queued.pop(uid, None)
 
             # Unblock interaction / initiative / choice waits
             iact = self._interaction_turns.pop(run_id, None)

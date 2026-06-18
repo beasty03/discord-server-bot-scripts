@@ -154,6 +154,12 @@ class PartiesCog(commands.Cog):
         gid = str(interaction.guild_id)
         vis = visibility.value if visibility else "public"
 
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — finish the adventure before forming a new party.", color=0xe74c3c),
+                ephemeral=True)
+            return
+
         if not self._has_character(uid, gid):
             await interaction.response.send_message(
                 embed=self._err("You need a character first — use `/name`, `/race`, `/class`."),
@@ -206,6 +212,12 @@ class PartiesCog(commands.Cog):
     async def party_join(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
+
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — finish the adventure before joining another party.", color=0xe74c3c),
+                ephemeral=True)
+            return
 
         if not self._has_character(uid, gid):
             await interaction.response.send_message(
@@ -310,6 +322,12 @@ class PartiesCog(commands.Cog):
     async def party_leave(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
+
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — you can't leave your party mid-adventure.", color=0xe74c3c),
+                ephemeral=True)
+            return
 
         party = self._member_party(gid, uid)
         if party is None:

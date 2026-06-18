@@ -309,6 +309,12 @@ class ShopCog(commands.Cog):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
 
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — the shop is closed until the adventure ends.", color=0xe74c3c),
+                ephemeral=True)
+            return
+
         stock_map, today = self._get_today()
         all_items   = {i["id"]: i for i in var.SHOP_ITEMS   + self._extra_items}
         all_bundles = {b["id"]: b for b in var.SHOP_BUNDLES + self._extra_bundles}
@@ -395,6 +401,12 @@ class ShopCog(commands.Cog):
     async def shop_sell(self, interaction: discord.Interaction, item: str, qty: int = 1):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
+
+        if self.db.execute("SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)):
+            await interaction.response.send_message(
+                embed=discord.Embed(description="⚔️ You're on an active campaign — selling items is locked until the adventure ends.", color=0xe74c3c),
+                ephemeral=True)
+            return
 
         if qty < 1:
             await interaction.response.send_message(
