@@ -2233,8 +2233,8 @@ class DungeonMasterCog(commands.Cog):
             run["misty_step_uids"]     = set()
 
             # ── Champion Survivor (Lv18) — regain HP at round start ───────────
+            surv_lines: list[str] = []
             if rnd > 1:
-                surv_lines: list[str] = []
                 for s_uid, s_name in run["participants"]:
                     if s_uid not in run.get("survivor_uids", set()):
                         continue
@@ -2248,13 +2248,6 @@ class DungeonMasterCog(commands.Cog):
                         regain  = max(1, 5 + con_mod)
                         run["player_hp"][s_uid] = min(s_max, s_hp + regain)
                         surv_lines.append(f"💚 **{s_name}** Survivor — regains **{regain} HP**")
-                if surv_lines:
-                    await channel.send(embed=discord.Embed(
-                        title="💚 Champion Survivor",
-                        description="\n".join(surv_lines),
-                        color=var.COLOR_WIN,
-                    ))
-                    await asyncio.sleep(1)
 
             # ── Death saving throws ───────────────────────────────────────────
             downed = run.setdefault("downed", {})
@@ -2299,13 +2292,6 @@ class DungeonMasterCog(commands.Cog):
                         run["log"].append({"type": "death", "uid": uid, "name": name, "round": rnd})
                     else:
                         ds_lines.append(f"⚰️ **{name}** rolled **{ds}** — failure ({entry['failures']}/3 failures)")
-            if ds_lines:
-                await channel.send(embed=discord.Embed(
-                    title="⚰️ Death Saving Throws",
-                    description="\n".join(ds_lines),
-                    color=var.COLOR_ERROR,
-                ))
-                await asyncio.sleep(1)
 
             # ── Active check ──────────────────────────────────────────────────
             active = [uid for uid, _ in run["participants"]
@@ -2321,9 +2307,12 @@ class DungeonMasterCog(commands.Cog):
 
             # ── Enemy surprise round 1: party is stunned, skip ────────────
             if enemy_surprise and rnd == 1:
+                _stun_desc = "The ambush leaves the party scrambling — **you cannot act this round!**"
+                if ds_lines:
+                    _stun_desc += "\n\n**― Death Saves ―**\n" + "\n".join(ds_lines)
                 _stun_emb = discord.Embed(
                     title="😵 Surprise Round — Party is Stunned!",
-                    description="The ambush leaves the party scrambling — **you cannot act this round!**",
+                    description=_stun_desc,
                     color=var.COLOR_ERROR)
                 if campaign_msg is not None:
                     try:
@@ -2348,9 +2337,11 @@ class DungeonMasterCog(commands.Cog):
 
             # Track which players have submitted this round (for ✅/⏳ indicators)
             _acted_uids: set[str] = set()
-            # Seed from pre-round lines (ambush damage carried into first action round)
+            # Seed round_lines: ambush carry-over + survivor heals + death saves
             round_lines: list[str] = list(_pre_round_lines)
             _pre_round_lines.clear()
+            round_lines.extend(surv_lines)
+            round_lines.extend(ds_lines)
             dodgers:         set[str]  = set()
             cunning_dodgers: set[str]  = set()
             all_uids_list = [u for u, _ in run["participants"]]
