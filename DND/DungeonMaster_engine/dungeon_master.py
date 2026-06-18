@@ -2045,6 +2045,8 @@ class DungeonMasterCog(commands.Cog):
         enemy_init_roll   = 0
         enemy_init_total  = 0
         true_order: list[tuple[int, int, str, str | int]] = []
+        _ambush_msgs_to_del: list[discord.Message] = []  # deleted when round 1 embed shows
+        _pre_round_lines:    list[str]             = []  # seeded into round_lines for round 2
 
         if surprise:
             await channel.send(embed=discord.Embed(
@@ -2061,11 +2063,12 @@ class DungeonMasterCog(commands.Cog):
 
         elif enemy_surprise:
             # Enemy gets a free ambush hit before combat starts
-            await channel.send(embed=discord.Embed(
+            _m = await channel.send(embed=discord.Embed(
                 title="⚡ Ambush! You've been caught off-guard!",
                 description=f"**{enemy['name']}** strikes before you can react — free hit!",
                 color=var.COLOR_ERROR,
             ))
+            _ambush_msgs_to_del.append(_m)
             await asyncio.sleep(1)
             if active_init:
                 t_uid  = random.choice(active_init)
@@ -2091,10 +2094,11 @@ class DungeonMasterCog(commands.Cog):
                             "target": t_uid, "target_name": t_name, "dmg": dmg, "round": 0})
                     else:
                         atk_txt = "MISS!"
-                    await channel.send(embed=discord.Embed(
-                        description=f"💥 **{enemy['name']}** ambushes **{t_name}** → {atk_txt}",
-                        color=var.COLOR_ERROR,
-                    ))
+                    _ambush_line = f"💥 **{enemy['name']}** ambushes **{t_name}** → {atk_txt}"
+                    _m2 = await channel.send(embed=discord.Embed(
+                        description=_ambush_line, color=var.COLOR_ERROR))
+                    _ambush_msgs_to_del.append(_m2)
+                    _pre_round_lines.append(_ambush_line)
                     await asyncio.sleep(1)
                 active_init = [u for u in active_init if run["player_hp"].get(u, 0) > 0]
                 if not active_init:
@@ -2328,12 +2332,25 @@ class DungeonMasterCog(commands.Cog):
                         pass
                 else:
                     await channel.send(embed=_stun_emb)
+                # Clean up ambush notification messages now that combat is shown
+                if _ambush_msgs_to_del:
+                    _to_del = list(_ambush_msgs_to_del)
+                    _ambush_msgs_to_del.clear()
+                    async def _del_ambush(msgs: list = _to_del):
+                        for _msg in msgs:
+                            try:
+                                await _msg.delete()
+                            except Exception:
+                                pass
+                    asyncio.create_task(_del_ambush())
                 await asyncio.sleep(2)
                 continue
 
             # Track which players have submitted this round (for ✅/⏳ indicators)
             _acted_uids: set[str] = set()
-            round_lines:     list[str] = []
+            # Seed from pre-round lines (ambush damage carried into first action round)
+            round_lines: list[str] = list(_pre_round_lines)
+            _pre_round_lines.clear()
             dodgers:         set[str]  = set()
             cunning_dodgers: set[str]  = set()
             all_uids_list = [u for u, _ in run["participants"]]
