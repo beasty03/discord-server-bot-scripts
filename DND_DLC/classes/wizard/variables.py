@@ -118,14 +118,17 @@ def register(api):
 
     # ── Subclass passives ─────────────────────────────────────────────────────
 
+    # Live registry reference — lets _evocation_potency discover DLC spells automatically.
+    _reg = api.registry
+
     def _evocation_potency(ctx):
-        """Evocation Lv 2 (Sculpt Spells): passive +2 damage on evocation spells."""
+        """Evocation Lv 2 (Sculpt Spells): passive +2 damage on any wizard spell."""
         if ctx.player.char_class != "wizard" or ctx.player.subclass != "evocation": return []
         if ctx.player.level < 2: return []
-        spell_abilities = {"fire_bolt","ray_of_frost","acid_splash",
-                           "magic_missile","burning_hands","thunderwave",
-                           "scorching_ray","lightning_bolt","blight"}
-        if ctx.turn.ability_id not in spell_abilities: return []
+        hardcoded = {"fire_bolt","ray_of_frost","acid_splash","magic_missile",
+                     "burning_hands","thunderwave","scorching_ray","lightning_bolt","blight"}
+        if ctx.turn.ability_id not in hardcoded and ctx.turn.ability_id not in _reg.spells:
+            return []
         return [Modify("damage", add=2), Message("Empowered Evocation: +2 damage!")]
 
     def _divination_foresight(ctx):

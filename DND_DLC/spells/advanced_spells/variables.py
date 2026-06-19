@@ -1,4 +1,28 @@
+from DND.DungeonMaster.effects import Message, Status
+
+
 def register(api):
+
+    api.define_status("misty_stepped", label="Misty Step", icon="💨",
+                      effects={"damage_mult": 0.5, "clears_on_take_hit": True})
+
+    def _misty_step(ctx):
+        if ctx.player.char_class != "wizard" or ctx.turn.ability_id != "misty_step": return []
+        return [Status("misty_stepped", 1),
+                Message("💨 Misty Step — you vanish in silver mist! Half damage from the next hit.")]
+
+    api.add_spell({
+        "id":        "misty_step",
+        "name":      "Misty Step",
+        "emoji":     "💨",
+        "label":     "💨 Misty Step",
+        "action":    "bonus",
+        "level_req": 3,
+        "once_per":  "combat",
+        "class":     "wizard",
+        "handler":   _misty_step,
+        "desc":      "Teleport in a flash of silver mist — half damage from the next hit taken.",
+    })
 
     api.add_item({
         "id":          "scroll_misty_step",

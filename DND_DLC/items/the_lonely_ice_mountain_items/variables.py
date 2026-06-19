@@ -59,3 +59,50 @@ def register(api):
         "max_qty":     1,
         "tier":        "epic",
     })
+
+    def _chain_lightning(ctx):
+        if ctx.player.char_class != "wizard" or ctx.turn.ability_id != "chain_lightning": return []
+        lv   = ctx.player.level
+        dice = 6 + (lv >= 7)
+        primary = sum(ctx.roll("1d6") for _ in range(dice))
+        out = [
+            Modify("damage", add=primary, damage_type="lightning"),
+            Message(f"⚡ Chain Lightning — {primary} lightning damage!"),
+        ]
+        save = ctx.roll("1d20")
+        if save < 13:
+            chain = sum(ctx.roll("1d6") for _ in range(3))
+            out += [
+                Modify("damage", add=chain, damage_type="lightning"),
+                Message(f"⚡ The bolt chains! +{chain} lightning (DEX save {save} < 13)!"),
+            ]
+        else:
+            out.append(Message(f"The chain fizzles (DEX save {save})."))
+        return out
+
+    # Registered as a DLC spell — wizard picks this up automatically via api.add_spell().
+    # No need to edit wizard/variables.py when adding new campaign spells.
+    api.add_spell({
+        "id":        "chain_lightning",
+        "name":      "Chain Lightning",
+        "emoji":     "⚡",
+        "label":     "⚡ Chain Lightning",
+        "action":    "action",
+        "level_req": 5,
+        "once_per":  None,
+        "class":     "wizard",
+        "handler":   _chain_lightning,
+        "desc":      "6d6 lightning — chains for +3d6 if enemy fails DC 13 DEX save. Scales at Lv 7.",
+    })
+
+    # Campaign-only drop — not sold in the shop.
+    api.add_item({
+        "id":          "scroll_chain_lightning",
+        "name":        "Scroll of Chain Lightning",
+        "emoji":       "📜",
+        "slot":        "spell_scroll",
+        "teaches":     "chain_lightning",
+        "tier":        "epic",
+        "sell":        300,
+        "description": "Permanently teaches a Wizard Chain Lightning (6d6 lightning, chains on fail). Wizard Lv 5+.",
+    })

@@ -290,8 +290,8 @@ class DeleteConfirmView(discord.ui.View):
         self.stop()
 
 class EquipView(discord.ui.View):
-    """Equip or unequip a weapon, armor, or shield."""
-    _SLOT_EMOJI = {"weapon": "⚔️", "offhand": "🛡️", "armor": "🪖"}
+    """Equip or unequip a weapon, armor, shield, or accessory."""
+    _SLOT_EMOJI = {"weapon": "⚔️", "offhand": "🛡️", "armor": "🪖", "accessory": "💍"}
 
     def __init__(self, cog: "CharacterCog", uid: str, gid: str,
                  items: list[tuple]):
@@ -908,7 +908,7 @@ class CharacterCog(commands.Cog):
             "SELECT item_id, equipped FROM dnd_inventory WHERE user_id=? AND guild_id=?",
             (uid, gid))
 
-        EQUIPPABLE = {"weapon", "offhand", "armor"}
+        EQUIPPABLE = {"weapon", "offhand", "armor", "accessory"}
         equippable = []
         for item_id, equipped in (rows or []):
             item = self._item(item_id)
