@@ -35,7 +35,8 @@ MAX_SHOWN_CAMPAIGNS = 5
 #   combat_fallback: enemy dict or None (None = failure has no combat consequence)
 # ============================================================================
 
-CAMPAIGNS = [
+CAMPAIGNS = []
+_DISCARDED = [
     {
         "id":              "goblin_scouts",
         "name":            "Goblin Scouts",

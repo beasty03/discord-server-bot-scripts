@@ -1,6 +1,4 @@
-from pathlib import Path
 from utils.config_loader import get_bot_token, load_config
-import importlib.util as _ilu
 
 BOT_TOKEN   = get_bot_token()
 config      = load_config()
@@ -9,16 +7,6 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 
 CURRENCY_NAME   = config.get("currency_name",   "coins")
 CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
-
-# ── Load structured game data from DungeonMaster_data/ ──────────────────────
-def _load(name: str, path: Path):
-    spec = _ilu.spec_from_file_location(name, path)
-    mod  = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-_data_root = Path(__file__).parent.parent / "DungeonMaster_data"
-_dm_data   = _load("dm_data", _data_root / "data.py")
 
 # ============================================================================
 # ABILITY SCORES
@@ -39,19 +27,17 @@ ROLL_METHOD    = "roll"
 STANDARD_ARRAY = [15, 14, 13, 12, 10, 8]
 
 # ============================================================================
-# RACES — human, dwarf, elf from DungeonMaster_data. Extra races via DND_DLC.
+# RACES / CLASSES — all content now lives in DND_DLC; engine registry is the
+# source of truth.  These empty lists are fallbacks for the rare case where
+# the engine cog hasn't loaded yet.
 # ============================================================================
 
-RACES = _dm_data.RACES
+RACES   = []
+CLASSES = []
 
 # ============================================================================
-# CLASSES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
-# ============================================================================
-
-CLASSES = _dm_data.CLASSES
-
-# ============================================================================
-# ITEMS — unchanged; shop, recipes, and scribe depend on this list.
+# ITEMS — base equipment list.  DLC items are appended at runtime by
+# CharacterCog._scan_dlc_items() via register_item().
 # ============================================================================
 
 ITEMS = [
@@ -85,8 +71,7 @@ ITEMS = [
      "slot": "recipe", "unlocks": "large_health_potion",  "sell": 150},
     {"id": "reroll_token",      "name": "Character Reroll Token", "slot": "misc"},
     {"id": "boar_tusk_charm",   "name": "Boar Tusk Charm",        "slot": "misc"},
-    # Beast Master companions — bought from shop, auto-used by Beast Master rangers.
-    # best-to-worst checked at combat init; wolf fallback is free (no item needed).
+    # Beast Master companions
     {"id": "wolf_companion",         "name": "Wolf Companion",         "emoji": "🐺",
      "slot": "companion", "beast_name": "Wolf",        "beast_dmg": "1d6+2", "beast_atk_mod": -2,
      "tier": "common",    "sell": 50},
@@ -99,7 +84,7 @@ ITEMS = [
     {"id": "baby_dragon_companion",  "name": "Baby Dragon Companion",  "emoji": "🐉",
      "slot": "companion", "beast_name": "Baby Dragon", "beast_dmg": "2d6+4", "beast_atk_mod":  0,
      "tier": "legendary", "sell": 750},
-    # Wizard spell scrolls — consumed by /learn_spell to permanently teach the spell.
+    # Wizard spell scrolls
     {"id": "scroll_misty_step",    "name": "Scroll of Misty Step",    "emoji": "📜",
      "slot": "spell_scroll", "teaches": "misty_step",    "tier": "rare",  "sell": 140},
     {"id": "scroll_scorching_ray", "name": "Scroll of Scorching Ray",  "emoji": "📜",
@@ -123,37 +108,18 @@ XP_THRESHOLDS = [
 MAX_LEVEL = 20
 
 # ============================================================================
-# CLASS FEATURES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
+# DISPLAY-DATA FALLBACKS — all empty; engine registry is the real source.
+# combat.py helpers fall back to these when EngineCore isn't loaded.
 # ============================================================================
 
-CLASS_FEATURES = _dm_data.CLASS_FEATURES
+CLASS_FEATURES:           dict = {}
+RACE_TRAITS:              dict = {}
+COMBAT_FEATURES:          dict = {}
+SUBCLASS_COMBAT_FEATURES: dict = {}
+LEVEL_UP_CHOICES:         dict = {}
 
 # ============================================================================
-# RACE TRAITS — human, dwarf, elf from DungeonMaster_data. Extra races via DND_DLC.
-# ============================================================================
-
-RACE_TRAITS = _dm_data.RACE_TRAITS
-
-# ============================================================================
-# COMBAT FEATURES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
-# ============================================================================
-
-COMBAT_FEATURES = _dm_data.COMBAT_FEATURES
-
-# ============================================================================
-# SUBCLASS COMBAT FEATURES — fighter/ranger/wizard subclasses from DungeonMaster_data. Extra via DND_DLC.
-# ============================================================================
-
-SUBCLASS_COMBAT_FEATURES = _dm_data.SUBCLASS_COMBAT_FEATURES
-
-# ============================================================================
-# LEVEL-UP CHOICES — fighter, ranger, wizard from DungeonMaster_data. Extra classes via DND_DLC.
-# ============================================================================
-
-LEVEL_UP_CHOICES = _dm_data.LEVEL_UP_CHOICES
-
-# ============================================================================
-# SHEET DELETION 
+# SHEET DELETION
 # ============================================================================
 
 DELETION_COOLDOWN_DAYS = 0
@@ -167,7 +133,48 @@ COLOR_INFO  = 0x5865F2
 COLOR_WIN   = 0x57F287
 COLOR_ERROR = 0xED4245
 
-# ── Wizard spell data (re-exported from data.py for engine access) ────────────
-WIZARD_CANTRIPS:        set[str]   = _dm_data.WIZARD_CANTRIPS
-WIZARD_STARTING_SPELLS: list[str]  = _dm_data.WIZARD_STARTING_SPELLS
-WIZARD_SPELLS:          list[dict] = _dm_data.WIZARD_SPELLS
+# ============================================================================
+# WIZARD SPELL DATA — used by /prepare_spells, /spells, /learn_spell.
+# Cantrips are always available; all others require /prepare_spells selection.
+# ============================================================================
+
+WIZARD_CANTRIPS: set[str] = {"magic_missile"}
+
+WIZARD_STARTING_SPELLS: list[str] = [
+    "magic_missile", "shield_spell", "burning_hands", "thunderwave",
+]
+
+WIZARD_SPELLS: list[dict] = [
+    {"id": "magic_missile",  "name": "Magic Missile",  "emoji": "✨",
+     "school": "evocation",   "level": 0,
+     "action_type": "action", "level_req": 1, "once_per": None,
+     "desc": "Auto-hit — 1d4+1 bolts; scales to 6 bolts at Lv 16 (cantrip, always available)"},
+    {"id": "shield_spell",   "name": "Shield",          "emoji": "🛡️",
+     "school": "abjuration",  "level": 1,
+     "action_type": "bonus",  "level_req": 1, "once_per": "combat",
+     "desc": "+5 AC vs the next attack targeting you this round (bonus action, once per combat)"},
+    {"id": "burning_hands",  "name": "Burning Hands",   "emoji": "🔥",
+     "school": "evocation",   "level": 1,
+     "action_type": "action", "level_req": 1, "once_per": "combat",
+     "desc": "Cone of fire — 3d6 auto-hit; scales +1d6 per 4 levels (once per combat)"},
+    {"id": "thunderwave",    "name": "Thunderwave",      "emoji": "🌊",
+     "school": "evocation",   "level": 1,
+     "action_type": "action", "level_req": 1, "once_per": "combat",
+     "desc": "2d8 + INT thunder auto-hit; enemy ATK −2 next round (once per combat)"},
+    {"id": "misty_step",     "name": "Misty Step",       "emoji": "💨",
+     "school": "conjuration", "level": 2,
+     "action_type": "bonus",  "level_req": 3, "once_per": "combat",
+     "desc": "Teleport away — half damage from the next hit against you (bonus action, Lv 3+, once per combat)"},
+    {"id": "scorching_ray",  "name": "Scorching Ray",    "emoji": "☀️",
+     "school": "evocation",   "level": 2,
+     "action_type": "action", "level_req": 3, "once_per": "combat",
+     "desc": "Three fire rays — each needs an attack roll, 2d6 fire each hit (Lv 3+, once per combat)"},
+    {"id": "fireball",       "name": "Fireball",         "emoji": "💥",
+     "school": "evocation",   "level": 3,
+     "action_type": "action", "level_req": 5, "once_per": "combat",
+     "desc": "8d6 fire explosion auto-hit; Evocation adds INT mod bonus dmg (Lv 5+, once per combat)"},
+    {"id": "counterspell",   "name": "Counterspell",     "emoji": "🚫",
+     "school": "abjuration",  "level": 3,
+     "action_type": "bonus",  "level_req": 5, "once_per": "combat",
+     "desc": "Disrupt the enemy — they skip their attack this round (bonus action, Lv 5+, once per combat)"},
+]

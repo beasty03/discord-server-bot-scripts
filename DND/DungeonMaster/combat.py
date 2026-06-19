@@ -199,6 +199,106 @@ def _roll_gwf(expr: str) -> int:
 
 
 # ============================================================================
+# ENGINE DLC BRIDGE HELPERS
+# ============================================================================
+
+# Statuses returned by DLC handlers that map to legacy run-state.
+# Each entry is a list of (run_key, action) tuples so one status can affect several keys.
+_STATUS_LEGACY_BRIDGE: dict[str, list[tuple]] = {
+    "ek_shielded":   [("shield_spell_ac",    "uid_set")],  # +5 AC vs next hit (EK)
+    # vanished / beast_guarded: damage_mult handled by engine_statuses resolver (no bridge)
+    "tripped":       [("enemy_ac_penalty",   "max2")],     # enemy AC -2
+    "disarmed":      [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
+    "menaced":       [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
+    "slowed":        [("enemy_atk_penalty",  "max2")],     # enemy slowed, ATK -2
+    # ensnared: fired by _ensnaring_hit on the on_hit event
+    "ensnared":      [("enemy_ac_penalty",   "max2"),
+                      ("enemy_atk_penalty",  "max2")],
+}
+
+# Flags returned by DLC handlers that map to legacy uid-sets.
+_FLAG_LEGACY_BRIDGE: dict[str, tuple] = {
+    # (ensnaring_primed removed — on_hit fires _ensnaring_hit directly)
+}
+
+
+def _build_ctx(engine, run: dict, uid: str, name: str, stats: dict, enemy_obj: dict, *,
+               ability_id: str | None = None, attack_roll: int = 0,
+               is_crit: bool = False, is_hit: bool = False, base_damage: int = 0,
+               check_type: str | None = None, check_roll: int | None = None):
+    """Build a CombatContext for engine.fire() from live combat state."""
+    from DND.DungeonMaster import EnemySnap, PlayerSnap, TurnInfo
+    player = PlayerSnap(
+        id         = uid,
+        name       = name,
+        level      = stats.get("level", 1),
+        char_class = stats.get("char_class", ""),
+        race       = stats.get("race_id", ""),
+        subclass   = stats.get("subclass"),
+        stats      = stats,
+        hp         = run["player_hp"].get(uid, 0),
+        max_hp     = run["player_max_hp"].get(uid, 0),
+        equipped   = stats.get("equipped", []),
+    )
+    snap = EnemySnap(
+        name      = enemy_obj.get("name", ""),
+        emoji     = enemy_obj.get("emoji", ""),
+        hp        = enemy_obj.get("hp", 0),
+        max_hp    = enemy_obj.get("max_hp", enemy_obj.get("hp", 0)),
+        ac        = enemy_obj.get("ac", 10),
+        atk_bonus = enemy_obj.get("atk_bonus", 0),
+        dmg       = enemy_obj.get("dmg", "1d6"),
+    )
+    flags = dict(run.get("engine_flags", {}).get(uid, {}))
+    turn  = TurnInfo(
+        ability_id  = ability_id,
+        attack_roll = attack_roll,
+        is_crit     = is_crit,
+        is_hit      = is_hit,
+        base_damage = base_damage,
+        check_type  = check_type,
+        check_roll  = check_roll,
+    )
+    return engine.make_context(player, snap, turn, flags)
+
+
+def _apply_combat_fx(run: dict, uid: str, fx, round_lines: list, rnd: int,
+                     ability_id: str, *, enemy_obj: dict | None = None):
+    """Apply ResolvedEffects from engine.fire() to the combat run-state.
+
+    Pass enemy_obj only for main-action abilities that deal direct damage (fire bolt,
+    burning hands, etc.) — omit it for bonus-action buffs so damage_add is ignored.
+    """
+    if fx.heal_self:
+        old_hp = run["player_hp"].get(uid, 0)
+        max_hp = run["player_max_hp"].get(uid, 999)
+        actual = min(max_hp, old_hp + fx.heal_self) - old_hp
+        run["player_hp"][uid] = old_hp + actual
+    if fx.flags:
+        run.setdefault("engine_flags", {}).setdefault(uid, {}).update(fx.flags)
+        for flag_name, val in fx.flags.items():
+            if val:
+                bridge = _FLAG_LEGACY_BRIDGE.get(flag_name)
+                if bridge:
+                    bkey, bact = bridge
+                    if bact == "uid_set":
+                        run.setdefault(bkey, set()).add(uid)
+    if fx.statuses:
+        run.setdefault("engine_statuses", {}).setdefault(uid, []).extend(fx.statuses)
+        for (sid, _dur) in fx.statuses:
+            for bkey, bact in _STATUS_LEGACY_BRIDGE.get(sid, []):
+                if bact == "uid_set":
+                    run.setdefault(bkey, set()).add(uid)
+                elif bact == "max2":
+                    run[bkey] = max(run.get(bkey, 0), 2)
+    if enemy_obj is not None and fx.damage_add:
+        enemy_obj["hp"] = max(0, enemy_obj["hp"] - fx.damage_add)
+    for msg in fx.messages:
+        round_lines.append(msg)
+    run["log"].append({"type": "engine_feature", "uid": uid, "feature": ability_id, "round": rnd})
+
+
+# ============================================================================
 # EMBED HELPERS
 # ============================================================================
 
@@ -698,26 +798,55 @@ class DungeonMasterCog(commands.Cog):
     def _get_class_features(self, class_id: str) -> list:
         if class_id in self._class_features_reg:
             return self._class_features_reg[class_id]
+        engine = self._engine
+        if engine:
+            klass = engine.registry.get_class(class_id)
+            if klass:
+                return klass.get("features", [])
         return char_var.CLASS_FEATURES.get(class_id, [])
 
     def _get_race_traits(self, race_id: str) -> list:
         if race_id in self._race_traits_reg:
             return self._race_traits_reg[race_id]
+        engine = self._engine
+        if engine:
+            race = engine.registry.get_race(race_id)
+            if race:
+                return race.get("traits", [])
         return char_var.RACE_TRAITS.get(race_id, [])
 
     def _get_combat_features(self, class_id: str) -> list:
         if class_id in self._combat_features_reg:
             return self._combat_features_reg[class_id]
+        engine = self._engine
+        if engine:
+            klass = engine.registry.get_class(class_id)
+            if klass:
+                return klass.get("abilities", [])
         return char_var.COMBAT_FEATURES.get(class_id, [])
 
     def _get_subclass_combat_features(self, subclass_id: str) -> list:
         if subclass_id in self._subclass_combat_features_reg:
             return self._subclass_combat_features_reg[subclass_id]
+        engine = self._engine
+        if engine:
+            for klass in engine.registry.classes.values():
+                sub = klass.get("subclasses", {}).get(subclass_id)
+                if sub:
+                    ability_ids = sub.get("abilities", [])
+                    all_abils   = {a["id"]: a for a in klass.get("abilities", [])}
+                    return [all_abils[aid] for aid in ability_ids if aid in all_abils]
         return char_var.SUBCLASS_COMBAT_FEATURES.get(subclass_id, [])
 
     def _get_level_up_choice(self, key: tuple) -> "dict | None":
         if key in self._level_up_choices_reg:
             return self._level_up_choices_reg[key]
+        engine = self._engine
+        if engine:
+            for klass in engine.registry.classes.values():
+                lc = klass.get("level_choices", {})
+                if key in lc:
+                    return lc[key]
         return char_var.LEVEL_UP_CHOICES.get(key)
 
     # ── Default handler registration (base game) ──────────────────────────────
@@ -826,6 +955,10 @@ class DungeonMasterCog(commands.Cog):
     def _parties_cog(self):
         return self.bot.cogs.get("PartiesCog")
 
+    @property
+    def _engine(self):
+        return self.bot.cogs.get("EngineCore")
+
     def _is_in_run(self, uid: str, gid: str) -> bool:
         return bool(self.db.execute(
             "SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)))
@@ -855,7 +988,9 @@ class DungeonMasterCog(commands.Cog):
         self.db.execute("DELETE FROM dnd_active_runs WHERE run_id=?", (run_id,))
 
     def _available_campaigns(self, level: int) -> list[dict]:
-        all_camps = var.CAMPAIGNS + self._extra_campaigns
+        engine = self._engine
+        engine_camps = list(engine.registry.campaigns) if engine else []
+        all_camps = var.CAMPAIGNS + self._extra_campaigns + engine_camps
         available = [c for c in all_camps if c["min_level"] <= level]
         if len(available) > var.MAX_SHOWN_CAMPAIGNS:
             # Daily rotation — same window all day, rotates at midnight
@@ -880,13 +1015,18 @@ class DungeonMasterCog(commands.Cog):
             return None
         str_, dex, con, int_, wis, cha, level, char_class, race_id, current_hp = rows[0]
 
-        race  = next((r for r in char_var.RACES  if r["id"] == race_id),    None)
-        klass = next((c for c in char_var.CLASSES if c["id"] == char_class), None)
+        engine = self._engine
+        if engine:
+            race  = engine.registry.get_race(race_id)
+            klass = engine.registry.get_class(char_class)
+        else:
+            race  = next((r for r in char_var.RACES  if r["id"] == race_id),    None)
+            klass = next((c for c in char_var.CLASSES if c["id"] == char_class), None)
         if klass is None:
             klass = next((c for c in self._extra_classes if c["id"] == char_class), None)
 
-        # Apply racial modifiers
-        rm = race["mods"] if race else {}
+        # Apply racial modifiers (DLC: "stat_bonuses"; legacy: "mods")
+        rm = (race.get("stat_bonuses") or race.get("mods", {})) if race else {}
         finals = {
             "strength":     (str_ or 10) + rm.get("strength",     0),
             "dexterity":    (dex  or 10) + rm.get("dexterity",    0),
@@ -895,8 +1035,19 @@ class DungeonMasterCog(commands.Cog):
             "wisdom":       (wis  or 10) + rm.get("wisdom",       0),
             "charisma":     (cha  or 10) + rm.get("charisma",     0),
         }
-        # Elf subrace: High Elf +1 INT, Wood Elf +1 DEX (applied before mods)
-        if race_id == "elf":
+        # Subrace stat bonuses — DLC races expose race["subraces"][id]["stat_bonuses"]
+        if race and race.get("subraces"):
+            rows_sr = self.db.execute(
+                "SELECT choice_val FROM dnd_character_choices "
+                "WHERE user_id=? AND guild_id=? AND choice_key=?",
+                (uid, gid, f"{race_id}_subrace"))
+            if rows_sr:
+                sub_bonus = race["subraces"].get(rows_sr[0][0], {}).get("stat_bonuses", {})
+                for ab, bonus in sub_bonus.items():
+                    if ab in finals:
+                        finals[ab] += bonus
+        elif race_id == "elf":
+            # Legacy path: old-format elf (no subraces dict)
             _elf_sr = _get_elf_subrace(self.db, uid, gid)
             if _elf_sr == "high_elf":
                 finals["intelligence"] += 1
@@ -911,13 +1062,16 @@ class DungeonMasterCog(commands.Cog):
                      + (max(1, level or 1) - 1) * (avg_gain + mods["constitution"]))
         ac = 10 + mods["dexterity"] + (klass.get("armor", 0) if klass else 0)
         # Add AC bonus from equipped offhand / armor items (shields, chain mail, etc.)
-        inv_rows = self.db.execute(
+        inv_rows    = self.db.execute(
             "SELECT item_id FROM dnd_inventory WHERE user_id=? AND guild_id=? AND equipped=1",
             (uid, gid))
+        equipped_items: list[dict] = []
         for (inv_iid,) in (inv_rows or []):
             inv_item = self._find_item(inv_iid)
-            if inv_item and inv_item.get("slot") in ("offhand", "armor"):
-                ac += inv_item.get("ac_bonus", 0)
+            if inv_item:
+                equipped_items.append(inv_item)
+                if inv_item.get("slot") in ("offhand", "armor"):
+                    ac += inv_item.get("ac_bonus", 0)
 
         # Equipped weapon
         weapon = self._get_equipped_weapon(uid, gid)
@@ -946,6 +1100,7 @@ class DungeonMasterCog(commands.Cog):
         is_ranged = weapon.get("ranged", False) if weapon else False
         handed    = weapon.get("handed", 1)     if weapon else 1
 
+        subclass = _get_subclass(self.db, uid, gid, char_class)
         return {
             "mods":       mods,
             "prof":       prof,
@@ -956,9 +1111,12 @@ class DungeonMasterCog(commands.Cog):
             "dmg_expr":   f"{dmg_expr}+{mods[atk_ability]}" if mods[atk_ability] >= 0
                           else f"{dmg_expr}{mods[atk_ability]}",
             "char_class": char_class,
+            "race_id":    race_id,
+            "subclass":   subclass,
             "level":      level or 1,
             "is_ranged":  is_ranged,
             "handed":     handed,
+            "equipped":   equipped_items,
         }
 
     def _get_equipped_weapon(self, uid: str, gid: str) -> dict | None:
@@ -1809,6 +1967,9 @@ class DungeonMasterCog(commands.Cog):
                 "wizard_prepared":      {},   # {uid: list[str]} spells prepared for this combat
                 "counterspell_uids":    set(),# Counterspell cast — enemy skips attack this round
                 "misty_step_uids":      set(),# Misty Step — half dmg from next hit this round
+                # New engine DLC state
+                "engine_flags":         {},   # {uid: {flag_name: bool}} — DLC ability flags
+                "engine_statuses":      {},   # {uid: [(status_id, duration)]} — DLC statuses
             }
             for uid, name in participants:
                 run_state["features_used"][uid]  = set()
@@ -2040,6 +2201,8 @@ class DungeonMasterCog(commands.Cog):
         run["natures_wrath_active"] = False
         run["enemy_ac_penalty"]     = 0
         run["enemy_atk_penalty"]    = 0
+        run["engine_flags"]         = {}
+        run["engine_statuses"]      = {}
         # Recharge action-surge and superiority dice (recharge on short rest = between encounters)
         for _uid, _ in run["participants"]:
             _uid_stats = self._get_char_combat_stats(_uid, gid)
@@ -2370,6 +2533,20 @@ class DungeonMasterCog(commands.Cog):
             run["counterspell_uids"]   = set()
             run["misty_step_uids"]     = set()
 
+            # ── Engine status tick-down ───────────────────────────────────────
+            _eng_tick = self._engine
+            if _eng_tick:
+                for _st_uid, _st_list in list(run.get("engine_statuses", {}).items()):
+                    _kept_tick = []
+                    for (sid, dur) in _st_list:
+                        sdef = _eng_tick.registry.statuses.get(sid, {})
+                        if sdef.get("effects", {}).get("clears_on_turn"):
+                            continue
+                        new_dur = dur - 1
+                        if new_dur > 0:
+                            _kept_tick.append((sid, new_dur))
+                    run["engine_statuses"][_st_uid] = _kept_tick
+
             # ── Per-round subclass passive: on_survivor_check (e.g. Champion Survivor Lv18) ──
             surv_lines: list[str] = []
             if rnd > 1:
@@ -2675,7 +2852,19 @@ class DungeonMasterCog(commands.Cog):
                 # ── Class feature bonus actions ───────────────────────────────
                 run["features_used"].setdefault(uid, set()).add(fid)
 
-                # DLC ability handler for bonus actions (if registered, takes priority)
+                # ── New engine DLC path (on_ability_use) ──────────────────────
+                _eng_b = self._engine
+                if _eng_b and stats:
+                    _feat_tidx_b = _first_alive_idx()
+                    _ctx_b = _build_ctx(_eng_b, run, uid, name, stats, enemies[_feat_tidx_b],
+                                        ability_id=fid)
+                    _fx_b  = _eng_b.fire("on_ability_use", _ctx_b)
+                    # Skip legacy chain when engine produced output and the effect is
+                    # self-contained (no pending bonus attacks, no primed damage needing tracking)
+                    if _fx_b.messages and _fx_b.damage_add == 0 and _fx_b.bonus_attacks == 0:
+                        _apply_combat_fx(run, uid, _fx_b, round_lines, rnd, fid)
+                        continue
+                # ── Legacy DLC handler (old system, kept for backward compat) ──
                 _bonus_dlc = self._ability_handlers.get(fid)
                 if _bonus_dlc:
                     _feat_tidx_b = _first_alive_idx()
@@ -3028,8 +3217,7 @@ class DungeonMasterCog(commands.Cog):
                         _sc_passive = self._subclass_passives.get(subclass or "", {})
                         _crit_fn    = _sc_passive.get("on_crit_threshold")
                         crit_thresh = _crit_fn(level) if _crit_fn else 20
-                        hunter_slayer_used = False
-                        cha_mod            = stats["mods"]["charisma"]
+                        cha_mod     = stats["mods"]["charisma"]
                         is_ranged          = stats.get("is_ranged", False)
                         handed             = stats.get("handed", 1)
                         fs                 = run.get("fighting_style", {}).get(uid)
@@ -3115,6 +3303,19 @@ class DungeonMasterCog(commands.Cog):
                                 del run["bm_pending"][uid]
                                 bm_pend = None
 
+                            # Engine on_before_attack (e.g. divination foresight +3 ATK)
+                            _eng_ba = self._engine
+                            if _eng_ba and stats:
+                                _ctx_ba = _build_ctx(_eng_ba, run, uid, name, stats,
+                                                     enemies[_atk_tidx], attack_roll=roll)
+                                _fx_ba  = _eng_ba.fire("on_before_attack", _ctx_ba)
+                                _ba_atk = _fx_ba.modifiers.get("attack_roll", (0, 1.0))[0]
+                                if _ba_atk:
+                                    total += _ba_atk
+                                    _ba_msgs = "".join(_fx_ba.messages)
+                                    if _ba_msgs:
+                                        atk_ann.append(_ba_msgs)
+
                             # Sharpshooter: -5 to hit, +10 dmg on hit (ranged only)
                             ss_active = (uid in run.get("sharpshooter_stance", set())
                                          and is_ranged and i == 0)
@@ -3137,16 +3338,28 @@ class DungeonMasterCog(commands.Cog):
                                     dmg1 = _roll_gwf(stats["dmg_expr"])
                                 else:
                                     dmg1 = _roll(stats["dmg_expr"])
+                                # Engine on_damage_roll bonuses (DLC handlers — e.g. hunter's mark +1d6)
+                                _eng_da   = 0
+                                _eng_dm   = ""
+                                _eng_tags: set[str] = set()
+                                _eng_da_eng = self._engine
+                                if _eng_da_eng and stats:
+                                    _ctx_da = _build_ctx(_eng_da_eng, run, uid, name, stats,
+                                                         enemies[_atk_tidx],
+                                                         attack_roll=roll, is_crit=crit,
+                                                         is_hit=True, base_damage=dmg1)
+                                    _fx_da  = _eng_da_eng.fire("on_damage_roll", _ctx_da)
+                                    _eng_da   = _fx_da.damage_add
+                                    _eng_dm   = "".join(_fx_da.messages)
+                                    _eng_tags = set(_fx_da.damage_type_tags)
+                                    if _fx_da.flags:
+                                        run.setdefault("engine_flags", {}).setdefault(uid, {}).update(_fx_da.flags)
                                 mark_add = random.randint(1, 6) if is_marked else 0
                                 ism_add  = random.randint(1, 8) if imp_smite else 0
                                 sup_add  = 0
                                 if uid in run.get("superiority_die", set()) and i == 0:
                                     sup_add = random.randint(1, 8)
                                     run["superiority_die"].discard(uid)
-                                cs_add = 0
-                                if subclass == "hunter" and e_hp < e_max and not hunter_slayer_used:
-                                    cs_add = random.randint(1, 8)
-                                    hunter_slayer_used = True
                                 # Fighting style: damage bonus (e.g. Dueling +2)
                                 _dmg_bonus_fn = _gwf_handler.get("on_damage_bonus")
                                 duel_add = _dmg_bonus_fn(handed, is_ranged, weapon) if _dmg_bonus_fn else 0
@@ -3168,17 +3381,21 @@ class DungeonMasterCog(commands.Cog):
                                         run.setdefault("taunt_targets", set()).add(uid)
                                         bm_note = f"+{bm_die}😤*(taunt)*"
                                     del run["bm_pending"][uid]
-                                # Hail of Thorns: +1d10 on first ranged hit
-                                hail_add = 0
-                                if uid in run.get("hail_uids", set()) and is_ranged and i == 0:
-                                    hail_add = random.randint(1, 10)
-                                    run["hail_uids"].discard(uid)
-                                # Ensnaring Strike: restrain on first ranged hit
-                                ensnare_txt = ""
-                                if uid in run.get("ensnaring_uids", set()) and is_ranged and i == 0:
-                                    run["enemy_atk_penalty"] = max(run.get("enemy_atk_penalty", 0), 2)
-                                    run["ensnaring_uids"].discard(uid)
-                                    ensnare_txt = "🌿*(restrained!)*"
+                                # Engine on_hit event (DLC: hail_burst +1d10, ensnaring_hit restrains)
+                                _eng_da_hit = 0
+                                _eng_dm_hit = ""
+                                _eng_oh_eng = self._engine
+                                if _eng_oh_eng and stats:
+                                    _ctx_oh = _build_ctx(_eng_oh_eng, run, uid, name, stats,
+                                                         enemies[_atk_tidx],
+                                                         attack_roll=roll, is_crit=crit,
+                                                         is_hit=True, base_damage=dmg1)
+                                    _fx_oh  = _eng_oh_eng.fire("on_hit", _ctx_oh)
+                                    _oh_msgs: list[str] = []
+                                    _apply_combat_fx(run, uid, _fx_oh, _oh_msgs, rnd, "on_hit")
+                                    _eng_da_hit = _fx_oh.damage_add
+                                    _eng_dm_hit = "".join(_oh_msgs)
+                                    _eng_tags.update(_fx_oh.damage_type_tags)
                                 if crit:
                                     if _gwf_handler.get("on_damage_roll_reroll") and not is_ranged:
                                         dmg2 = _roll_gwf(stats["dmg_expr"])
@@ -3187,12 +3404,14 @@ class DungeonMasterCog(commands.Cog):
                                     mark_add2 = random.randint(1, 6) if is_marked else 0
                                     ism_add2  = random.randint(1, 8) if imp_smite else 0
                                     dmg       = (dmg1 + dmg2 + mark_add + mark_add2
-                                                 + ism_add + ism_add2 + sup_add + cs_add
-                                                 + duel_add + ss_dmg + bm_die + fe_add + hail_add)
+                                                 + ism_add + ism_add2 + sup_add
+                                                 + duel_add + ss_dmg + bm_die + fe_add
+                                                 + _eng_da + _eng_da_hit)
                                     any_crit  = True
                                 else:
-                                    dmg = (dmg1 + mark_add + ism_add + sup_add + cs_add
-                                           + duel_add + ss_dmg + bm_die + fe_add + hail_add)
+                                    dmg = (dmg1 + mark_add + ism_add + sup_add
+                                           + duel_add + ss_dmg + bm_die + fe_add
+                                           + _eng_da + _eng_da_hit)
                                 if is_raging:
                                     dmg *= 2
                                 e_hp = max(0, e_hp - dmg)
@@ -3202,13 +3421,12 @@ class DungeonMasterCog(commands.Cog):
                                     (f"+{mark_add}🎯" if mark_add else "")
                                     + (f"+{ism_add}✝️" if ism_add else "")
                                     + (f"+{sup_add}⚔️" if sup_add else "")
-                                    + (f"+{cs_add}💥*(Colossus)*" if cs_add else "")
                                     + (f"+{duel_add}⚔️*(duel)*" if duel_add else "")
                                     + (f"+{ss_dmg}🎯*(SS)*" if ss_dmg else "")
                                     + (f"+{fe_add}🏹*(favored)*" if fe_add else "")
-                                    + (f"+{hail_add}🌪️*(thorns)*" if hail_add else "")
-                                    + (ensnare_txt if ensnare_txt else "")
                                     + (bm_note if bm_note else "")
+                                    + (_eng_dm if _eng_dm else "")
+                                    + (_eng_dm_hit if _eng_dm_hit else "")
                                 )
                                 hit_parts.append(f"✨CRIT **{dmg}**{extras}" if crit else f"**{dmg}**{extras}")
 
@@ -3332,9 +3550,25 @@ class DungeonMasterCog(commands.Cog):
                     else:
                         run["features_used"].setdefault(uid, set()).add(fid)
 
-                    # ── DLC ability/spell handler check (takes priority) ──────
-                    _dlc_handler = self._ability_handlers.get(fid) or self._spell_handlers.get(fid)
-                    if _dlc_handler:
+                    # ── New engine DLC path (on_ability_use) ──────────────────
+                    _eng_f    = self._engine
+                    _f_handled = False
+                    if _eng_f and stats:
+                        _ctx_f = _build_ctx(_eng_f, run, uid, name, stats, enemies[_feat_tidx],
+                                            ability_id=fid)
+                        _fx_f  = _eng_f.fire("on_ability_use", _ctx_f)
+                        # Skip legacy when engine produced output and no bonus attacks
+                        # (bonus attacks = action_surge etc. need the full attack loop)
+                        if _fx_f.messages and _fx_f.bonus_attacks == 0:
+                            _apply_combat_fx(run, uid, _fx_f, round_lines, rnd, fid,
+                                             enemy_obj=enemies[_feat_tidx])
+                            _f_handled = True
+                    # ── Legacy DLC / hardcoded ability chain ──────────────────
+                    _dlc_handler = (self._ability_handlers.get(fid) or self._spell_handlers.get(fid)
+                                    if not _f_handled else None)
+                    if _f_handled:
+                        pass
+                    elif _dlc_handler:
                         await _dlc_handler(
                             run, action, uid, name, stats, enemies, _feat_tidx,
                             round_lines, run_id, gid, rnd, enemy)
@@ -3667,6 +3901,19 @@ class DungeonMasterCog(commands.Cog):
                         dodge_ac = stats["ac"] + (2 if in_dodge else 0) + ek_ac
                         if ek_ac:
                             ret_notes.append("*(Shield +5 AC)*")
+                        # Engine status: player_ac_bonus (e.g. arcane_warded +3 AC)
+                        _eng_ret = self._engine
+                        _status_ac = 0
+                        if _eng_ret:
+                            for (sid, _dur) in run.get("engine_statuses", {}).get(target_uid, []):
+                                sdef = _eng_ret.registry.statuses.get(sid)
+                                if sdef:
+                                    _ab = sdef["effects"].get("player_ac_bonus", 0)
+                                    if _ab:
+                                        _status_ac += _ab
+                                        ret_notes.append(f"*(+{_ab} {sdef['label']})*")
+                        _base_dodge_ac = dodge_ac
+                        dodge_ac      += _status_ac
                         note_sfx = (" " + " ".join(ret_notes)) if ret_notes else ""
                         if roll == 20 or total_atk >= dodge_ac:
                             dmg1 = _roll(enemy["dmg"])
@@ -3677,20 +3924,26 @@ class DungeonMasterCog(commands.Cog):
                                 dmg  = dmg1
                             if in_dodge:
                                 dmg = max(1, dmg // 2)
-                            if target_uid in run.get("vanish_uids", set()):
-                                dmg = max(1, dmg // 2)
-                                run["vanish_uids"].discard(target_uid)
-                                ret_notes.append("*(Vanish — half dmg)*")
-                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            # Engine status damage reduction (vanished, beast_guarded → ×0.5)
+                            if _eng_ret:
+                                _kept: list[tuple] = []
+                                for (sid, dur) in run.get("engine_statuses", {}).get(target_uid, []):
+                                    sdef = _eng_ret.registry.statuses.get(sid)
+                                    if sdef:
+                                        mult = sdef["effects"].get("damage_mult", 1.0)
+                                        if mult < 1.0:
+                                            dmg = max(1, int(dmg * mult))
+                                            ret_notes.append(f"*({sdef['label']} — half dmg)*")
+                                            note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                                        if not sdef["effects"].get("clears_on_take_hit"):
+                                            _kept.append((sid, dur))
+                                    else:
+                                        _kept.append((sid, dur))
+                                run.setdefault("engine_statuses", {})[target_uid] = _kept
                             if target_uid in run.get("misty_step_uids", set()):
                                 dmg = max(1, dmg // 2)
                                 run["misty_step_uids"].discard(target_uid)
                                 ret_notes.append("*(Misty Step — half dmg)*")
-                                note_sfx = (" " + " ".join(ret_notes)).rstrip()
-                            if target_uid in run.get("beast_protect_uids", set()):
-                                dmg = max(1, dmg // 2)
-                                run["beast_protect_uids"].discard(target_uid)
-                                ret_notes.append("*(Beast Guard — half dmg)*")
                                 note_sfx = (" " + " ".join(ret_notes)).rstrip()
                             _tw_passive   = self._subclass_passives.get(t_sc or "", {})
                             _tw_dmg_taken = _tw_passive.get("on_damage_taken")
@@ -3749,6 +4002,20 @@ class DungeonMasterCog(commands.Cog):
                                 # Refresh non_fled so a dead player isn't retargeted
                                 non_fled = [u for u in non_fled
                                             if run["player_hp"].get(u, 0) > 0]
+                        elif _status_ac and _base_dodge_ac <= total_atk:
+                            # Ward blocked: attack would hit but status AC turned it into a miss
+                            if _eng_ret:
+                                _kept_w: list[tuple] = []
+                                for (sid, dur) in run.get("engine_statuses", {}).get(target_uid, []):
+                                    sdef = _eng_ret.registry.statuses.get(sid)
+                                    if sdef and sdef["effects"].get("clears_on_take_hit"):
+                                        pass  # consumed
+                                    else:
+                                        _kept_w.append((sid, dur))
+                                run.setdefault("engine_statuses", {})[target_uid] = _kept_w
+                            note_sfx = (" " + " ".join(ret_notes)).rstrip()
+                            round_lines.append(
+                                f"🛡️ **{_ret_eobj['name']}** attacks **{target_name}** — **WARD BLOCKED!**{note_sfx}")
                         else:
                             round_lines.append(f"💨 **{_ret_eobj['name']}** attacks **{target_name}** — MISS!{note_sfx}")
                             # BM Riposte: counter-attack on miss (targets the riposting enemy)
