@@ -2178,6 +2178,20 @@ class DungeonMasterCog(commands.Cog):
                             except Exception as _eff_exc:
                                 log.warning("level_up_effect hook error: %s", _eff_exc)
 
+        except Exception as _camp_exc:
+            log.exception("[Campaign crash] run=%s campaign=%s: %s",
+                          run_id, campaign.get("id", "?"), _camp_exc)
+            try:
+                await interaction.channel.send(embed=discord.Embed(
+                    description=(
+                        f"⚠️ The campaign encountered an unexpected error and had to stop.\n"
+                        f"```{type(_camp_exc).__name__}: {_camp_exc}```"
+                    ),
+                    color=var.COLOR_ERROR,
+                ))
+            except Exception:
+                pass
+            raise
         finally:
             self._clear_run(run_id)
             self._runs.pop(run_id, None)
