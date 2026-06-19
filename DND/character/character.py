@@ -1273,6 +1273,66 @@ class CharacterCog(commands.Cog):
         return choices[:25]
 
 
+    # ── /dnd-debug ────────────────────────────────────────────────────────────
+    @app_commands.command(name="dnd-debug", description="[Admin] Diagnose DND race/class loading.")
+    async def dnd_debug(self, interaction: discord.Interaction):
+        import sys
+        from pathlib import Path as _P
+
+        lines: list[str] = []
+
+        # 1. EngineCore presence
+        core = self._engine_core()
+        lines.append(f"**EngineCore in bot.cogs:** {'✅ YES' if core else '❌ NO'}")
+
+        # 2. Registry counts (if core loaded)
+        if core:
+            lines.append(f"**Registry races:** {list(core.registry.races.keys())}")
+            lines.append(f"**Registry classes:** {list(core.registry.classes.keys())}")
+        else:
+            lines.append("**Registry:** N/A (EngineCore not loaded)")
+
+        # 3. _extra_races / _extra_classes result
+        try:
+            er = self._extra_races()
+            lines.append(f"**_extra_races():** {[r['id'] for r in er]}")
+        except Exception as exc:
+            lines.append(f"**_extra_races() ERROR:** {exc}")
+
+        try:
+            ec = self._extra_classes()
+            lines.append(f"**_extra_classes():** {[c['id'] for c in ec]}")
+        except Exception as exc:
+            lines.append(f"**_extra_classes() ERROR:** {exc}")
+
+        # 4. DLC root path
+        try:
+            from DND.DungeonMaster.engine import _DLC_ROOT
+            lines.append(f"**DLC root:** `{_DLC_ROOT}`")
+            lines.append(f"**DLC root exists:** {_DLC_ROOT.is_dir()}")
+            if _DLC_ROOT.is_dir():
+                sub = [p.name for p in sorted(_DLC_ROOT.iterdir()) if p.is_dir()]
+                lines.append(f"**DLC subdirs:** {sub}")
+        except Exception as exc:
+            lines.append(f"**DLC root import ERROR:** {exc}")
+
+        # 5. Try the auto-boot import to surface any error
+        try:
+            from DND.DungeonMaster.engine import EngineCore as _EC2  # noqa
+            lines.append("**DND.DungeonMaster.engine import:** ✅ OK")
+        except Exception as exc:
+            lines.append(f"**DND.DungeonMaster.engine import ERROR:** `{exc}`")
+
+        # 6. sys.path (first 5 entries)
+        lines.append(f"**sys.path[:5]:** {sys.path[:5]}")
+
+        # 7. All loaded cog names
+        lines.append(f"**Loaded cogs:** {list(self.bot.cogs.keys())}")
+
+        embed = discord.Embed(title="🔧 DND Debug", description="\n".join(lines), color=0x7289da)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(CharacterCog(bot))
     log.info("✅ DND/Character cog loaded")
