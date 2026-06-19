@@ -124,6 +124,222 @@ class ConfigCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+    # ── /debug ────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="debug", description="[Admin] System health check for a bot category.")
+    @app_commands.describe(category="Which category to inspect")
+    @app_commands.choices(category=[
+        app_commands.Choice(name="🤖 Bot Overview",      value="bot"),
+        app_commands.Choice(name="⚔️ DND / Engine",      value="dnd"),
+        app_commands.Choice(name="🎰 Casino",             value="casino"),
+        app_commands.Choice(name="🌐 General",            value="general"),
+        app_commands.Choice(name="👤 User",               value="user"),
+        app_commands.Choice(name="💬 Quotes",             value="quotes"),
+        app_commands.Choice(name="🎉 Events",             value="events"),
+        app_commands.Choice(name="🗄️ Database",           value="database"),
+        app_commands.Choice(name="⚙️ Config",             value="config"),
+    ])
+    async def debug(self, interaction: discord.Interaction, category: str):
+        import sys
+        embed = discord.Embed(color=var.COLOR_INFO)
+
+        def _loaded(name: str) -> str:
+            return "✅" if self.bot.cogs.get(name) else "❌"
+
+        if category == "bot":
+            embed.title = "🤖 Bot Overview"
+            loaded_names = set(self.bot.cogs.keys())
+            groups = [
+                ("⚔️ DND",      ["DungeonMasterCog","EngineCore","CharacterCog","ShopCog","RecipesCog","PartiesCog","ScribeCog"]),
+                ("🎰 Casino",   ["SlotsCog","BlackjackCog","BaccaratCog","RouletteCog","GambleCog","CoinFlipCog","HigherLowerCog","HorseRacingCog","CrossyRoadCog","RPSCog","PokerCog","BrokeBoy"]),
+                ("🌐 General",  ["WelcomeSystem","SelfRoles","Rules","HelpCog"]),
+                ("👤 User",     ["BankCog","LeaderboardCog","StatsCog"]),
+                ("💬 Quotes",   ["QuotesCog"]),
+                ("🎉 Events",   ["CasinoEventCog","MultiplierEventCog"]),
+                ("🔗 Webhooks", ["WordleRecap"]),
+                ("⚙️ Admin",    ["ConfigCog","Moderation"]),
+            ]
+            embed.add_field(
+                name="📡 Status",
+                value=(
+                    f"**Latency:** {round(self.bot.latency * 1000)} ms\n"
+                    f"**Guilds:** {len(self.bot.guilds)}\n"
+                    f"**Total cogs loaded:** {len(loaded_names)}"
+                ),
+                inline=False,
+            )
+            for grp, names in groups:
+                val = "  ".join(
+                    f"{'✅' if n in loaded_names else '❌'} `{n}`" for n in names
+                )
+                embed.add_field(name=grp, value=val, inline=False)
+
+        elif category == "dnd":
+            embed.title = "⚔️ DND / Engine"
+            core = self.bot.cogs.get("EngineCore")
+            cog_lines = [
+                f"{_loaded('DungeonMasterCog')} `DungeonMasterCog`",
+                f"{_loaded('EngineCore')} `EngineCore`",
+                f"{_loaded('CharacterCog')} `CharacterCog`",
+                f"{_loaded('ShopCog')} `ShopCog`",
+                f"{_loaded('RecipesCog')} `RecipesCog`",
+                f"{_loaded('PartiesCog')} `PartiesCog`",
+                f"{_loaded('ScribeCog')} `ScribeCog`",
+            ]
+            embed.add_field(name="🔧 Cogs", value="\n".join(cog_lines), inline=True)
+            if core:
+                r = core.registry
+                embed.add_field(
+                    name="📋 Registry",
+                    value=(
+                        f"**Races:** {list(r.races.keys()) or '—'}\n"
+                        f"**Classes:** {list(r.classes.keys()) or '—'}\n"
+                        f"**Items:** {len(r.items)}\n"
+                        f"**Shop items:** {len(r.shop_items)}\n"
+                        f"**Campaigns:** {len(r.campaigns)}\n"
+                        f"**Recipes:** {len(r.recipes)}"
+                    ),
+                    inline=True,
+                )
+                eng_mod  = sys.modules.get(type(core).__module__)
+                dlc_root = getattr(eng_mod, "_DLC_ROOT", None)
+                if dlc_root and dlc_root.is_dir():
+                    dlc_lines = [f"**Root:** `{dlc_root}`"]
+                    for cat_dir in sorted(dlc_root.iterdir()):
+                        if not cat_dir.is_dir() or cat_dir.name.startswith("_"):
+                            continue
+                        plugins = [
+                            p.name for p in sorted(cat_dir.iterdir())
+                            if p.is_dir() and not p.name.startswith("_")
+                            and (p / "variables.py").exists()
+                        ]
+                        if plugins:
+                            dlc_lines.append(f"**{cat_dir.name}/**: {', '.join(f'`{p}`' for p in plugins)}")
+                    embed.add_field(name="📦 DLC Plugins", value="\n".join(dlc_lines), inline=False)
+            dm = self.bot.cogs.get("DungeonMasterCog")
+            if dm and hasattr(dm, "_runs"):
+                embed.add_field(
+                    name="⚔️ Active Runs", value=str(len(dm._runs)) or "0", inline=True)
+
+        elif category == "casino":
+            embed.title = "🎰 Casino"
+            games = [
+                ("🎰 Slots",               "SlotsCog"),
+                ("🃏 Blackjack",           "BlackjackCog"),
+                ("🎲 Baccarat",            "BaccaratCog"),
+                ("🎡 Roulette",            "RouletteCog"),
+                ("🎲 Gamble",              "GambleCog"),
+                ("🪙 Coinflip",            "CoinFlipCog"),
+                ("📈 Higher / Lower",      "HigherLowerCog"),
+                ("🐎 Horse Racing",        "HorseRacingCog"),
+                ("🐸 Crossy Road",         "CrossyRoadCog"),
+                ("✂️ Rock Paper Scissors", "RPSCog"),
+                ("♠️ Poker",               "PokerCog"),
+                ("💸 Broke Boy",           "BrokeBoy"),
+            ]
+            lines = [
+                f"{_loaded(cog)} **{name}** `{cog}`" for name, cog in games
+            ]
+            embed.add_field(name="🎮 Games", value="\n".join(lines), inline=False)
+
+        elif category == "general":
+            embed.title = "🌐 General"
+            mods = [
+                ("🎉 Welcome System", "WelcomeSystem"),
+                ("🏷️ Self Roles",     "SelfRoles"),
+                ("📜 Rules",           "Rules"),
+                ("❓ Help",            "HelpCog"),
+            ]
+            lines = [f"{_loaded(cog)} **{name}** `{cog}`" for name, cog in mods]
+            embed.add_field(name="Modules", value="\n".join(lines), inline=False)
+
+        elif category == "user":
+            embed.title = "👤 User"
+            mods = [
+                ("🏦 Bank",        "BankCog"),
+                ("🏆 Leaderboard", "LeaderboardCog"),
+                ("📊 Stats",       "StatsCog"),
+            ]
+            lines = [f"{_loaded(cog)} **{name}** `{cog}`" for name, cog in mods]
+            embed.add_field(name="Modules", value="\n".join(lines), inline=False)
+
+        elif category == "quotes":
+            embed.title = "💬 Quotes"
+            embed.add_field(
+                name="Module", value=f"{_loaded('QuotesCog')} `QuotesCog`", inline=False)
+            dm = self.bot.cogs.get("DungeonMasterCog")
+            if dm and hasattr(dm, "db"):
+                try:
+                    count = dm.db.execute("SELECT COUNT(*) FROM quotes")[0][0]
+                    embed.add_field(name="📝 Total Quotes", value=f"{count:,}", inline=True)
+                except Exception:
+                    pass
+
+        elif category == "events":
+            embed.title = "🎉 Events"
+            mods = [
+                ("🎰 Casino Event",     "CasinoEventCog"),
+                ("✨ Multiplier Event", "MultiplierEventCog"),
+            ]
+            lines = [f"{_loaded(cog)} **{name}** `{cog}`" for name, cog in mods]
+            embed.add_field(name="Modules", value="\n".join(lines), inline=False)
+
+        elif category == "database":
+            embed.title = "🗄️ Database"
+            dm = self.bot.cogs.get("DungeonMasterCog")
+            if not (dm and hasattr(dm, "db")):
+                embed.add_field(
+                    name="Status",
+                    value="❌ DungeonMasterCog not loaded — cannot access DB",
+                    inline=False,
+                )
+            else:
+                db = dm.db
+                _tables = [
+                    ("dnd_characters",  "DND Characters"),
+                    ("dnd_inventory",   "DND Inventory rows"),
+                    ("dnd_runs",        "DND Active runs"),
+                    ("balances",        "Balances"),
+                    ("transactions",    "Transactions"),
+                    ("quotes",          "Quotes"),
+                    ("slot_sessions",   "Slot sessions"),
+                    ("blackjack_hands", "Blackjack hands"),
+                ]
+                db_lines = ["✅ Connected"]
+                for tbl, label in _tables:
+                    try:
+                        n = db.execute(f"SELECT COUNT(*) FROM {tbl}")[0][0]
+                        db_lines.append(f"**{label}:** {n:,}")
+                    except Exception:
+                        db_lines.append(f"**{label}:** *(not found)*")
+                embed.add_field(
+                    name="📊 Table Counts", value="\n".join(db_lines), inline=False)
+
+        elif category == "config":
+            embed.title = "⚙️ Config"
+            cfg = BotConfig()
+            allowed = cfg.allowed_channels()
+            allowed_txt = (
+                "\n".join(f"<#{c['id']}> `#{c['name']}`" for c in allowed)
+                if allowed
+                else f"*(default: {', '.join('#' + n for n in cfg.allowed_names())})*"
+            )
+            cp = cfg.control_panel()
+            cp_txt = (f"<#{cp['id']}> `#{cp['name']}`" if cp
+                      else f"*(default: #{cfg.control_panel_name()})*")
+            staff = cfg.staff_role_names()
+            staff_txt = (", ".join(f"`{r}`" for r in staff) if staff else "*(none set)*")
+            embed.add_field(name="📺 Allowed Channels", value=allowed_txt, inline=False)
+            embed.add_field(name="🎛️ Control Panel",    value=cp_txt,      inline=False)
+            embed.add_field(name="👮 Staff Roles",       value=staff_txt,   inline=False)
+
+        else:
+            embed.title = "❓ Unknown Category"
+            embed.description = f"Category `{category}` is not recognised."
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(ConfigCog(bot))
     log.info("✅ General/Config cog loaded")
