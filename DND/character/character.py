@@ -403,7 +403,11 @@ class CharacterCog(commands.Cog):
                 log.warning("Character: DLC scan failed for '%s': %s", folder, exc)
 
     def _item(self, iid: str) -> dict | None:
-        return next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)
+        found = next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)
+        if found:
+            return found
+        core = self._engine_core()
+        return core.registry.items.get(iid) if core else None
 
     async def cog_load(self):
         # Ensure EngineCore is loaded so race/class DLC is available for autocomplete.
