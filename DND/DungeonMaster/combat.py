@@ -1710,7 +1710,7 @@ class DungeonMasterCog(commands.Cog):
             return
         char_name = rows[0][0] or member.display_name
         # Compute XP to reach this level (use the threshold table from char_var)
-        target_xp = char_var.XP_THRESHOLDS.get(level, char_var.XP_THRESHOLDS[level])
+        target_xp = char_var.XP_THRESHOLDS[level]
         self.db.execute(
             "UPDATE dnd_characters SET level=?, xp=? WHERE user_id=? AND guild_id=?",
             (level, target_xp, uid, gid))
