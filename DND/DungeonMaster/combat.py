@@ -3243,6 +3243,7 @@ class DungeonMasterCog(commands.Cog):
                         cha_mod     = stats["mods"]["charisma"]
                         is_ranged          = stats.get("is_ranged", False)
                         handed             = stats.get("handed", 1)
+                        weapon             = self._get_equipped_weapon(uid, gid)
                         fs                 = run.get("fighting_style", {}).get(uid)
                         p_feat             = _get_human_feat(self.db, uid, gid)
                         dwarf_tr           = _get_dwarf_trait(self.db, uid, gid)
