@@ -385,11 +385,7 @@ class CharacterCog(commands.Cog):
             log.info("Character: proxied DLC shop item '%s'", data["id"])
 
     def _scan_dlc_items(self):
-        """Scan DND_DLC/*/variables.py for WEAPONS, CHAR_ITEMS, and SHOP_ITEMS and register them.
-
-        This runs at cog_load so all DLC items are available regardless of whether
-        the launcher discovers the individual DLC folder.
-        """
+        """Scan DND_DLC for WEAPONS/CHAR_ITEMS/SHOP_ITEMS (old-style) and register them."""
         dlc_dir = Path(__file__).parent.parent.parent / "DND_DLC"
         if not dlc_dir.is_dir():
             return
@@ -410,6 +406,15 @@ class CharacterCog(commands.Cog):
         return next((i for i in var.ITEMS + self._extra_items if i["id"] == iid), None)
 
     async def cog_load(self):
+        # Ensure EngineCore is loaded so race/class DLC is available for autocomplete.
+        if not self.bot.cogs.get("EngineCore"):
+            try:
+                from DND.DungeonMaster.engine import EngineCore as _EC
+                await self.bot.add_cog(_EC(self.bot))
+                log.info("Character: auto-booted EngineCore")
+            except Exception as _e:
+                log.warning("Character: could not auto-boot EngineCore: %s", _e)
+
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS dnd_characters (
                 user_id      TEXT    NOT NULL,

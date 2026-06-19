@@ -73,5 +73,5 @@ class DLCLoader:
             return True
 
         except Exception as exc:
-            log.warning("[DLCLoader] ❌ '%s' failed: %s", name, exc)
+            log.warning("[DLCLoader] ❌ '%s' failed: %s", name, exc, exc_info=True)
             return False
