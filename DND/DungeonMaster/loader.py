@@ -31,11 +31,26 @@ class DLCLoader:
             return 0, 0
 
         loaded = skipped = 0
+        seen: set[Path] = set()
+
         for var_file in sorted(self._root.glob("*/variables.py")):
             folder = var_file.parent.name
             if folder.startswith("_"):
                 continue
+            seen.add(var_file)
             if self._load_one(var_file, folder):
+                loaded  += 1
+            else:
+                skipped += 1
+
+        for var_file in sorted(self._root.glob("*/*/variables.py")):
+            if var_file in seen:
+                continue
+            parts = var_file.relative_to(self._root).parts
+            if any(p.startswith("_") for p in parts[:-1]):
+                continue
+            name = "/".join(parts[:-1])
+            if self._load_one(var_file, name):
                 loaded  += 1
             else:
                 skipped += 1
