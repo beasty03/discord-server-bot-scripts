@@ -455,13 +455,43 @@ class CharacterCog(commands.Cog):
     def _engine_cog(self):
         return self.bot.cogs.get("DungeonMasterCog")
 
+    def _engine_core(self):
+        return self.bot.cogs.get("EngineCore")
+
     def _extra_races(self) -> list:
+        seen: set[str] = set()
+        out: list[dict] = []
         dm = self._engine_cog()
-        return dm._extra_races if dm else []
+        for r in (dm._extra_races if dm else []):
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                out.append(r)
+        core = self._engine_core()
+        if core:
+            for r in core.registry.races.values():
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    # DLC races use stat_bonuses; _derive() expects mods
+                    if "mods" not in r:
+                        r = {**r, "mods": r.get("stat_bonuses", {})}
+                    out.append(r)
+        return out
 
     def _extra_classes(self) -> list:
+        seen: set[str] = set()
+        out: list[dict] = []
         dm = self._engine_cog()
-        return dm._extra_classes if dm else []
+        for c in (dm._extra_classes if dm else []):
+            if c["id"] not in seen:
+                seen.add(c["id"])
+                out.append(c)
+        core = self._engine_core()
+        if core:
+            for c in core.registry.classes.values():
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    out.append(c)
+        return out
 
     def _class_features(self, class_id: str) -> list:
         dm = self._engine_cog()
