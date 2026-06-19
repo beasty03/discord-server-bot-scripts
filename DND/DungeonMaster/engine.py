@@ -24,7 +24,17 @@ from .resolver   import EffectResolver, ResolvedEffects
 
 log = logging.getLogger("engine")
 
-_DLC_ROOT = Path(__file__).parent.parent.parent / "DND_DLC"
+def _find_dlc_root() -> Path:
+    """Walk up from this file until we find a directory that contains DND_DLC/."""
+    candidate = Path(__file__).resolve().parent
+    for _ in range(6):
+        dlc = candidate / "DND_DLC"
+        if dlc.is_dir():
+            return dlc
+        candidate = candidate.parent
+    return Path(__file__).parent.parent.parent / "DND_DLC"  # original fallback
+
+_DLC_ROOT = _find_dlc_root()
 
 
 class EngineCore(commands.Cog):

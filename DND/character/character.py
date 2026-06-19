@@ -409,9 +409,37 @@ class CharacterCog(commands.Cog):
         # Ensure EngineCore is loaded so race/class DLC is available for autocomplete.
         if not self.bot.cogs.get("EngineCore"):
             try:
-                from DND.DungeonMaster.engine import EngineCore as _EC
-                await self.bot.add_cog(_EC(self.bot))
-                log.info("Character: auto-booted EngineCore")
+                import importlib as _il
+                _EC = None
+                # Strategy 1: derive engine path from DungeonMasterCog's module.
+                # This works regardless of whether the code is deployed as cogs.DND.*
+                # or DND.DungeonMaster.* — no hardcoded package prefix needed.
+                _dm = self.bot.cogs.get("DungeonMasterCog")
+                if _dm:
+                    _dm_pkg = ".".join(type(_dm).__module__.split(".")[:-1])
+                    for _tail in ("engine", "DungeonMaster.engine"):
+                        try:
+                            _mod = _il.import_module(f"{_dm_pkg}.{_tail}")
+                            _EC = getattr(_mod, "EngineCore", None)
+                            if _EC:
+                                break
+                        except ImportError:
+                            continue
+                # Strategy 2: try well-known absolute paths
+                if _EC is None:
+                    for _path in ("DND.DungeonMaster.engine", "DND.engine"):
+                        try:
+                            _mod = _il.import_module(_path)
+                            _EC = getattr(_mod, "EngineCore", None)
+                            if _EC:
+                                break
+                        except ImportError:
+                            continue
+                if _EC is not None:
+                    await self.bot.add_cog(_EC(self.bot))
+                    log.info("Character: auto-booted EngineCore")
+                else:
+                    log.warning("Character: EngineCore not found — /race and /class will have no options")
             except Exception as _e:
                 log.warning("Character: could not auto-boot EngineCore: %s", _e)
 

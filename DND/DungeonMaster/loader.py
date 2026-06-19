@@ -21,11 +21,28 @@ class DLCLoader:
         self._api  = api
         self._root = dlc_root
 
+    def _ensure_dlc_imports(self):
+        """Register DND.DungeonMaster.effects in sys.modules so DLC files can import it
+        regardless of whether the bot runs as cogs.DND.* or DND.DungeonMaster.*."""
+        import sys, types
+        if "DND.DungeonMaster.effects" in sys.modules:
+            return
+        try:
+            from . import effects
+            dummy_dnd = sys.modules.setdefault("DND", types.ModuleType("DND"))
+            dummy_dm  = sys.modules.setdefault("DND.DungeonMaster", types.ModuleType("DND.DungeonMaster"))
+            setattr(dummy_dnd, "DungeonMaster", dummy_dm)
+            sys.modules["DND.DungeonMaster.effects"] = effects
+            log.info("[DLCLoader] registered DND.DungeonMaster.effects alias")
+        except Exception as exc:
+            log.warning("[DLCLoader] could not register DND.DungeonMaster.effects alias: %s", exc)
+
     def load_all(self) -> tuple[int, int]:
         """
         Discover and load all valid DLCs.
         Returns (loaded_count, skipped_count).
         """
+        self._ensure_dlc_imports()
         if not self._root.is_dir():
             log.warning("[DLCLoader] root not found: %s", self._root)
             return 0, 0
