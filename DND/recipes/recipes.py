@@ -301,7 +301,12 @@ class RecipesCog(commands.Cog):
 
     def _char_extra_items(self) -> list[dict]:
         char_cog = self.bot.cogs.get("CharacterCog")
-        return char_cog._extra_items if char_cog else []
+        base = list(char_cog._extra_items) if char_cog else []
+        core = self.bot.cogs.get("EngineCore")
+        if core:
+            seen = {i["id"] for i in base}
+            base += [i for i in core.registry.items.values() if i["id"] not in seen]
+        return base
 
     def _get_known_recipes(self, uid: str, gid: str) -> list[dict]:
         return [

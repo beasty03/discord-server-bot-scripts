@@ -76,6 +76,10 @@ class EngineCore(commands.Cog):
     def _dlc_shop_items(self) -> list[dict]:
         return self.registry.shop_items
 
+    @property
+    def _dlc_recipes(self) -> list[dict]:
+        return self.registry.recipes
+
     def make_context(
         self,
         player:  PlayerSnap,

@@ -1,6 +1,6 @@
-# Scroll items — picked up by CharacterCog._scan_dlc_items() so /learn_spell can find them.
-CHAR_ITEMS = [
-    {
+def register(api):
+
+    api.add_item({
         "id":          "scroll_burning_hands",
         "name":        "Scroll of Burning Hands",
         "emoji":       "📜",
@@ -9,8 +9,9 @@ CHAR_ITEMS = [
         "tier":        "common",
         "sell":        25,
         "description": "Teaches a Wizard the Burning Hands spell (3d6 fire cone).",
-    },
-    {
+    })
+
+    api.add_item({
         "id":          "scroll_thunderwave",
         "name":        "Scroll of Thunderwave",
         "emoji":       "📜",
@@ -19,8 +20,9 @@ CHAR_ITEMS = [
         "tier":        "common",
         "sell":        25,
         "description": "Teaches a Wizard the Thunderwave spell (2d8+INT thunder, ATK debuff).",
-    },
-    {
+    })
+
+    api.add_item({
         "id":          "scroll_shield_spell",
         "name":        "Scroll of Shield",
         "emoji":       "📜",
@@ -29,13 +31,7 @@ CHAR_ITEMS = [
         "tier":        "common",
         "sell":        25,
         "description": "Teaches a Wizard the Shield spell (+5 AC vs the next hit, bonus action).",
-    },
-]
-
-
-def register(api):
-    for item in CHAR_ITEMS:
-        api.add_item(item)
+    })
 
     api.add_shop_item({
         "id":          "scroll_burning_hands",

@@ -16,38 +16,7 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 # description → shown in /recipes and /craft
 # ============================================================================
 
-RECIPES: list[dict] = [
-    {
-        "id":          "small_health_potion",
-        "name":        "Small Health Potion",
-        "emoji":       "🧪",
-        "tier":        "common",
-        "unlock":      None,
-        "inputs":      [("herb", 2)],
-        "output":      ("small_health_potion", 1),
-        "description": "A modest healing draught. Restores 1d4+1 HP.",
-    },
-    {
-        "id":          "health_potion",
-        "name":        "Health Potion",
-        "emoji":       "🧪",
-        "tier":        "uncommon",
-        "unlock":      "recipe_hp_medium",
-        "inputs":      [("herb", 3), ("leather_scrap", 1)],
-        "output":      ("health_potion", 1),
-        "description": "A sturdy potion brewed with tanned hide. Restores 2d4+2 HP.",
-    },
-    {
-        "id":          "large_health_potion",
-        "name":        "Large Health Potion",
-        "emoji":       "🧪",
-        "tier":        "rare",
-        "unlock":      "recipe_hp_large",
-        "inputs":      [("herb", 5), ("leather_scrap", 2), ("arcane_shard", 1)],
-        "output":      ("large_health_potion", 1),
-        "description": "An alchemical masterwork. Restores 4d4+4 HP.",
-    },
-]
+RECIPES: list[dict] = []  # all recipes are now registered via DND_DLC/recipes/variables.py
 
 # ── Tier display ──────────────────────────────────────────────────────────────
 TIER_EMOJI = {

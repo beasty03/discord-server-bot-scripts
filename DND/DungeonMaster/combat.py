@@ -942,7 +942,12 @@ class DungeonMasterCog(commands.Cog):
 
     def _all_char_items(self) -> list[dict]:
         char_cog = self.bot.cogs.get("CharacterCog")
-        return char_var.ITEMS + (char_cog._extra_items if char_cog else [])
+        base = char_var.ITEMS + (char_cog._extra_items if char_cog else [])
+        core = self.bot.cogs.get("EngineCore")
+        if core:
+            seen = {i["id"] for i in base}
+            base = base + [i for i in core.registry.items.values() if i["id"] not in seen]
+        return base
 
     def _find_item(self, item_id: str) -> dict | None:
         return next((i for i in self._all_char_items() if i["id"] == item_id), None)
