@@ -553,7 +553,7 @@ class ShopCog(commands.Cog):
             return
 
         # Sell price = 85% of shop buy price, falling back to item's hardcoded sell value
-        shop_listing = next((s for s in var.SHOP_ITEMS if s["id"] == item), None)
+        shop_listing = next((s for s in self._all_shop_items() if s["id"] == item), None)
         unit_price   = round((shop_listing["price"] * 0.85)) if shop_listing else item_data["sell"]
         total        = unit_price * qty
         self.db.execute(

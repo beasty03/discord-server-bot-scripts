@@ -72,6 +72,10 @@ class EngineCore(commands.Cog):
         """Roll dice. e.g. engine.roll('2d8+3')"""
         return _roll(expr)
 
+    @property
+    def _dlc_shop_items(self) -> list[dict]:
+        return self.registry.shop_items
+
     def make_context(
         self,
         player:  PlayerSnap,
