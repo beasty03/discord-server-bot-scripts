@@ -268,6 +268,8 @@ class DeleteConfirmView(discord.ui.View):
         self._cog.db.execute(
             "DELETE FROM dnd_inventory WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
         self._cog.db.execute(
+            "DELETE FROM dnd_character_choices WHERE user_id=? AND guild_id=?", (self._uid, self._gid))
+        self._cog.db.execute(
             """INSERT INTO dnd_character_cooldowns (user_id, guild_id, deleted_at)
                VALUES (?, ?, ?)
                ON CONFLICT(user_id, guild_id) DO UPDATE SET deleted_at=excluded.deleted_at""",

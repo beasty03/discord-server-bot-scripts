@@ -239,6 +239,7 @@ def _build_ctx(engine, run: dict, uid: str, name: str, stats: dict, enemy_obj: d
         hp         = run["player_hp"].get(uid, 0),
         max_hp     = run["player_max_hp"].get(uid, 0),
         equipped   = stats.get("equipped", []),
+        subrace    = stats.get("subrace"),
     )
     snap = EnemySnap(
         name      = enemy_obj.get("name", ""),
@@ -1110,6 +1111,11 @@ class DungeonMasterCog(commands.Cog):
         handed    = weapon.get("handed", 1)     if weapon else 1
 
         subclass = _get_subclass(self.db, uid, gid, char_class)
+        _sr_rows = self.db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, gid, f"{race_id}_subrace"))
+        subrace = _sr_rows[0][0] if _sr_rows else None
         return {
             "mods":       mods,
             "prof":       prof,
@@ -1126,6 +1132,7 @@ class DungeonMasterCog(commands.Cog):
             "is_ranged":  is_ranged,
             "handed":     handed,
             "equipped":   equipped_items,
+            "subrace":    subrace,
         }
 
     def _get_equipped_weapon(self, uid: str, gid: str) -> dict | None:

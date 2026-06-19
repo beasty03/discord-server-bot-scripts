@@ -24,6 +24,7 @@ class PlayerSnap:
     hp:        int
     max_hp:    int
     equipped:  list          # list of full item dicts from registry (id, slot, dmg, ...)
+    subrace:   str | None = None
 
 
 @dataclass
