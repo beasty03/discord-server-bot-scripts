@@ -691,6 +691,10 @@ class DungeonMasterCog(commands.Cog):
         self._register_default_handlers()
 
     async def cog_load(self):
+        if not self.bot.cogs.get("EngineCore"):
+            from .engine import EngineCore as _EngineCore
+            await self.bot.add_cog(_EngineCore(self.bot))
+
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS dnd_active_runs (
                 user_id     TEXT NOT NULL,
