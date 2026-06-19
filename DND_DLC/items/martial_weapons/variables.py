@@ -1,5 +1,18 @@
 def register(api):
 
+    api.add_item({
+        "id":          "shortsword",
+        "name":        "Shortsword",
+        "emoji":       "🗡️",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "dexterity",
+        "dmg":         "1d6",
+        "handed":      1,
+        "tier":        "common",
+        "sell":        18,
+        "description": "A light martial blade.",
+    })
     api.add_shop_item({
         "id":          "shortsword",
         "name":        "Shortsword",
@@ -10,6 +23,19 @@ def register(api):
         "tier":        "common",
     })
 
+    api.add_item({
+        "id":          "longsword",
+        "name":        "Longsword",
+        "emoji":       "⚔️",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "strength",
+        "dmg":         "1d8",
+        "handed":      1,
+        "tier":        "uncommon",
+        "sell":        27,
+        "description": "A reliable martial sword.",
+    })
     api.add_shop_item({
         "id":          "longsword",
         "name":        "Longsword",
@@ -20,6 +46,19 @@ def register(api):
         "tier":        "uncommon",
     })
 
+    api.add_item({
+        "id":          "rapier",
+        "name":        "Rapier",
+        "emoji":       "🤺",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "dexterity",
+        "dmg":         "1d8",
+        "handed":      1,
+        "tier":        "uncommon",
+        "sell":        28,
+        "description": "A precise dueling blade.",
+    })
     api.add_shop_item({
         "id":          "rapier",
         "name":        "Rapier",
@@ -30,6 +69,19 @@ def register(api):
         "tier":        "uncommon",
     })
 
+    api.add_item({
+        "id":          "greataxe",
+        "name":        "Greataxe",
+        "emoji":       "🪓",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "strength",
+        "dmg":         "1d12",
+        "handed":      2,
+        "tier":        "rare",
+        "sell":        50,
+        "description": "A brutal two-handed axe.",
+    })
     api.add_shop_item({
         "id":          "greataxe",
         "name":        "Greataxe",
@@ -40,6 +92,19 @@ def register(api):
         "tier":        "rare",
     })
 
+    api.add_item({
+        "id":          "greatsword",
+        "name":        "Greatsword",
+        "emoji":       "⚔️",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "strength",
+        "dmg":         "2d6",
+        "handed":      2,
+        "tier":        "rare",
+        "sell":        50,
+        "description": "A massive two-handed sword.",
+    })
     api.add_shop_item({
         "id":          "greatsword",
         "name":        "Greatsword",

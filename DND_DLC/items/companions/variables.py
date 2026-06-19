@@ -1,5 +1,17 @@
 def register(api):
 
+    api.add_item({
+        "id":           "wolf_companion",
+        "name":         "Wolf Companion",
+        "emoji":        "🐺",
+        "slot":         "companion",
+        "beast_name":   "Wolf",
+        "beast_dmg":    "1d6+2",
+        "beast_atk_mod": -2,
+        "tier":         "common",
+        "sell":         50,
+        "description":  "A loyal wolf that fights at your side. (Beast Master only)",
+    })
     api.add_shop_item({
         "id":          "wolf_companion",
         "name":        "Wolf Companion",
@@ -10,6 +22,18 @@ def register(api):
         "tier":        "common",
     })
 
+    api.add_item({
+        "id":           "eagle_companion",
+        "name":         "Eagle Companion",
+        "emoji":        "🦅",
+        "slot":         "companion",
+        "beast_name":   "Eagle",
+        "beast_dmg":    "1d4+3",
+        "beast_atk_mod": 0,
+        "tier":         "uncommon",
+        "sell":         110,
+        "description":  "A keen eagle that strikes fast. (Beast Master only)",
+    })
     api.add_shop_item({
         "id":          "eagle_companion",
         "name":        "Eagle Companion",
@@ -20,6 +44,18 @@ def register(api):
         "tier":        "uncommon",
     })
 
+    api.add_item({
+        "id":           "bear_companion",
+        "name":         "Bear Companion",
+        "emoji":        "🐻",
+        "slot":         "companion",
+        "beast_name":   "Bear",
+        "beast_dmg":    "1d8+3",
+        "beast_atk_mod": -1,
+        "tier":         "rare",
+        "sell":         200,
+        "description":  "A powerful bear that hits hard. (Beast Master only)",
+    })
     api.add_shop_item({
         "id":          "bear_companion",
         "name":        "Bear Companion",
@@ -30,6 +66,18 @@ def register(api):
         "tier":        "rare",
     })
 
+    api.add_item({
+        "id":           "baby_dragon_companion",
+        "name":         "Baby Dragon Companion",
+        "emoji":        "🐉",
+        "slot":         "companion",
+        "beast_name":   "Baby Dragon",
+        "beast_dmg":    "2d6+4",
+        "beast_atk_mod": 0,
+        "tier":         "legendary",
+        "sell":         750,
+        "description":  "A fierce baby dragon with fiery breath. (Beast Master only)",
+    })
     api.add_shop_item({
         "id":          "baby_dragon_companion",
         "name":        "Baby Dragon Companion",

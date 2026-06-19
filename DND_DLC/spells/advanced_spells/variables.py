@@ -1,5 +1,15 @@
 def register(api):
 
+    api.add_item({
+        "id":          "scroll_misty_step",
+        "name":        "Scroll of Misty Step",
+        "emoji":       "📜",
+        "slot":        "spell_scroll",
+        "teaches":     "misty_step",
+        "tier":        "rare",
+        "sell":        140,
+        "description": "Permanently teaches a Wizard Misty Step. Wizard Lv 3+.",
+    })
     api.add_shop_item({
         "id":          "scroll_misty_step",
         "name":        "Scroll of Misty Step",
@@ -10,6 +20,16 @@ def register(api):
         "tier":        "rare",
     })
 
+    api.add_item({
+        "id":          "scroll_scorching_ray",
+        "name":        "Scroll of Scorching Ray",
+        "emoji":       "📜",
+        "slot":        "spell_scroll",
+        "teaches":     "scorching_ray",
+        "tier":        "rare",
+        "sell":        110,
+        "description": "Permanently teaches a Wizard Scorching Ray. Wizard Lv 3+.",
+    })
     api.add_shop_item({
         "id":          "scroll_scorching_ray",
         "name":        "Scroll of Scorching Ray",

@@ -28,6 +28,26 @@ def register(api):
     for item in CHAR_ITEMS:
         api.add_item(item)
 
+    api.add_shop_item({
+        "id":          "bandage",
+        "name":        "Bandage",
+        "emoji":       "🩹",
+        "description": "A quick field dressing. Restores 1d4 HP.",
+        "price":       15,
+        "max_qty":     10,
+        "tier":        "common",
+    })
+
+    api.add_shop_item({
+        "id":          "herbal_tea",
+        "name":        "Herbal Tea",
+        "emoji":       "🫖",
+        "description": "A soothing brew. Restores a flat 2 HP.",
+        "price":       5,
+        "max_qty":     10,
+        "tier":        "common",
+    })
+
     # ── Base recipes (always known, no unlock needed) ─────────────────────────
 
     api.add_recipe({
