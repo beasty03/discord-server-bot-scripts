@@ -1,0 +1,31 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Environment ───────────────────────────────────────────────────────────────
+.env
+.env.*
+config.json
+config.yaml
+config.yml
+*.secret
+
+# ── DLC — guides and templates (dev tools, not live content) ──────────────────
+DND_DLC/CREATOR_GUIDE.md
+DND_DLC/_template/
+DND_DLC/campaigns/_template/
+
+# ── Claude Code project files ─────────────────────────────────────────────────
+.claude/
+CLAUDE.md
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
