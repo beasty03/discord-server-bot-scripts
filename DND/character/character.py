@@ -1305,7 +1305,7 @@ class CharacterCog(commands.Cog):
     @app_commands.command(name="dnd-debug", description="[Admin] Diagnose DND race/class loading.")
     async def dnd_debug(self, interaction: discord.Interaction):
         import sys
-        from pathlib import Path as _P
+        import importlib.util as _ilu
 
         lines: list[str] = []
 
@@ -1313,7 +1313,7 @@ class CharacterCog(commands.Cog):
         core = self._engine_core()
         lines.append(f"**EngineCore in bot.cogs:** {'✅ YES' if core else '❌ NO'}")
 
-        # 2. Registry counts (if core loaded)
+        # 2. Registry contents (if core loaded)
         if core:
             lines.append(f"**Registry races:** {list(core.registry.races.keys())}")
             lines.append(f"**Registry classes:** {list(core.registry.classes.keys())}")
@@ -1326,35 +1326,46 @@ class CharacterCog(commands.Cog):
             lines.append(f"**_extra_races():** {[r['id'] for r in er]}")
         except Exception as exc:
             lines.append(f"**_extra_races() ERROR:** {exc}")
-
         try:
             ec = self._extra_classes()
             lines.append(f"**_extra_classes():** {[c['id'] for c in ec]}")
         except Exception as exc:
             lines.append(f"**_extra_classes() ERROR:** {exc}")
 
-        # 4. DLC root path
-        try:
-            from DND.DungeonMaster.engine import _DLC_ROOT
-            lines.append(f"**DLC root:** `{_DLC_ROOT}`")
-            lines.append(f"**DLC root exists:** {_DLC_ROOT.is_dir()}")
-            if _DLC_ROOT.is_dir():
-                sub = [p.name for p in sorted(_DLC_ROOT.iterdir()) if p.is_dir()]
+        # 4. DLC root — derived from EngineCore's own module, no hardcoded import
+        dlc_root = None
+        if core:
+            _eng_mod = sys.modules.get(type(core).__module__)
+            dlc_root = getattr(_eng_mod, "_DLC_ROOT", None)
+        if dlc_root:
+            lines.append(f"**DLC root:** `{dlc_root}`")
+            lines.append(f"**DLC root exists:** {dlc_root.is_dir()}")
+            if dlc_root.is_dir():
+                sub = [p.name for p in sorted(dlc_root.iterdir()) if p.is_dir()]
                 lines.append(f"**DLC subdirs:** {sub}")
-        except Exception as exc:
-            lines.append(f"**DLC root import ERROR:** {exc}")
 
-        # 5. Try the auto-boot import to surface any error
-        try:
-            from DND.DungeonMaster.engine import EngineCore as _EC2  # noqa
-            lines.append("**DND.DungeonMaster.engine import:** ✅ OK")
-        except Exception as exc:
-            lines.append(f"**DND.DungeonMaster.engine import ERROR:** `{exc}`")
+                # Per-class DLC health check
+                for cls_dir in sorted((dlc_root / "classes").iterdir()):
+                    var = cls_dir / "variables.py"
+                    if not var.exists():
+                        continue
+                    cid = cls_dir.name
+                    if cid in (core.registry.classes if core else {}):
+                        lines.append(f"  `classes/{cid}`: ✅")
+                    else:
+                        # Try to exec the module to surface the exact error
+                        try:
+                            spec = _ilu.spec_from_file_location(f"_dbg.{cid}", var)
+                            mod2 = _ilu.module_from_spec(spec)
+                            spec.loader.exec_module(mod2)
+                            lines.append(f"  `classes/{cid}`: ❌ import OK but register() failed")
+                        except Exception as exc2:
+                            lines.append(f"  `classes/{cid}`: ❌ `{exc2}`")
+        else:
+            lines.append("**DLC root:** ❌ not found")
 
-        # 6. sys.path (first 5 entries)
+        # 5. sys.path and cogs
         lines.append(f"**sys.path[:5]:** {sys.path[:5]}")
-
-        # 7. All loaded cog names
         lines.append(f"**Loaded cogs:** {list(self.bot.cogs.keys())}")
 
         embed = discord.Embed(title="🔧 DND Debug", description="\n".join(lines), color=0x7289da)

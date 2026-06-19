@@ -227,7 +227,7 @@ def _build_ctx(engine, run: dict, uid: str, name: str, stats: dict, enemy_obj: d
                is_crit: bool = False, is_hit: bool = False, base_damage: int = 0,
                check_type: str | None = None, check_roll: int | None = None):
     """Build a CombatContext for engine.fire() from live combat state."""
-    from DND.DungeonMaster import EnemySnap, PlayerSnap, TurnInfo
+    from .context import EnemySnap, PlayerSnap, TurnInfo
     player = PlayerSnap(
         id         = uid,
         name       = name,

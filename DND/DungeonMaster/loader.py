@@ -22,20 +22,31 @@ class DLCLoader:
         self._root = dlc_root
 
     def _ensure_dlc_imports(self):
-        """Register DND.DungeonMaster.effects in sys.modules so DLC files can import it
-        regardless of whether the bot runs as cogs.DND.* or DND.DungeonMaster.*."""
+        """Register DND.DungeonMaster.* aliases in sys.modules so DLC files and combat
+        helpers can do 'from DND.DungeonMaster.effects import ...' regardless of whether
+        the bot runs as cogs.DND.* or DND.DungeonMaster.*."""
         import sys, types
         if "DND.DungeonMaster.effects" in sys.modules:
             return
         try:
-            from . import effects
+            from . import effects, context
             dummy_dnd = sys.modules.setdefault("DND", types.ModuleType("DND"))
             dummy_dm  = sys.modules.setdefault("DND.DungeonMaster", types.ModuleType("DND.DungeonMaster"))
             setattr(dummy_dnd, "DungeonMaster", dummy_dm)
+            # Submodule aliases
             sys.modules["DND.DungeonMaster.effects"] = effects
-            log.info("[DLCLoader] registered DND.DungeonMaster.effects alias")
+            sys.modules["DND.DungeonMaster.context"] = context
+            # Attribute aliases on the dummy package so
+            # 'from DND.DungeonMaster import EnemySnap, PlayerSnap, TurnInfo' works
+            for _attr in ("EnemySnap", "PlayerSnap", "TurnInfo", "CombatContext"):
+                if hasattr(context, _attr):
+                    setattr(dummy_dm, _attr, getattr(context, _attr))
+            for _attr in ("BonusAttack", "Flag", "Heal", "Message", "Modify", "Status"):
+                if hasattr(effects, _attr):
+                    setattr(dummy_dm, _attr, getattr(effects, _attr))
+            log.info("[DLCLoader] registered DND.DungeonMaster.* aliases")
         except Exception as exc:
-            log.warning("[DLCLoader] could not register DND.DungeonMaster.effects alias: %s", exc)
+            log.warning("[DLCLoader] could not register DND.DungeonMaster.* aliases: %s", exc)
 
     def load_all(self) -> tuple[int, int]:
         """
