@@ -205,15 +205,16 @@ def _roll_gwf(expr: str) -> int:
 # Statuses returned by DLC handlers that map to legacy run-state.
 # Each entry is a list of (run_key, action) tuples so one status can affect several keys.
 _STATUS_LEGACY_BRIDGE: dict[str, list[tuple]] = {
-    "ek_shielded":   [("shield_spell_ac",    "uid_set")],  # +5 AC vs next hit (EK)
-    # vanished / beast_guarded: damage_mult handled by engine_statuses resolver (no bridge)
-    "tripped":       [("enemy_ac_penalty",   "max2")],     # enemy AC -2
-    "disarmed":      [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
-    "menaced":       [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
-    "slowed":        [("enemy_atk_penalty",  "max2")],     # enemy slowed, ATK -2
+    "ek_shielded":    [("shield_spell_ac",    "uid_set")],  # +5 AC vs next hit (EK)
+    # vanished / beast_guarded / misty_stepped: damage_mult handled by engine_statuses (no bridge)
+    "tripped":        [("enemy_ac_penalty",   "max2")],     # enemy AC -2
+    "disarmed":       [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
+    "menaced":        [("enemy_atk_penalty",  "max2")],     # enemy ATK -2
+    "slowed":         [("enemy_atk_penalty",  "max2")],     # enemy slowed, ATK -2
+    "counterspelled": [("counterspell_uids",  "uid_set")],  # enemy skips retaliation
     # ensnared: fired by _ensnaring_hit on the on_hit event
-    "ensnared":      [("enemy_ac_penalty",   "max2"),
-                      ("enemy_atk_penalty",  "max2")],
+    "ensnared":       [("enemy_ac_penalty",   "max2"),
+                       ("enemy_atk_penalty",  "max2")],
 }
 
 # Flags returned by DLC handlers that map to legacy uid-sets.
@@ -829,6 +830,38 @@ class DungeonMasterCog(commands.Cog):
             if klass:
                 return klass.get("abilities", [])
         return char_var.COMBAT_FEATURES.get(class_id, [])
+
+    def _get_available_abilities(
+        self,
+        char_class: str,
+        player_subclass: "str | None",
+        player_level: int,
+        action_type: "str | None" = None,
+    ) -> list:
+        """Return abilities from the DLC registry available to this player."""
+        feats = self._get_combat_features(char_class)
+        if not feats:
+            return []
+        engine = self._engine
+        klass  = engine.registry.get_class(char_class) if engine else None
+        subclasses = (klass or {}).get("subclasses", {})
+        sc_ability_sets: dict = {
+            sc_id: set(sc_data.get("abilities", []))
+            for sc_id, sc_data in subclasses.items()
+        }
+        sc_exclusive: set = set().union(*sc_ability_sets.values()) if sc_ability_sets else set()
+        result = []
+        for ability in feats:
+            if action_type and ability.get("action") != action_type:
+                continue
+            if ability.get("level_req", 1) > player_level:
+                continue
+            fid = ability["id"]
+            if fid in sc_exclusive:
+                if not player_subclass or fid not in sc_ability_sets.get(player_subclass, set()):
+                    continue
+            result.append(ability)
+        return result
 
     def _get_subclass_combat_features(self, subclass_id: str) -> list:
         if subclass_id in self._subclass_combat_features_reg:
@@ -1759,8 +1792,8 @@ class DungeonMasterCog(commands.Cog):
                     ),
                     ephemeral=True,
                 )
-                # Update the campaign embed to show the new roll
-                if istate.get("campaign_msg"):
+                # Update the initiative tracker embed (not the story intro)
+                if istate.get("initiative_msg"):
                     lines = []
                     for u in istate["active_uids"]:
                         n = istate["name_map"].get(u, u)
@@ -1774,7 +1807,7 @@ class DungeonMasterCog(commands.Cog):
                         color=var.COLOR_COMBAT,
                     )
                     try:
-                        await istate["campaign_msg"].edit(embed=upd_embed, view=None)
+                        await istate["initiative_msg"].edit(embed=upd_embed, view=None)
                     except Exception:
                         pass
                 # Fire event when everyone has rolled
@@ -2462,13 +2495,9 @@ class DungeonMasterCog(commands.Cog):
                     color=var.COLOR_COMBAT,
                 )
 
-            if campaign_msg is not None:
-                try:
-                    await campaign_msg.edit(embed=_build_init_embed(), view=None)
-                except Exception:
-                    pass
-            else:
-                await channel.send(embed=_build_init_embed())
+            # Always send initiative as a new message so the story intro embed stays untouched
+            _init_msg = await channel.send(embed=_build_init_embed())
+            _init_state["initiative_msg"] = _init_msg
 
             try:
                 await asyncio.wait_for(_init_done.wait(), timeout=var.ROUND_TIMEOUT)
@@ -2890,9 +2919,38 @@ class DungeonMasterCog(commands.Cog):
                                         ability_id=fid)
                     _fx_b  = _eng_b.fire("on_ability_use", _ctx_b)
                     # Skip legacy chain when engine produced output and the effect is
-                    # self-contained (no pending bonus attacks, no primed damage needing tracking)
-                    if _fx_b.messages and _fx_b.damage_add == 0 and _fx_b.bonus_attacks == 0:
+                    # self-contained (no primed damage needing tracking)
+                    if _fx_b.messages and _fx_b.damage_add == 0:
                         _apply_combat_fx(run, uid, _fx_b, round_lines, rnd, fid)
+                        if _fx_b.bonus_attacks > 0:
+                            _ba_hits_b: list[str] = []
+                            _fs_ba_b   = run.get("fighting_style", {}).get(uid)
+                            _ba_fs_h_b = self._fighting_style_handlers.get(_fs_ba_b or "", {})
+                            _ba_atk_b  = _ba_fs_h_b.get("on_attack_bonus")
+                            _is_rng_b  = stats.get("is_ranged", False)
+                            for _ in range(_fx_b.bonus_attacks):
+                                r = random.randint(1, 20)
+                                t = r + stats["atk_bonus"]
+                                if _ba_atk_b:
+                                    t += _ba_atk_b(_is_rng_b)
+                                c = r == 20
+                                if c or t >= enemies[_feat_tidx_b]["ac"]:
+                                    d1 = _roll(stats["dmg_expr"])
+                                    if c:
+                                        d2 = _roll(stats["dmg_expr"])
+                                        d  = d1 + d2
+                                        _ba_hits_b.append(f"✨CRIT {d1}+{d2}=**{d}**")
+                                    else:
+                                        d = d1
+                                        _ba_hits_b.append(f"**{d}**")
+                                    if uid in run.get("raging_uids", set()):
+                                        d *= 2
+                                    enemies[_feat_tidx_b]["hp"] = max(0, enemies[_feat_tidx_b]["hp"] - d)
+                                    last_hitter = (uid, name)
+                                else:
+                                    _ba_hits_b.append("miss")
+                            if _ba_hits_b:
+                                round_lines.append(f"⚡ **{name}** bonus attack: {' | '.join(_ba_hits_b)}")
                         continue
                 # ── Legacy DLC handler (old system, kept for backward compat) ──
                 _bonus_dlc = self._ability_handlers.get(fid)
@@ -2901,227 +2959,6 @@ class DungeonMasterCog(commands.Cog):
                     await _bonus_dlc(
                         run, bonus, uid, name, stats, enemies, _feat_tidx_b,
                         round_lines, run_id, gid, rnd, enemy)
-                elif fid == "second_wind":
-                    heal   = _roll(f"1d10+{level}")
-                    max_hp = run["player_max_hp"].get(uid, 999)
-                    old_hp = run["player_hp"].get(uid, 0)
-                    actual = min(max_hp, old_hp + heal) - old_hp
-                    run["player_hp"][uid] = old_hp + actual
-                    round_lines.append(f"🌬️ **{name}** Second Wind → **+{actual} HP** *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "heal": actual, "round": rnd})
-
-                elif fid == "rage":
-                    run["raging_uids"].add(uid)
-                    round_lines.append(f"💢 **{name}** enters a **RAGE!** *(bonus — ×2 damage all combat)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "cunning_action":
-                    cunning_dodgers.add(uid)
-                    round_lines.append(f"🕵️ **{name}** Cunning Action — Dodge *(bonus — half enemy damage this round)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "hunters_mark":
-                    run.setdefault("hunters_mark_uids", set()).add(uid)
-                    round_lines.append(f"🎯 **{name}** marks the target *(bonus — +1d6 to all attacks)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "ensnaring_strike":
-                    run.setdefault("ensnaring_uids", set()).add(uid)
-                    round_lines.append(f"🌿 **{name}** arms **Ensnaring Strike** *(next ranged hit restrains — enemy ATK −2)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "hail_of_thorns":
-                    run.setdefault("hail_uids", set()).add(uid)
-                    round_lines.append(f"🌪️ **{name}** primes **Hail of Thorns** *(next ranged hit +1d10 piercing)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "vanish":
-                    run.setdefault("vanish_uids", set()).add(uid)
-                    round_lines.append(f"👁️ **{name}** Vanishes into shadow *(half damage from next hit this round)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "beast_protect":
-                    t_stats_bp = self._get_char_combat_stats(uid, gid)
-                    if t_stats_bp and t_stats_bp["level"] >= 7:
-                        run.setdefault("beast_protect_uids", set()).add(uid)
-                        round_lines.append(f"🛡️ **{name}**'s beast intercepts *(half damage from next hit this round)*")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "round": rnd})
-                    else:
-                        round_lines.append(f"🛡️ **{name}** tried Beast Guard but isn't Lv 7+ yet!")
-
-                elif fid == "shield_spell":
-                    run["shield_spell_ac"].add(uid)
-                    round_lines.append(f"🛡️ **{name}** Shield! +5 AC until next turn *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "misty_step":
-                    run.setdefault("misty_step_uids", set()).add(uid)
-                    round_lines.append(f"💨 **{name}** Misty Step — teleports away *(half damage from next hit)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "counterspell":
-                    run.setdefault("counterspell_uids", set()).add(uid)
-                    round_lines.append(f"🚫 **{name}** Counterspell! **{enemy['name']}** is disrupted — skips their attack this round!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid in ("lay_on_hands", "healing_word"):
-                    t_uid    = bonus.get("target_uid", uid)
-                    # Paladin Lay on Hands uses CHA; Cleric uses WIS
-                    heal_mod = cha if (fid == "lay_on_hands" and stats and stats["char_class"] == "paladin") else wis
-                    heal     = max(1, random.randint(1, 8) + heal_mod) if fid == "lay_on_hands" \
-                               else max(1, random.randint(1, 4) + wis)
-                    if fid == "healing_word" and stats:
-                        sc_heal = _get_subclass(self.db, uid, gid, stats["char_class"])
-                        if sc_heal == "life":
-                            heal += 3
-                            life_tag = " *(+3 Life)*"
-                        else:
-                            life_tag = ""
-                    else:
-                        life_tag = ""
-                    max_hp = run["player_max_hp"].get(t_uid, 999)
-                    old_hp = run["player_hp"].get(t_uid, 0)
-                    actual = min(max_hp, old_hp + heal) - old_hp
-                    run["player_hp"][t_uid] = old_hp + actual
-                    if t_uid in run.get("downed", {}) and run["player_hp"][t_uid] > 0:
-                        del run["downed"][t_uid]
-                        rev_name = next((n for u, n in run["participants"] if u == t_uid), t_uid)
-                        round_lines.append(f"💉 **{rev_name}** is back on their feet!")
-                    t_name   = next((n for u, n in run["participants"] if u == t_uid), t_uid)
-                    feat_lbl = "Lay on Hands" if fid == "lay_on_hands" else "Healing Word"
-                    emoji    = "✨" if fid == "lay_on_hands" else "🙏"
-                    who      = "themselves" if t_uid == uid else f"**{t_name}**"
-                    round_lines.append(f"{emoji} **{name}** {feat_lbl} on {who} → **+{actual} HP**{life_tag} *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "target": t_uid, "heal": actual, "round": rnd})
-
-                elif fid == "frenzy_attack":
-                    if uid not in run.get("raging_uids", set()):
-                        round_lines.append(f"🔥 **{name}** tried Frenzy but isn't raging!")
-                    elif stats:
-                        _fa_act   = actions.get(uid)
-                        _fa_tidx  = _clamp_to_alive(_fa_act.get("target_idx", 0) if isinstance(_fa_act, dict) else 0)
-                        fr = random.randint(1, 20)
-                        ft = fr + stats["atk_bonus"]
-                        if fr == 20 or ft >= enemy["ac"]:
-                            fd1 = _roll(stats["dmg_expr"])
-                            if fr == 20:
-                                fd2 = _roll(stats["dmg_expr"])
-                                fdmg = (fd1 + fd2) * 2
-                                round_lines.append(f"🔥 **{name}** Frenzy ✨CRIT! → **{fdmg} dmg** *(rage ×2)*")
-                            else:
-                                fdmg = fd1 * 2
-                                round_lines.append(f"🔥 **{name}** Frenzy attack → **{fdmg} dmg** *(rage ×2)*")
-                            enemies[_fa_tidx]["hp"] = max(0, enemies[_fa_tidx]["hp"] - fdmg)
-                            last_hitter = (uid, name)
-                        else:
-                            round_lines.append(f"🔥 **{name}** Frenzy attack missed! (rolled {fr})")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "round": rnd})
-
-                elif fid == "eldritch_spell":
-                    _es_act  = actions.get(uid)
-                    _es_tidx = _clamp_to_alive(_es_act.get("target_idx", 0) if isinstance(_es_act, dict) else 0)
-                    es_dmg = random.randint(1, 8)
-                    enemies[_es_tidx]["hp"] = max(0, enemies[_es_tidx]["hp"] - es_dmg)
-                    last_hitter = (uid, name)
-                    round_lines.append(f"🔮 **{name}** War Magic — Booming Blade → **{es_dmg} force dmg** *(auto-hit)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "dmg": es_dmg, "round": rnd})
-
-                elif fid == "mage_hand":
-                    run.setdefault("arcane_distraction", set()).add(uid)
-                    round_lines.append(f"🎩 **{name}** Mage Hand distracts **{enemy['name']}** — disadvantage on their next attack!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "guided_strike":
-                    run.setdefault("guided_strike", set()).add(uid)
-                    round_lines.append(f"✝️ **{name}** channels Guided Strike — +10 to next attack roll!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "sacred_weapon":
-                    run.setdefault("sacred_weapon_uids", set()).add(uid)
-                    cha_mod = stats["mods"]["charisma"] if stats else 0
-                    round_lines.append(f"✨ **{name}** Sacred Weapon — +{cha_mod} to all attack rolls this combat!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "natures_wrath":
-                    run["natures_wrath_active"] = True
-                    round_lines.append(f"🌿 **{name}** Nature's Wrath — **{enemy['name']}** is restrained! *(−2 ATK next round)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "vow_of_enmity":
-                    run.setdefault("vow_of_enmity", set()).add(uid)
-                    round_lines.append(f"⚡ **{name}** Vow of Enmity — advantage on all attacks this combat!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                elif fid == "superiority_die":
-                    run.setdefault("superiority_die", set()).add(uid)
-                    round_lines.append(f"⚔️ **{name}** Superiority Die readied — +1d8 to next attack!")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                # ── EK: Shield spell ──────────────────────────────────────────
-                elif fid == "ek_shield":
-                    run["shield_spell_ac"].add(uid)
-                    round_lines.append(f"🛡️ **{name}** Shield! +5 AC until next turn *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                # ── EK: War Magic bonus weapon attack ─────────────────────────
-                elif fid == "war_magic_atk" and stats:
-                    main_act    = actions.get(uid)
-                    fire_bolted = (isinstance(main_act, dict)
-                                   and main_act.get("feature_id") == "fire_bolt")
-                    if not fire_bolted:
-                        round_lines.append(
-                            f"⚔️ **{name}** War Magic Strike — no spell cast this round *(fizzles)*")
-                    else:
-                        _wm_tidx = _clamp_to_alive(main_act.get("target_idx", 0) if isinstance(main_act, dict) else 0)
-                        wm_r = random.randint(1, 20)
-                        wm_t = wm_r + stats["atk_bonus"]
-                        if wm_r == 20 or wm_t >= enemy["ac"]:
-                            wd1 = _roll(stats["dmg_expr"])
-                            if wm_r == 20:
-                                wd2   = _roll(stats["dmg_expr"])
-                                wdmg  = wd1 + wd2
-                                wm_txt = f"✨CRIT {wd1}+{wd2}=**{wdmg}**"
-                            else:
-                                wdmg   = wd1
-                                wm_txt = f"**{wdmg}**"
-                            enemies[_wm_tidx]["hp"] = max(0, enemies[_wm_tidx]["hp"] - wdmg)
-                            last_hitter = (uid, name)
-                            round_lines.append(
-                                f"⚔️ **{name}** War Magic Strike → {wm_txt} dmg *(bonus)*")
-                        else:
-                            round_lines.append(
-                                f"⚔️ **{name}** War Magic Strike missed! (rolled {wm_r}) *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
-
-                # ── Sharpshooter stance ───────────────────────────────────────
-                elif fid == "sharpshooter_stance":
-                    run["sharpshooter_stance"].add(uid)
-                    round_lines.append(
-                        f"🎯 **{name}** Sharpshooter Stance — next ranged attack: −5 to hit, +10 dmg *(bonus)*")
-                    run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                       "feature": fid, "round": rnd})
 
                 # ── Battle Master maneuvers ───────────────────────────────────
                 elif fid in ("bm_precision", "bm_trip", "bm_disarm", "bm_riposte", "bm_menacing"):
@@ -3574,12 +3411,7 @@ class DungeonMasterCog(commands.Cog):
                     # Feature actions auto-target the first alive enemy
                     _feat_tidx = _first_alive_idx()
                     e_hp = enemies[_feat_tidx]["hp"]
-                    # Action Surge uses its own counter; everything else uses features_used
-                    if fid == "action_surge":
-                        run.setdefault("action_surge_uses", {})[uid] = max(
-                            0, run["action_surge_uses"].get(uid, 0) - 1)
-                    else:
-                        run["features_used"].setdefault(uid, set()).add(fid)
+                    run["features_used"].setdefault(uid, set()).add(fid)
 
                     # ── New engine DLC path (on_ability_use) ──────────────────
                     _eng_f    = self._engine
@@ -3588,11 +3420,41 @@ class DungeonMasterCog(commands.Cog):
                         _ctx_f = _build_ctx(_eng_f, run, uid, name, stats, enemies[_feat_tidx],
                                             ability_id=fid)
                         _fx_f  = _eng_f.fire("on_ability_use", _ctx_f)
-                        # Skip legacy when engine produced output and no bonus attacks
-                        # (bonus attacks = action_surge etc. need the full attack loop)
-                        if _fx_f.messages and _fx_f.bonus_attacks == 0:
+                        if _fx_f.messages or _fx_f.bonus_attacks > 0:
                             _apply_combat_fx(run, uid, _fx_f, round_lines, rnd, fid,
                                              enemy_obj=enemies[_feat_tidx])
+                            if _fx_f.bonus_attacks > 0:
+                                _ba_hits: list[str] = []
+                                _fs_ba   = run.get("fighting_style", {}).get(uid)
+                                _ba_fs_h = self._fighting_style_handlers.get(_fs_ba or "", {})
+                                _ba_atk  = _ba_fs_h.get("on_attack_bonus")
+                                _is_rng  = stats.get("is_ranged", False)
+                                e_hp = enemies[_feat_tidx]["hp"]
+                                for _ in range(_fx_f.bonus_attacks):
+                                    r = random.randint(1, 20)
+                                    t = r + stats["atk_bonus"]
+                                    if _ba_atk:
+                                        t += _ba_atk(_is_rng)
+                                    c = r == 20
+                                    if c or t >= enemies[_feat_tidx]["ac"]:
+                                        d1 = _roll(stats["dmg_expr"])
+                                        if c:
+                                            d2 = _roll(stats["dmg_expr"])
+                                            d  = d1 + d2
+                                            _ba_hits.append(f"✨CRIT {d1}+{d2}=**{d}**")
+                                        else:
+                                            d = d1
+                                            _ba_hits.append(f"**{d}**")
+                                        if uid in run.get("raging_uids", set()):
+                                            d *= 2
+                                        e_hp = max(0, e_hp - d)
+                                        enemies[_feat_tidx]["hp"] = e_hp
+                                        last_hitter = (uid, name)
+                                    else:
+                                        _ba_hits.append("miss")
+                                if _ba_hits:
+                                    round_lines.append(
+                                        f"⚡ **{name}** surge attacks: {' | '.join(_ba_hits)}")
                             _f_handled = True
                     # ── Legacy DLC / hardcoded ability chain ──────────────────
                     _dlc_handler = (self._ability_handlers.get(fid) or self._spell_handlers.get(fid)
@@ -3604,269 +3466,6 @@ class DungeonMasterCog(commands.Cog):
                             run, action, uid, name, stats, enemies, _feat_tidx,
                             round_lines, run_id, gid, rnd, enemy)
                         # Handler is responsible for updating enemies[_feat_tidx]["hp"] if needed
-                    elif fid == "action_surge" and stats:
-                        surge_n    = max(2, _n_attacks(stats["char_class"], stats["level"]))
-                        surge_hits: list[str] = []
-                        fs_surge   = run.get("fighting_style", {}).get(uid)
-                        is_ranged_s = stats.get("is_ranged", False)
-                        subclass_s  = _get_subclass(self.db, uid, gid, stats["char_class"])
-                        _surge_fs_handler = self._fighting_style_handlers.get(fs_surge or "", {})
-                        _surge_atk_fn     = _surge_fs_handler.get("on_attack_bonus")
-                        for _ in range(surge_n):
-                            r = random.randint(1, 20)
-                            t = r + stats["atk_bonus"]
-                            if _surge_atk_fn:
-                                t += _surge_atk_fn(is_ranged_s)
-                            c = r == 20
-                            if c or t >= enemy["ac"]:
-                                d1 = _roll(stats["dmg_expr"])
-                                if c:
-                                    d2 = _roll(stats["dmg_expr"])
-                                    d  = d1 + d2
-                                    # EK Arcane Charge: +1d6 force per attack at Lv15+
-                                    if subclass_s == "eldritch_knight" and level >= 15:
-                                        ac_bonus = random.randint(1, 6)
-                                        d += ac_bonus
-                                        surge_hits.append(f"✨CRIT {d1}+{d2}+{ac_bonus}⚡=**{d}**")
-                                    else:
-                                        surge_hits.append(f"✨CRIT {d1}+{d2}=**{d}**")
-                                else:
-                                    d = d1
-                                    if subclass_s == "eldritch_knight" and level >= 15:
-                                        ac_bonus = random.randint(1, 6)
-                                        d += ac_bonus
-                                        surge_hits.append(f"**{d}**(+{ac_bonus}⚡)")
-                                    else:
-                                        surge_hits.append(f"**{d}**")
-                                if uid in run.get("raging_uids", set()):
-                                    d *= 2
-                                e_hp = max(0, e_hp - d)
-                                last_hitter = (uid, name)
-                            else:
-                                surge_hits.append("miss")
-                        round_lines.append(
-                            f"⚡ **{name}** Action Surge ×{surge_n}! → {' | '.join(surge_hits)}")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "fire_bolt" and stats:
-                        fb_dice = 1 if level < 5 else (2 if level < 11 else (3 if level < 17 else 4))
-                        fb_dmg  = sum(random.randint(1, 10) for _ in range(fb_dice))
-                        e_hp    = max(0, e_hp - fb_dmg)
-                        last_hitter = (uid, name)
-                        run.setdefault("fire_bolt_rnd", {})[uid] = rnd
-                        es_note = ""
-                        if level >= 10:
-                            run.setdefault("eldritch_strike_rnd", {})[uid] = rnd
-                            es_note = " *(Eldritch Strike active!)*"
-                        round_lines.append(
-                            f"🔥 **{name}** Fire Bolt ({fb_dice}d10) → **{fb_dmg} fire dmg** *(auto-hit)*{es_note}")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": fb_dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "sneak_attack" and stats:
-                        sneak_dice = max(1, (level + 1) // 2)
-                        r = random.randint(1, 20)
-                        t = r + stats["atk_bonus"]
-                        c = r == 20
-                        if c or t >= enemy["ac"]:
-                            d1  = _roll(stats["dmg_expr"])
-                            snk = sum(random.randint(1, 6) for _ in range(sneak_dice))
-                            if c:
-                                d2   = _roll(stats["dmg_expr"])
-                                snk2 = sum(random.randint(1, 6) for _ in range(sneak_dice))
-                                dmg  = d1 + d2 + snk + snk2
-                                round_lines.append(f"🗡️ **{name}** Sneak Attack ✨CRIT! → **{dmg} dmg** (+{sneak_dice}d6)")
-                            else:
-                                dmg = d1 + snk
-                                round_lines.append(f"🗡️ **{name}** Sneak Attack → **{dmg} dmg** (+{sneak_dice}d6)")
-                            e_hp = max(0, e_hp - dmg)
-                            last_hitter = (uid, name)
-                        else:
-                            round_lines.append(f"🗡️ **{name}** Sneak Attack missed!")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "sacred_flame" and stats:
-                        dmg = max(1, random.randint(1, 8) + wis)
-                        e_hp = max(0, e_hp - dmg)
-                        last_hitter = (uid, name)
-                        round_lines.append(f"🔥 **{name}** Sacred Flame → **{dmg} radiant dmg** *(auto-hit)*")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "magic_missile" and stats:
-                        n_bolts   = min(6, 3 + (level - 1) // 3)
-                        total_dmg = sum(random.randint(1, 4) + 1 for _ in range(n_bolts))
-                        mm_sc = _get_subclass(self.db, uid, gid, stats["char_class"])
-                        sculpt_add = 0
-                        sculpt_txt = ""
-                        if mm_sc == "evocation":
-                            sculpt_add = random.randint(1, 4)
-                            total_dmg += sculpt_add
-                            sculpt_txt = f" *(+{sculpt_add} Sculpt)*"
-                        e_hp      = max(0, e_hp - total_dmg)
-                        last_hitter = (uid, name)
-                        bolt_s = "bolts" if n_bolts != 1 else "bolt"
-                        round_lines.append(
-                            f"✨ **{name}** Magic Missile — {n_bolts} {bolt_s} → **{total_dmg} dmg** *(auto-hit)*{sculpt_txt}")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": total_dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "divine_smite" and stats:
-                        r  = random.randint(1, 20)
-                        t  = r + stats["atk_bonus"]
-                        c  = r == 20
-                        bx = f"{stats['atk_bonus']:+d}"
-                        if c or t >= enemy["ac"]:
-                            d1  = _roll(stats["dmg_expr"])
-                            sm1 = random.randint(1, 8)
-                            sm2 = random.randint(1, 8)
-                            if c:
-                                d2  = _roll(stats["dmg_expr"])
-                                sm3 = random.randint(1, 8)
-                                sm4 = random.randint(1, 8)
-                                dmg = d1 + d2 + sm1 + sm2 + sm3 + sm4
-                                round_lines.append(
-                                    f"⚡ **{name}** Divine Smite ✨CRIT! → **{dmg} dmg** (+4d8 radiant)")
-                            else:
-                                dmg = d1 + sm1 + sm2
-                                round_lines.append(
-                                    f"⚡ **{name}** Divine Smite (rolled {r} {bx} = **{t}**) → **{dmg} dmg** (+2d8 radiant)")
-                            e_hp = max(0, e_hp - dmg)
-                            last_hitter = (uid, name)
-                        else:
-                            round_lines.append(
-                                f"⚡ **{name}** Divine Smite missed! (rolled {r} {bx} = **{t}** vs AC {enemy['ac']})")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "cure_wounds_rng" and stats:
-                        wis_cw  = stats["mods"]["wisdom"]
-                        heal    = max(1, random.randint(1, 8) + wis_cw)
-                        max_hp  = run["player_max_hp"].get(uid, 999)
-                        old_hp  = run["player_hp"].get(uid, 0)
-                        actual  = min(max_hp, old_hp + heal) - old_hp
-                        run["player_hp"][uid] = old_hp + actual
-                        round_lines.append(f"💚 **{name}** Cure Wounds → **+{actual} HP** *(action)*")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "heal": actual, "round": rnd})
-
-                    elif fid == "burning_hands" and stats:
-                        bh_dice = 3 + (level - 1) // 4
-                        bh_dmg  = sum(random.randint(1, 6) for _ in range(bh_dice))
-                        bh_sc   = _get_subclass(self.db, uid, gid, stats["char_class"])
-                        bh_sculpt = 0
-                        if bh_sc == "evocation":
-                            bh_sculpt = random.randint(1, 4)
-                            bh_dmg   += bh_sculpt
-                        e_hp = max(0, e_hp - bh_dmg)
-                        last_hitter = (uid, name)
-                        sculpt_t = f" *(+{bh_sculpt} Sculpt)*" if bh_sculpt else ""
-                        round_lines.append(
-                            f"🔥 **{name}** Burning Hands ({bh_dice}d6) → **{bh_dmg} fire dmg** *(auto-hit)*{sculpt_t}")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": bh_dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "thunderwave" and stats:
-                        int_mod = stats["mods"]["intelligence"]
-                        tw_dmg  = sum(random.randint(1, 8) for _ in range(2)) + int_mod
-                        tw_dmg  = max(1, tw_dmg)
-                        run["enemy_atk_penalty"] = max(run.get("enemy_atk_penalty", 0), 2)
-                        e_hp = max(0, e_hp - tw_dmg)
-                        last_hitter = (uid, name)
-                        round_lines.append(
-                            f"🌊 **{name}** Thunderwave → **{tw_dmg} thunder dmg** *(auto-hit)* · "
-                            f"**{enemies[_feat_tidx]['name']}** is pushed back! *(ATK −2 next round)*")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": tw_dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "scorching_ray" and stats:
-                        sr_hits: list[str] = []
-                        sr_total = 0
-                        for _ in range(3):
-                            sr_r = random.randint(1, 20)
-                            sr_t = sr_r + stats["atk_bonus"]
-                            if sr_r == 20 or sr_t >= enemy["ac"]:
-                                sr_d1 = sum(random.randint(1, 6) for _ in range(2))
-                                if sr_r == 20:
-                                    sr_d2 = sum(random.randint(1, 6) for _ in range(2))
-                                    sr_d  = sr_d1 + sr_d2
-                                    sr_hits.append(f"✨CRIT **{sr_d}**")
-                                else:
-                                    sr_d  = sr_d1
-                                    sr_hits.append(f"**{sr_d}**")
-                                e_hp = max(0, e_hp - sr_d)
-                                sr_total += sr_d
-                                last_hitter = (uid, name)
-                            else:
-                                sr_hits.append("miss")
-                        round_lines.append(
-                            f"☀️ **{name}** Scorching Ray → {' | '.join(sr_hits)} *(total {sr_total} fire)*")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": sr_total, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "fireball" and stats:
-                        fb_dmg = sum(random.randint(1, 6) for _ in range(8))
-                        fb_sc  = _get_subclass(self.db, uid, gid, stats["char_class"])
-                        fb_bonus = 0
-                        if fb_sc == "evocation":
-                            fb_bonus = max(0, stats["mods"]["intelligence"])
-                            fb_dmg  += fb_bonus
-                        e_hp = max(0, e_hp - fb_dmg)
-                        last_hitter = (uid, name)
-                        evoc_t = f" *(+{fb_bonus} Evocation)*" if fb_bonus else ""
-                        round_lines.append(
-                            f"💥 **{name}** FIREBALL! (8d6) → **{fb_dmg} fire dmg** *(auto-hit)*{evoc_t}")
-                        run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                           "feature": fid, "dmg": fb_dmg, "round": rnd})
-                        enemies[_feat_tidx]["hp"] = e_hp
-
-                    elif fid == "volley" and stats:
-                        if level < 11:
-                            round_lines.append(f"🏹 **{name}** Volley requires Lv 11+!")
-                        else:
-                            vol_hits: list[str] = []
-                            vol_fs = run.get("fighting_style", {}).get(uid)
-                            vol_fe = run.get("favored_enemy", {}).get(uid)
-                            vol_fe_add = 2 if vol_fe and _enemy_matches_type(enemy["name"], vol_fe) else 0
-                            is_marked_v = uid in run.get("hunters_mark_uids", set())
-                            _vol_fs_handler = self._fighting_style_handlers.get(vol_fs or "", {})
-                            _vol_atk_fn     = _vol_fs_handler.get("on_attack_bonus")
-                            for _ in range(2):
-                                vr = random.randint(1, 20)
-                                vt = vr + stats["atk_bonus"]
-                                if _vol_atk_fn:
-                                    vt += _vol_atk_fn(True)  # volley is always ranged
-                                if vr == 20 or vt >= enemy["ac"]:
-                                    vd1 = _roll(stats["dmg_expr"])
-                                    v_mark = random.randint(1, 6) if is_marked_v else 0
-                                    if vr == 20:
-                                        vd2  = _roll(stats["dmg_expr"])
-                                        v_mark2 = random.randint(1, 6) if is_marked_v else 0
-                                        vdmg = vd1 + vd2 + v_mark + v_mark2 + vol_fe_add
-                                        vol_hits.append(f"✨CRIT **{vdmg}**")
-                                    else:
-                                        vdmg = vd1 + v_mark + vol_fe_add
-                                        vol_hits.append(f"**{vdmg}**")
-                                    e_hp = max(0, e_hp - vdmg)
-                                    last_hitter = (uid, name)
-                                else:
-                                    vol_hits.append("miss")
-                            round_lines.append(f"🏹 **{name}** Volley! → {' | '.join(vol_hits)}")
-                            run["log"].append({"type": "feature", "uid": uid, "name": name,
-                                               "feature": fid, "round": rnd})
-                            enemies[_feat_tidx]["hp"] = e_hp
-
             # ── Enemy retaliates (not on surprise round 1) ─────────────────
             _counterspelled = bool(run.get("counterspell_uids"))
             run["counterspell_uids"] = set()
@@ -4242,7 +3841,9 @@ class DungeonMasterCog(commands.Cog):
         roll        = random.randint(1, 20)
         # Proficiency bonus if the checked ability is a saving throw proficiency for the class
         char_class  = stats.get("char_class") if stats else None
-        prof_bonus  = stats["prof"] if (stats and skill in _CLASS_SAVE_PROFS.get(char_class or "", [])) else 0
+        _klass_reg  = (self._engine.registry.get_class(char_class) if self._engine and char_class else None)
+        _save_profs = (_klass_reg.get("saving_throws") if _klass_reg else None) or _CLASS_SAVE_PROFS.get(char_class or "", [])
+        prof_bonus  = stats["prof"] if (stats and skill in _save_profs) else 0
         # Apply Help bonus: +4 from a party member who used /support (must be a different player)
         help_bonus    = 4 if (helper_uid and helper_uid != roller_uid) else 0
         # Ranger Natural Explorer (Lv 1+): +1 to all skill checks
@@ -4286,13 +3887,7 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_WIN,
             )
-            if campaign_msg is not None:
-                try:
-                    await campaign_msg.edit(embed=res_embed, view=None)
-                except Exception:
-                    await channel.send(embed=res_embed)
-            else:
-                await channel.send(embed=res_embed)
+            await channel.send(embed=res_embed)
             await asyncio.sleep(2)
             return "victory"
 
@@ -4308,13 +3903,7 @@ class DungeonMasterCog(commands.Cog):
                 description="\n".join(desc_lines),
                 color=var.COLOR_ERROR,
             )
-            if campaign_msg is not None:
-                try:
-                    await campaign_msg.edit(embed=res_embed, view=None)
-                except Exception:
-                    await channel.send(embed=res_embed)
-            else:
-                await channel.send(embed=res_embed)
+            await channel.send(embed=res_embed)
             await asyncio.sleep(2)
 
             fallback = encounter.get("combat_fallback")
@@ -4808,25 +4397,15 @@ class DungeonMasterCog(commands.Cog):
                 await interaction.response.send_message(
                     embed=self._err("It's not your turn right now."), ephemeral=True)
                 return
-        _cls_rows  = self.db.execute(
-            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
-        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
-        _class_bonus: dict[str, list[tuple[str, str]]] = {
-            "barbarian": [("rage", "💢 Rage"), ("frenzy_attack", "🔥 Frenzy Attack")],
-            "fighter":   [("second_wind", "🌬️ Second Wind")],
-            "rogue":     [("cunning_action", "🕵️ Cunning Action — Dodge")],
-            "ranger":    [("hunters_mark", "🎯 Hunter's Mark"), ("ensnaring_strike", "🌿 Ensnaring Strike"), ("hail_of_thorns", "🌪️ Hail of Thorns")],
-            "druid":     [("beast_protect", "🛡️ Beast Guard")],
-            "wizard":    [("mage_hand", "🎩 Mage Hand Distraction")],
-            "cleric":    [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
-            "paladin":   [("guided_strike", "✝️ Guided Strike"), ("sacred_weapon", "✨ Sacred Weapon"), ("natures_wrath", "🌿 Nature's Wrath"), ("vow_of_enmity", "⚡ Vow of Enmity")],
-            "warlock":   [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell"), ("eldritch_spell", "🔮 War Magic — Booming Blade")],
-            "bard":      [("healing_word", "💚 Healing Word")],
-            "sorcerer":  [("misty_step", "💨 Misty Step"), ("counterspell", "🚫 Counterspell")],
-        }
-        universal  = [("flee", "🏃 Flee (bonus)"), ("help", "🤝 Help Ally (bonus)")]
-        bonus_list = _class_bonus.get(char_class, []) + universal
-        options    = [discord.SelectOption(label=lbl, value=fid) for fid, lbl in bonus_list[:25]]
+        _cls_rows     = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        char_class    = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
+        _plr_level    = (_cls_rows[0][1] or 1) if _cls_rows else 1
+        _plr_subclass = _get_subclass(self.db, uid, gid, char_class) if char_class else None
+        _dlc_bonus    = self._get_available_abilities(char_class, _plr_subclass, _plr_level, "bonus")
+        universal     = [("flee", "🏃 Flee (bonus)"), ("help", "🤝 Help Ally (bonus)")]
+        bonus_list    = [(a["id"], a.get("label", a["name"])) for a in _dlc_bonus] + universal
+        options       = [discord.SelectOption(label=lbl, value=fid) for fid, lbl in bonus_list[:25]]
         select     = discord.ui.Select(placeholder="Choose a bonus action…", options=options)
         view       = discord.ui.View(timeout=60)
         view.add_item(select)
@@ -4867,35 +4446,6 @@ class DungeonMasterCog(commands.Cog):
         if turn:
             turn["pending_iact"].append(interaction)
 
-    # Class-specific main action feature lists (fid, display label)
-    _CLASS_MAIN_FEATS: dict[str, list[tuple[str, str]]] = {
-        "wizard":    [("fire_bolt",      "🔥 Fire Bolt"),
-                      ("magic_missile",  "✨ Magic Missile"),
-                      ("burning_hands",  "🔥 Burning Hands"),
-                      ("thunderwave",    "🌊 Thunderwave"),
-                      ("scorching_ray",  "☀️ Scorching Ray"),
-                      ("fireball",       "💥 Fireball")],
-        "sorcerer":  [("fire_bolt",      "🔥 Fire Bolt"),
-                      ("magic_missile",  "✨ Magic Missile"),
-                      ("scorching_ray",  "☀️ Scorching Ray"),
-                      ("fireball",       "💥 Fireball"),
-                      ("thunderwave",    "🌊 Thunderwave")],
-        "warlock":   [("fire_bolt",      "🔮 Eldritch Blast")],
-        "cleric":    [("sacred_flame",   "🔥 Sacred Flame"),
-                      ("cure_wounds_rng","💚 Cure Wounds")],
-        "druid":     [("thunderwave",    "🌊 Thunderwave"),
-                      ("cure_wounds_rng","💚 Cure Wounds")],
-        "paladin":   [("divine_smite",   "⚡ Divine Smite"),
-                      ("cure_wounds_rng","💚 Cure Wounds")],
-        "ranger":    [("volley",         "🏹 Volley"),
-                      ("cure_wounds_rng","💚 Cure Wounds")],
-        "bard":      [("cure_wounds_rng","💚 Cure Wounds")],
-        "fighter":   [("action_surge",   "⚡ Action Surge")],
-        "rogue":     [("sneak_attack",   "🗡️ Sneak Attack")],
-        "barbarian": [],
-        "monk":      [],
-    }
-
     @app_commands.command(name="ability", description="Use your class ability on your combat turn.")
     @app_commands.describe(ability="Your class ability (auto-completes with available options)")
     async def ability(self, interaction: discord.Interaction, ability: str = ""):
@@ -4910,10 +4460,12 @@ class DungeonMasterCog(commands.Cog):
                     embed=self._err("It's not your turn right now."), ephemeral=True)
                 return
             _pre_queue = True
-        _cls_rows  = self.db.execute(
-            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
-        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
-        feats      = self._CLASS_MAIN_FEATS.get(char_class, [])
+        _cls_rows     = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        char_class    = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
+        _plr_level    = (_cls_rows[0][1] or 1) if _cls_rows else 1
+        _plr_subclass = _get_subclass(self.db, uid, gid, char_class) if char_class else None
+        feats         = self._get_available_abilities(char_class, _plr_subclass, _plr_level, "action")
         if not feats:
             await interaction.response.send_message(
                 embed=self._err(
@@ -4921,9 +4473,11 @@ class DungeonMasterCog(commands.Cog):
                     "Try `/attack` or `/item` instead."),
                 ephemeral=True)
             return
-        chosen_fid = feats[0][0]
-        chosen_lbl = feats[0][1]
-        for fid, lbl in feats:
+        chosen_fid = feats[0]["id"]
+        chosen_lbl = feats[0].get("label", feats[0]["name"])
+        for ab in feats:
+            fid = ab["id"]
+            lbl = ab.get("label", ab["name"])
             if ability.lower() in fid.lower() or ability.lower() in lbl.lower():
                 chosen_fid = fid
                 chosen_lbl = lbl
@@ -4951,15 +4505,21 @@ class DungeonMasterCog(commands.Cog):
     async def ability_autocomplete(self, interaction: discord.Interaction, current: str):
         uid        = str(interaction.user.id)
         gid        = str(interaction.guild_id)
-        _cls_rows  = self.db.execute(
-            "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
-        char_class = (_cls_rows[0][0] or "").lower() if _cls_rows else ""
-        feats      = self._CLASS_MAIN_FEATS.get(char_class, [])
-        return [
-            app_commands.Choice(name=lbl, value=fid)
-            for fid, lbl in feats
-            if not current or current.lower() in lbl.lower() or current.lower() in fid.lower()
-        ][:25]
+        _chr_rows  = self.db.execute(
+            "SELECT char_class, level FROM dnd_characters WHERE user_id=? AND guild_id=?", (uid, gid))
+        if not _chr_rows:
+            return []
+        char_class      = (_chr_rows[0][0] or "").lower()
+        player_level    = _chr_rows[0][1] or 1
+        player_subclass = _get_subclass(self.db, uid, gid, char_class) if char_class else None
+        feats = self._get_available_abilities(char_class, player_subclass, player_level, "action")
+        choices = []
+        for ab in feats:
+            fid = ab["id"]
+            lbl = ab.get("label", ab["name"])
+            if not current or current.lower() in lbl.lower() or current.lower() in fid.lower():
+                choices.append(app_commands.Choice(name=lbl, value=fid))
+        return choices[:25]
 
     @app_commands.command(name="endturn", description="Finalize your turn and execute all queued actions.")
     async def endturn(self, interaction: discord.Interaction):

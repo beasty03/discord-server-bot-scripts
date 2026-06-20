@@ -11,7 +11,7 @@ CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 # ── Timing ────────────────────────────────────────────────────────────────────
 WANDER_JOIN_TIMEOUT = 60   # seconds party join window stays open
 ROUND_TIMEOUT       = None # no timeout — players take as long as they need
-INTERACTION_TIMEOUT = 45   # seconds for skill check / interaction choice
+INTERACTION_TIMEOUT = None # no timeout — players take as long as they need
 KILL_MODAL_TIMEOUT  = 120  # seconds to describe the killing blow
 RESULT_DELAY        = 8    # pause between rounds (seconds)
 

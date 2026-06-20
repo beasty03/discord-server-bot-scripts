@@ -10,6 +10,7 @@ def register(api):
 
     def _fireball(ctx):
         if ctx.player.char_class != "wizard" or ctx.turn.ability_id != "fireball": return []
+        if ctx.player.level < 5: return []
         lv   = ctx.player.level
         dice = 8 + 2 * (lv >= 7) + 2 * (lv >= 9)
         dmg  = sum(ctx.roll("1d6") for _ in range(dice))
@@ -18,6 +19,7 @@ def register(api):
 
     def _counterspell(ctx):
         if ctx.player.char_class != "wizard" or ctx.turn.ability_id != "counterspell": return []
+        if ctx.player.level < 5: return []
         return [Status("counterspelled", 1),
                 Message("🚫 Counterspell — the enemy's next action is disrupted! (−20 ATK this round)")]
 

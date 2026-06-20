@@ -8,6 +8,7 @@ def register(api):
 
     def _misty_step(ctx):
         if ctx.player.char_class != "wizard" or ctx.turn.ability_id != "misty_step": return []
+        if ctx.player.level < 3: return []
         return [Status("misty_stepped", 1),
                 Message("💨 Misty Step — you vanish in silver mist! Half damage from the next hit.")]
 
