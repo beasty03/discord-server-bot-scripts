@@ -23,5 +23,10 @@ COLOR_ERROR = 0xED4245  # red
 #   "Janke": ("987654321098765432", "Janke"),
 
 NAME_MAP: dict[str, tuple[str, str]] = {
-    # "Name": ("discord_id", "display_name"),
+    "Yben":  ("516905034378903566", "Yben"),
+    "yben":  ("516905034378903566", "Yben"),
+    "Siebe": ("364106811504197632", "Siebe"),
+    "siebe": ("364106811504197632", "Siebe"),
+    "Joran": ("442295615636897822", "Joran"),
+    "joran": ("442295615636897822", "Joran"),
 }
