@@ -50,6 +50,30 @@ api.define_damage_type(id, ...)  # Named damage type
 
 ---
 
+## Campaign item dependencies
+
+Every item a campaign drops **must** be registered in that campaign's own `variables.py`. Campaigns are self-contained — no silent dependencies on other DLC files.
+
+The item DLC folders below exist for shop listings and general availability, but they do not exempt campaigns from registering their own drops.
+
+### Item DLC folders
+
+| Folder | Contents |
+|---|---|
+| [`items/base_materials/`](items/base_materials/) | `herb`, `leather_scrap`, `arcane_shard` |
+| [`items/base_equipment/`](items/base_equipment/) | `shield`, `leather_armor`, `chain_mail`, `spellbook`, `reroll_token`, `boar_tusk_charm` |
+| [`items/simple_weapons/`](items/simple_weapons/) | `dagger`, `handaxe`, `mace`, `quarterstaff` |
+| [`items/martial_weapons/`](items/martial_weapons/) | `shortsword`, `longsword`, `rapier`, `greataxe`, `greatsword`, `flail` |
+| [`items/ranged_weapons/`](items/ranged_weapons/) | `shortbow`, `longbow` |
+| [`items/health_potions/`](items/health_potions/) | `small_health_potion`, `health_potion`, `large_health_potion` |
+| [`items/companions/`](items/companions/) | `wolf_companion`, `eagle_companion`, `bear_companion`, `baby_dragon_companion` |
+| [`items/currency/`](items/currency/) | `large_coin_pouch` |
+| [`spells/base_spells/`](spells/base_spells/) | `scroll_burning_hands`, `scroll_thunderwave`, `scroll_shield_spell` |
+| [`spells/advanced_spells/`](spells/advanced_spells/) | `scroll_scorching_ray`, `scroll_misty_step` |
+| [`spells/master_spells/`](spells/master_spells/) | `scroll_fireball`, `scroll_counterspell` |
+
+---
+
 ## Combat events
 
 | Event | When it fires |

@@ -43,6 +43,28 @@ def register(api):
         "on_damage_roll": _wolf_fang_on_damage_roll,
     })
 
+    api.add_item({
+        "id":          "scroll_burning_hands",
+        "name":        "Scroll of Burning Hands",
+        "emoji":       "📜",
+        "slot":        "spell_scroll",
+        "teaches":     "burning_hands",
+        "tier":        "common",
+        "sell":        25,
+        "description": "Teaches a Wizard the Burning Hands spell (3d6 fire cone).",
+    })
+
+    api.add_item({
+        "id":          "scroll_shield_spell",
+        "name":        "Scroll of Shield",
+        "emoji":       "📜",
+        "slot":        "spell_scroll",
+        "teaches":     "shield_spell",
+        "tier":        "common",
+        "sell":        25,
+        "description": "Teaches a Wizard the Shield spell (+5 AC vs the next hit, bonus action).",
+    })
+
     # ── Campaign ───────────────────────────────────────────────────────────────
 
     api.add_campaign({

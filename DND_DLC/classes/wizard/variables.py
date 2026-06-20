@@ -1,7 +1,76 @@
 from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
+# ── Wizard spell catalog — used by /prepare_spells, /spells, /learn_spell ────
+_WIZARD_SPELL_DATA: list[dict] = [
+    {"id": "magic_missile", "name": "Magic Missile", "emoji": "✨",
+     "school": "evocation",   "level": 0,
+     "action_type": "action", "level_req": 1, "once_per": None,
+     "desc": "Auto-hit — 1d4+1 bolts; scales to 6 bolts at Lv 16 (cantrip, always available)"},
+    {"id": "shield_spell",  "name": "Shield",         "emoji": "🛡️",
+     "school": "abjuration",  "level": 1,
+     "action_type": "bonus",  "level_req": 1, "once_per": "combat",
+     "desc": "+5 AC vs the next attack targeting you this round (bonus action, once per combat)"},
+    {"id": "burning_hands", "name": "Burning Hands",  "emoji": "🔥",
+     "school": "evocation",   "level": 1,
+     "action_type": "action", "level_req": 1, "once_per": "combat",
+     "desc": "Cone of fire — 3d6 auto-hit; scales +1d6 per 4 levels (once per combat)"},
+    {"id": "thunderwave",   "name": "Thunderwave",     "emoji": "🌊",
+     "school": "evocation",   "level": 1,
+     "action_type": "action", "level_req": 1, "once_per": "combat",
+     "desc": "2d8 + INT thunder auto-hit; enemy ATK −2 next round (once per combat)"},
+    {"id": "misty_step",    "name": "Misty Step",      "emoji": "💨",
+     "school": "conjuration", "level": 2,
+     "action_type": "bonus",  "level_req": 3, "once_per": "combat",
+     "desc": "Teleport away — half damage from the next hit (bonus action, Lv 3+, once per combat)"},
+    {"id": "scorching_ray", "name": "Scorching Ray",   "emoji": "☀️",
+     "school": "evocation",   "level": 2,
+     "action_type": "action", "level_req": 3, "once_per": "combat",
+     "desc": "Three fire rays — each needs an attack roll, 2d6 fire each hit (Lv 3+, once per combat)"},
+    {"id": "fireball",      "name": "Fireball",        "emoji": "💥",
+     "school": "evocation",   "level": 3,
+     "action_type": "action", "level_req": 5, "once_per": "combat",
+     "desc": "8d6 fire explosion auto-hit; Evocation adds INT mod bonus dmg (Lv 5+, once per combat)"},
+    {"id": "counterspell",  "name": "Counterspell",    "emoji": "🚫",
+     "school": "abjuration",  "level": 3,
+     "action_type": "bonus",  "level_req": 5, "once_per": "combat",
+     "desc": "Disrupt the enemy — they skip their attack this round (bonus action, Lv 5+, once per combat)"},
+]
+
+_WIZARD_CANTRIP_IDS:        set[str]  = {"magic_missile"}
+_WIZARD_STARTING_SPELL_IDS: list[str] = ["magic_missile", "shield_spell", "burning_hands", "thunderwave"]
+
 
 def register(api):
+
+    _reg = api.registry
+
+    # ── Combat init ───────────────────────────────────────────────────────────
+    def _wizard_combat_init(run: dict, uid: str, stats: dict, db, gid: str) -> None:
+        # Read equipped spellbook for max prepared spells
+        max_spells = 4
+        eq = db.execute(
+            "SELECT item_id FROM dnd_inventory WHERE user_id=? AND guild_id=? AND equipped=1",
+            (uid, gid))
+        for (iid,) in (eq or []):
+            it = _reg.get_item(iid)
+            if it and "wizard_spell_slots" in it:
+                max_spells = it["wizard_spell_slots"]
+                break
+
+        rows = db.execute(
+            "SELECT choice_val FROM dnd_character_choices "
+            "WHERE user_id=? AND guild_id=? AND choice_key=?",
+            (uid, gid, "prepared_spells"))
+        _prep = [s for s in rows[0][0].split(",") if s] if rows and rows[0][0] else []
+        if not _prep:
+            _prep = list(_WIZARD_STARTING_SPELL_IDS)
+
+        cantrips = [s for s in _prep if s in _WIZARD_CANTRIP_IDS]
+        spells   = [s for s in _prep if s not in _WIZARD_CANTRIP_IDS][:max_spells]
+        for c in _WIZARD_CANTRIP_IDS:
+            if c not in cantrips:
+                cantrips.insert(0, c)
+        run.setdefault("spell_prepared", {})[uid] = cantrips + spells
 
     # ── Damage types ──────────────────────────────────────────────────────────
     api.define_damage_type("fire",      label="Fire",      icon="🔥")
@@ -31,17 +100,11 @@ def register(api):
     def _lv(ctx):
         return ctx.player.level
 
-    def _spell_dice(ctx, die, base_count=1, scale_every=4):
-        """Roll base_count dice, adding one extra die every scale_every levels."""
-        extra = _lv(ctx) // scale_every
-        n = base_count + extra
-        return sum(ctx.roll(die) for _ in range(n)), n
-
     # ── Cantrips ──────────────────────────────────────────────────────────────
 
     def _fire_bolt(ctx):
         if not _is(ctx, "fire_bolt"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 1 + (lv >= 5) + (lv >= 11) + (lv >= 17)
         dmg  = sum(ctx.roll("1d10") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="fire"),
@@ -49,7 +112,7 @@ def register(api):
 
     def _ray_of_frost(ctx):
         if not _is(ctx, "ray_of_frost"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 1 + (lv >= 5) + (lv >= 11) + (lv >= 17)
         dmg  = sum(ctx.roll("1d8") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="cold"), Status("slowed", 1),
@@ -57,7 +120,7 @@ def register(api):
 
     def _acid_splash(ctx):
         if not _is(ctx, "acid_splash"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 1 + (lv >= 5) + (lv >= 11) + (lv >= 17)
         dmg  = sum(ctx.roll("1d6") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="acid"),
@@ -67,7 +130,7 @@ def register(api):
 
     def _magic_missile(ctx):
         if not _is(ctx, "magic_missile"): return []
-        lv = _lv(ctx)
+        lv    = _lv(ctx)
         darts = 3 + (lv >= 3) + (lv >= 5) + (lv >= 7)
         dmg   = sum(ctx.roll("1d4") + 1 for _ in range(darts))
         return [Modify("damage", add=dmg, damage_type="force"),
@@ -75,7 +138,7 @@ def register(api):
 
     def _burning_hands(ctx):
         if not _is(ctx, "burning_hands"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 3 + (lv >= 3) + (lv >= 5)
         dmg  = sum(ctx.roll("1d6") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="fire"),
@@ -83,7 +146,7 @@ def register(api):
 
     def _thunderwave(ctx):
         if not _is(ctx, "thunderwave"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 2 + (lv >= 3) + (lv >= 5)
         dmg  = sum(ctx.roll("1d8") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="thunder"),
@@ -96,7 +159,7 @@ def register(api):
 
     def _scorching_ray(ctx):
         if not _is(ctx, "scorching_ray"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         rays = 3 + (lv >= 5) + (lv >= 7)
         dmg  = sum(ctx.roll("2d6") for _ in range(rays))
         return [Modify("damage", add=dmg, damage_type="fire"),
@@ -104,7 +167,7 @@ def register(api):
 
     def _lightning_bolt(ctx):
         if not _is(ctx, "lightning_bolt"): return []
-        lv = _lv(ctx)
+        lv   = _lv(ctx)
         dice = 8 + (lv >= 7) + (lv >= 9)
         dmg  = sum(ctx.roll("1d6") for _ in range(dice))
         return [Modify("damage", add=dmg, damage_type="lightning"),
@@ -118,11 +181,7 @@ def register(api):
 
     # ── Subclass passives ─────────────────────────────────────────────────────
 
-    # Live registry reference — lets _evocation_potency discover DLC spells automatically.
-    _reg = api.registry
-
     def _evocation_potency(ctx):
-        """Evocation Lv 2 (Sculpt Spells): passive +2 damage on any wizard spell."""
         if ctx.player.char_class != "wizard" or ctx.player.subclass != "evocation": return []
         if ctx.player.level < 2: return []
         hardcoded = {"fire_bolt","ray_of_frost","acid_splash","magic_missile",
@@ -132,33 +191,30 @@ def register(api):
         return [Modify("damage", add=2), Message("Empowered Evocation: +2 damage!")]
 
     def _divination_foresight(ctx):
-        """Divination Lv 2 (Portent): once per turn, add +3 to attack or skill check."""
         if ctx.player.char_class != "wizard" or ctx.player.subclass != "divination": return []
         if ctx.player.level < 2: return []
         return [Modify("attack_roll", add=3), Message("Portent: +3 from your prophetic vision!")]
 
     def _arcane_surge(ctx):
-        """Abjuration Lv 2 (Arcane Ward): 25% damage boost vs warded enemies."""
         if ctx.player.char_class != "wizard" or ctx.player.subclass != "abjuration": return []
         if ctx.player.level < 2: return []
         if not ctx.has_flag("arcane_charged"): return []
         return [Flag("arcane_charged", False), Message("Arcane Surge: 1.25× damage!")]
 
-    api.on("on_ability_use", _fire_bolt)
-    api.on("on_ability_use", _ray_of_frost)
-    api.on("on_ability_use", _acid_splash)
-    api.on("on_ability_use", _magic_missile)
-    api.on("on_ability_use", _burning_hands)
-    api.on("on_ability_use", _thunderwave)
-    api.on("on_ability_use", _mirror_image)
-    api.on("on_ability_use", _scorching_ray)
-    api.on("on_ability_use", _lightning_bolt)
-    api.on("on_ability_use", _blight)
-    api.on("on_damage_roll", _evocation_potency)
+    api.on("on_ability_use",   _fire_bolt)
+    api.on("on_ability_use",   _ray_of_frost)
+    api.on("on_ability_use",   _acid_splash)
+    api.on("on_ability_use",   _magic_missile)
+    api.on("on_ability_use",   _burning_hands)
+    api.on("on_ability_use",   _thunderwave)
+    api.on("on_ability_use",   _mirror_image)
+    api.on("on_ability_use",   _scorching_ray)
+    api.on("on_ability_use",   _lightning_bolt)
+    api.on("on_ability_use",   _blight)
+    api.on("on_damage_roll",   _evocation_potency)
     api.on("on_before_attack", _divination_foresight)
 
-    # ── Spells data (used by character sheet / level-up UI) ──────────────────
-
+    # ── Spell data (used by /prepare_spells, /spells, /learn_spell) ──────────
     CANTRIPS = [
         {"id": "fire_bolt",    "name": "Fire Bolt",    "emoji": "🔥", "type": "cantrip",
          "desc": "Auto-hit ranged attack — 1d10 fire (scales: 2d10 at 5, 3d10 at 11, 4d10 at 17)."},
@@ -186,7 +242,6 @@ def register(api):
     ]
 
     # ── Class registration ────────────────────────────────────────────────────
-
     api.add_class({
         "id":           "wizard",
         "name":         "Wizard",
@@ -197,7 +252,7 @@ def register(api):
         "weapon_profs": ["simple"],
         "armor_profs":  [],
         "saving_throws":["intelligence", "wisdom"],
-        "start_items":  ["quarterstaff", "spellbook"],
+        "start_items":  ["oak_wand", "spellbook"],
         "features": [
             {"level":  1, "name": "Spellcasting",
              "desc": "You wield arcane magic. Use INT for spell attacks and saving throw DCs."},
@@ -212,7 +267,6 @@ def register(api):
              "desc": "Choose two 3rd-level spells — cast each once per short rest for free."},
         ],
         "abilities": [
-            # Cantrips
             {"id": "fire_bolt",    "name": "Fire Bolt",    "label": "🔥 Fire Bolt",
              "action": "action", "level_req": 1, "once_per": None, "handler": _fire_bolt,
              "desc": "1d10 fire damage (auto-hit), scales to 4d10 at Lv 17."},
@@ -222,7 +276,6 @@ def register(api):
             {"id": "acid_splash",  "name": "Acid Splash",  "label": "🧪 Acid Splash",
              "action": "action", "level_req": 1, "once_per": None, "handler": _acid_splash,
              "desc": "1d6 acid, scales with level."},
-            # Spells
             {"id": "magic_missile",  "name": "Magic Missile",  "label": "✨ Magic Missile",
              "action": "action", "level_req": 1, "once_per": None, "handler": _magic_missile,
              "desc": "3 darts, 1d4+1 each, always hits. More darts at higher level."},
@@ -282,4 +335,9 @@ def register(api):
             "spells":   SPELLS,
         },
         "favored_enemy_keywords": None,
+        "spell_data":            _WIZARD_SPELL_DATA,
+        "cantrip_ids":           _WIZARD_CANTRIP_IDS,
+        "starting_spell_ids":    _WIZARD_STARTING_SPELL_IDS,
+        "has_spell_preparation": True,
+        "combat_init":           _wizard_combat_init,
     })

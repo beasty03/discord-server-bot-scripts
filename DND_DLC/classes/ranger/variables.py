@@ -1,6 +1,28 @@
 from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
 
+def _ranger_combat_init(run: dict, uid: str, stats: dict, db, gid: str) -> None:
+    rows = db.execute(
+        "SELECT choice_val FROM dnd_character_choices "
+        "WHERE user_id=? AND guild_id=? AND choice_key=?",
+        (uid, gid, "ranger_favored_enemy"))
+    run.setdefault("favored_enemy", {})[uid] = rows[0][0] if rows else None
+
+
+def _ranger_on_subclass_chosen(chosen_id: str, db, uid: str, gid: str) -> None:
+    if chosen_id != "beast_master":
+        return
+    companion_ids = ["baby_dragon_companion", "bear_companion", "eagle_companion", "wolf_companion"]
+    for cid in companion_ids:
+        if db.execute(
+                "SELECT qty FROM dnd_inventory WHERE user_id=? AND guild_id=? AND item_id=? AND qty>0",
+                (uid, gid, cid)):
+            return
+    db.execute(
+        "INSERT OR IGNORE INTO dnd_inventory (user_id, guild_id, item_id, qty, equipped) VALUES (?,?,?,1,0)",
+        (uid, gid, "wolf_companion"))
+
+
 def register(api):
 
     # ── Statuses ──────────────────────────────────────────────────────────────
@@ -226,4 +248,10 @@ def register(api):
             },
         },
         "favored_enemy_keywords": FAVORED_ENEMY_KEYWORDS,
+        "extra_attacks":          lambda lv: 2 if lv >= 5 else 1,
+        "has_primeval_awareness": True,
+        "has_companion_system":   True,
+        "natural_explorer_bonus": 1,
+        "combat_init":            _ranger_combat_init,
+        "on_subclass_chosen":     _ranger_on_subclass_chosen,
     })

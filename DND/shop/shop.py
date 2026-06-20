@@ -310,6 +310,11 @@ class ShopCog(commands.Cog):
                 PRIMARY KEY (date, item_id)
             )
         """)
+        char_cog = self.bot.cogs.get("CharacterCog")
+        if char_cog:
+            for defn in var.ITEM_DEFS:
+                if not any(i["id"] == defn["id"] for i in char_cog._extra_items):
+                    char_cog._extra_items.append(defn)
 
     # ── DLC registration ───────────────────────────────────────────────────────
 

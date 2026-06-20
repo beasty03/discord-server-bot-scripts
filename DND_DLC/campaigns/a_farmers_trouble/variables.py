@@ -1,4 +1,25 @@
 def register(api):
+
+    api.add_item({
+        "id":          "small_coin_pouch",
+        "name":        "Small Coin Pouch",
+        "emoji":       "💰",
+        "slot":        "misc",
+        "tier":        "common",
+        "sell":        12,
+        "description": "A small pouch of coins looted from a goblin. Worth about 10–15 gold. Sell it to collect.",
+    })
+
+    api.add_item({
+        "id":          "medium_coin_pouch",
+        "name":        "Medium Coin Pouch",
+        "emoji":       "💰",
+        "slot":        "misc",
+        "tier":        "common",
+        "sell":        20,
+        "description": "A heavier pouch of looted coins. Worth about 18–22 gold. Sell it to collect.",
+    })
+
     api.add_campaign({
         "id":              "a_farmers_trouble",
         "name":            "A Farmer's Trouble",
@@ -35,7 +56,9 @@ def register(api):
                     "atk_bonus":  2,
                     "dmg":        "1d4+1",
                     "initiative": 3,
-                    "drops":      [],
+                    "drops": [
+                        {"id": "small_coin_pouch", "chance": 80},
+                    ],
                 },
             },
 
@@ -67,7 +90,9 @@ def register(api):
                     "atk_bonus":  2,
                     "dmg":        "1d4+1",
                     "initiative": 4,
-                    "drops":      [],
+                    "drops": [
+                        {"id": "small_coin_pouch", "chance": 80},
+                    ],
                 },
             },
 
@@ -88,7 +113,9 @@ def register(api):
                     "atk_bonus":  3,
                     "dmg":        "1d6+2",
                     "initiative": 2,
-                    "drops":      [],
+                    "drops": [
+                        {"id": "medium_coin_pouch", "chance": 80},
+                    ],
                 },
             },
 

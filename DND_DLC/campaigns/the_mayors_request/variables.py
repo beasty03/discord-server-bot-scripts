@@ -6,6 +6,16 @@ def register(api):
     # ── Campaign-exclusive items ───────────────────────────────────────────────
 
     api.add_item({
+        "id":          "stolen_coin_pouch",
+        "name":        "Stolen Coin Pouch",
+        "emoji":       "💰",
+        "slot":        "misc",
+        "tier":        "common",
+        "sell":        17,
+        "description": "A grubby pouch of stolen coins — 10 to 25 gold worth. Sell it to collect.",
+    })
+
+    api.add_item({
         "id":          "goblin_scimitar",
         "name":        "Goblin Scimitar",
         "emoji":       "⚔️",
@@ -17,16 +27,6 @@ def register(api):
         "tier":        "common",
         "sell":        8,
         "description": "A crude curved blade taken from a scummy goblin. Battered but serviceable.",
-    })
-
-    api.add_item({
-        "id":          "stolen_coin_pouch",
-        "name":        "Stolen Coin Pouch",
-        "emoji":       "💰",
-        "slot":        "misc",
-        "tier":        "common",
-        "sell":        17,
-        "description": "A grubby pouch of stolen coins — 10 to 25 gold worth. Sell it to collect.",
     })
 
     api.add_item({

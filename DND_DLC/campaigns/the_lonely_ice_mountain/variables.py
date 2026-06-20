@@ -1,4 +1,89 @@
+from DND.DungeonMaster.effects import Flag, Message, Modify, Status
+
+
 def register(api):
+
+    # ── Campaign-exclusive items ───────────────────────────────────────────────
+
+    api.define_damage_type("lightning", label="Lightning", icon="⚡")
+
+    api.define_status(
+        "storm_stunned",
+        label="Storm Stunned",
+        icon="⚡",
+        effects={
+            "enemy_atk_penalty": 4,
+            "enemy_ac_penalty":  2,
+            "clears_on_turn":    True,
+        },
+    )
+
+    def _storm_breaker_on_hit(ctx):
+        if ctx.has_flag("storm_breaker_lightning_used"):
+            return []
+        n    = ctx.roll("1d4")
+        save = ctx.roll("1d20")
+        out  = [
+            Modify("damage", add=n, damage_type="lightning"),
+            Flag("storm_breaker_lightning_used", True),
+            Message(f"⚡ Storm Breaker crackles — +{n} lightning damage!"),
+        ]
+        if save < 12:
+            out += [
+                Status("storm_stunned", 1),
+                Message(f"⚡ The enemy fails their DEX save ({save}) — stunned! (−4 ATK, −2 AC this round)"),
+            ]
+        else:
+            out.append(Message(f"The enemy weathers the shock (save {save})."))
+        return out
+
+    api.add_item({
+        "id":          "herb",
+        "name":        "Herb",
+        "emoji":       "🌿",
+        "slot":        "material",
+        "tier":        "common",
+        "sell":        3,
+        "description": "A useful herb for crafting healing items.",
+    })
+
+    api.add_item({
+        "id":          "leather_scrap",
+        "name":        "Leather Scrap",
+        "emoji":       "🪶",
+        "slot":        "material",
+        "tier":        "uncommon",
+        "sell":        5,
+        "description": "A piece of tough leather, useful for crafting.",
+    })
+
+    api.add_item({
+        "id":          "arcane_shard",
+        "name":        "Arcane Shard",
+        "emoji":       "💎",
+        "slot":        "material",
+        "tier":        "rare",
+        "sell":        15,
+        "description": "A fragment of crystallized magical energy. Used in advanced crafting.",
+    })
+
+    api.add_item({
+        "id":          "storm_breaker",
+        "name":        "Storm Breaker",
+        "emoji":       "🔨",
+        "slot":        "weapon",
+        "weapon_type": "martial",
+        "ability":     "strength",
+        "dmg":         "2d6",
+        "handed":      2,
+        "sell":        400,
+        "tier":        "epic",
+        "description": "A hammer as mighty as the god of thunder, wield it with worthiness.",
+        "on_hit":      _storm_breaker_on_hit,
+    })
+
+    # ── Campaign ───────────────────────────────────────────────────────────────
+
     api.add_campaign({
         "id":              "the_lonely_ice_mountain",
         "name":            "The Lonely Ice Mountain",

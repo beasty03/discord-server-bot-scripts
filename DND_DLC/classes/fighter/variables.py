@@ -80,6 +80,13 @@ def register(api):
         if not _is(ctx, "war_magic_atk"): return []
         return [BonusAttack(), Message("War Magic: bonus weapon attack!")]
 
+    # ── Combat init — called once per player at the start of each encounter ──────
+
+    def _fighter_combat_init(run: dict, uid: str, stats: dict, db, gid: str) -> None:
+        lv = stats["level"]
+        run["action_surge_uses"][uid] = 2 if lv >= 17 else 1
+        run["indomitable_uses"][uid]  = (3 if lv >= 17 else 2 if lv >= 13 else 1) if lv >= 9 else 0
+
     # ── Passive hooks ─────────────────────────────────────────────────────────
 
     def _extra_attack(ctx):
@@ -200,4 +207,7 @@ def register(api):
             },
         },
         "favored_enemy_keywords": None,
+        "extra_attacks":  lambda lv: 4 if lv >= 20 else 3 if lv >= 11 else 2 if lv >= 5 else 1,
+        "has_indomitable": True,
+        "combat_init":    _fighter_combat_init,
     })

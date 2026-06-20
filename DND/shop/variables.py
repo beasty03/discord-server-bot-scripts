@@ -62,7 +62,32 @@ TIERS = {
 # max_qty → max a single player can own at once
 # ============================================================================
 
-SHOP_ITEMS = []
+# Item definitions for items that belong to the shop module.
+# The ShopCog pushes these into CharacterCog at startup so inventory
+# display works even when the DLC folder is not present.
+ITEM_DEFS = [
+    {
+        "id":          "reroll_token",
+        "name":        "Character Reroll Token",
+        "emoji":       "🎲",
+        "slot":        "misc",
+        "tier":        "common",
+        "sell":        0,
+        "description": "Allows you to reroll your character stats.",
+    },
+]
+
+SHOP_ITEMS = [
+    {
+        "id":          "reroll_token",
+        "name":        "Character Reroll Token",
+        "emoji":       "🎲",
+        "description": "Reroll all your character stats from scratch.",
+        "price":       100,
+        "max_qty":     3,
+        "tier":        "common",
+    },
+]
 
 SHOP_BUNDLES = []
 

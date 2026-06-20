@@ -51,14 +51,12 @@ def _roll(expr: str) -> int:
     return roll_expr(expr)[0]
 
 
-def _n_attacks(char_class: str, level: int) -> int:
-    """Extra Attack: Fighter Lv5=2/11=3/20=4; Barbarian/Ranger/Paladin Lv5=2."""
-    if char_class == "fighter":
-        if level >= 20: return 4
-        if level >= 11: return 3
-        if level >= 5:  return 2
-    elif char_class in ("barbarian", "ranger", "paladin"):
-        if level >= 5: return 2
+def _n_attacks(engine, char_class: str, level: int) -> int:
+    """Extra Attack: fully registry-driven — 1 attack if class has no DLC."""
+    if engine:
+        klass = engine.registry.get_class(char_class)
+        if klass and "extra_attacks" in klass:
+            return klass["extra_attacks"](level)
     return 1
 
 
@@ -70,7 +68,7 @@ def _get_subclass(db, uid: str, gid: str, char_class: str) -> str | None:
     return rows[0][0] if rows else None
 
 
-def _get_fighting_style(db, uid: str, gid: str, char_class: str = "fighter") -> str | None:
+def _get_fighting_style(db, uid: str, gid: str, char_class: str) -> str | None:
     rows = db.execute(
         "SELECT choice_val FROM dnd_character_choices "
         "WHERE user_id=? AND guild_id=? AND choice_key=?",
@@ -93,13 +91,6 @@ def _get_dwarf_trait(db, uid: str, gid: str) -> str | None:
         (uid, gid, "dwarf_trait"))
     return rows[0][0] if rows else None
 
-
-def _get_favored_enemy(db, uid: str, gid: str) -> str | None:
-    rows = db.execute(
-        "SELECT choice_val FROM dnd_character_choices "
-        "WHERE user_id=? AND guild_id=? AND choice_key=?",
-        (uid, gid, "ranger_favored_enemy"))
-    return rows[0][0] if rows else None
 
 
 def _grant_wolf_if_needed(db, uid: str, gid: str) -> None:
@@ -124,21 +115,21 @@ def _get_elf_subrace(db, uid: str, gid: str) -> str | None:
     return rows[0][0] if rows else None
 
 
-def _get_wizard_known_spells(db, uid: str, gid: str) -> list[str]:
+def _get_known_spells(db, uid: str, gid: str) -> list[str]:
     rows = db.execute(
         "SELECT choice_val FROM dnd_character_choices "
         "WHERE user_id=? AND guild_id=? AND choice_key=?",
-        (uid, gid, "wizard_known_spells"))
+        (uid, gid, "known_spells"))
     if rows and rows[0][0]:
         return [s for s in rows[0][0].split(",") if s]
     return []
 
 
-def _get_wizard_prepared_spells(db, uid: str, gid: str) -> list[str]:
+def _get_prepared_spells(db, uid: str, gid: str) -> list[str]:
     rows = db.execute(
         "SELECT choice_val FROM dnd_character_choices "
         "WHERE user_id=? AND guild_id=? AND choice_key=?",
-        (uid, gid, "wizard_prepared_spells"))
+        (uid, gid, "prepared_spells"))
     if rows and rows[0][0]:
         return [s for s in rows[0][0].split(",") if s]
     return []
@@ -308,20 +299,7 @@ _ABILITY_SHORT = {
     "strength": "STR", "dexterity": "DEX", "constitution": "CON",
     "intelligence": "INT", "wisdom": "WIS", "charisma": "CHA",
 }
-_CLASS_SAVE_PROFS: dict[str, list[str]] = {
-    "fighter":   ["strength", "constitution"],
-    "ranger":    ["strength", "dexterity"],
-    "wizard":    ["intelligence", "wisdom"],
-    "barbarian": ["strength", "constitution"],
-    "paladin":   ["wisdom", "charisma"],
-    "rogue":     ["dexterity", "intelligence"],
-    "cleric":    ["wisdom", "charisma"],
-    "bard":      ["dexterity", "charisma"],
-    "druid":     ["intelligence", "wisdom"],
-    "warlock":   ["wisdom", "charisma"],
-    "monk":      ["strength", "dexterity"],
-    "sorcerer":  ["constitution", "charisma"],
-}
+# Saving throw proficiencies are registered per-class in DND_DLC via "saving_throws" in add_class()
 
 
 def _build_hp_bar(hp: int, max_hp: int, length: int = 8) -> str:
@@ -496,7 +474,7 @@ class WanderJoinView(discord.ui.View):
 
 
 class PrepareSpellsView(discord.ui.View):
-    """Wizard spell preparation — choose which known spells to have ready."""
+    """Spell preparation — choose which known spells to have ready for combat."""
 
     def __init__(self, cog: "DungeonMasterCog", uid: str, gid: str,
                  preparable: list[dict], currently_prepared: list[str], max_prep: int):
@@ -527,7 +505,7 @@ class PrepareSpellsView(discord.ui.View):
         self._cog.db.execute(
             "INSERT OR REPLACE INTO dnd_character_choices "
             "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
-            (self._uid, self._gid, "wizard_prepared_spells", ",".join(chosen)))
+            (self._uid, self._gid, "prepared_spells", ",".join(chosen)))
         names = [v.replace("_", " ").title() for v in chosen]
         await interaction.response.edit_message(
             embed=discord.Embed(
@@ -543,7 +521,7 @@ class PrepareSpellsView(discord.ui.View):
 
 
 class LearnSpellView(discord.ui.View):
-    """Consume a spell scroll to permanently learn a new wizard spell."""
+    """Consume a spell scroll to permanently learn a new spell."""
 
     def __init__(self, cog: "DungeonMasterCog", uid: str, gid: str,
                  scrolls: list[tuple]):
@@ -576,7 +554,7 @@ class LearnSpellView(discord.ui.View):
                 view=None)
             self.stop()
             return
-        known = _get_wizard_known_spells(self._cog.db, self._uid, self._gid)
+        known = _get_known_spells(self._cog.db, self._uid, self._gid)
         if spell_id in known:
             await interaction.response.edit_message(
                 embed=discord.Embed(
@@ -599,7 +577,7 @@ class LearnSpellView(discord.ui.View):
         self._cog.db.execute(
             "INSERT OR REPLACE INTO dnd_character_choices "
             "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
-            (self._uid, self._gid, "wizard_known_spells", ",".join(known)))
+            (self._uid, self._gid, "known_spells", ",".join(known)))
         spell_name = spell_id.replace("_", " ").title()
         await interaction.response.edit_message(
             embed=discord.Embed(
@@ -1002,6 +980,19 @@ class DungeonMasterCog(commands.Cog):
     def _engine(self):
         return self.bot.cogs.get("EngineCore")
 
+    def _spell_data_for(self, char_class: str):
+        """Return (spells_list, cantrips_set, starting_list) from the class's DLC dict."""
+        engine = self._engine
+        if engine:
+            klass = engine.registry.get_class(char_class)
+            if klass:
+                return (
+                    klass.get("spell_data", []),
+                    klass.get("cantrip_ids", set()),
+                    klass.get("starting_spell_ids", []),
+                )
+        return [], set(), []
+
     def _is_in_run(self, uid: str, gid: str) -> bool:
         return bool(self.db.execute(
             "SELECT 1 FROM dnd_active_runs WHERE user_id=? AND guild_id=?", (uid, gid)))
@@ -1307,8 +1298,9 @@ class DungeonMasterCog(commands.Cog):
                         "INSERT OR REPLACE INTO dnd_character_choices "
                         "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
                         (uid, gid, choice_key, chosen))
-                    if char_class == "ranger" and choice_key == "ranger_subclass" and chosen == "beast_master":
-                        _grant_wolf_if_needed(self.db, uid, gid)
+                    _sc_klass = self._engine.registry.get_class(char_class) if self._engine else None
+                    if _sc_klass and "on_subclass_chosen" in _sc_klass:
+                        _sc_klass["on_subclass_chosen"](chosen, self.db, uid, gid)
                 else:
                     # Timed out — edit message to show warning
                     for item in view.children:
@@ -1429,14 +1421,15 @@ class DungeonMasterCog(commands.Cog):
                 "INSERT OR REPLACE INTO dnd_character_choices "
                 "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
                 (uid, gid, choice_key, chosen))
-            if char_class == "ranger" and choice_key == "ranger_subclass" and chosen == "beast_master":
-                _grant_wolf_if_needed(self.db, uid, gid)
+            _sc_klass2 = self._engine.registry.get_class(char_class) if self._engine else None
+            if _sc_klass2 and "on_subclass_chosen" in _sc_klass2:
+                _sc_klass2["on_subclass_chosen"](chosen, self.db, uid, gid)
 
     # ── /prepare_spells ───────────────────────────────────────────────────────
 
     @app_commands.command(
         name="prepare_spells",
-        description="Wizard only: choose which spells to have ready for your next combat.")
+        description="Choose which spells to have ready for your next combat.")
     async def prepare_spells(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
@@ -1455,27 +1448,29 @@ class DungeonMasterCog(commands.Cog):
                 embed=self._err("You don't have a character yet."), ephemeral=True)
             return
         char_class, level = rows[0]
-        if char_class != "wizard":
+        _ps_klass = self._engine.registry.get_class(char_class) if self._engine else None
+        if not _ps_klass or not _ps_klass.get("has_spell_preparation"):
             await interaction.response.send_message(
-                embed=self._err("Only Wizards can prepare spells."), ephemeral=True)
+                embed=self._err("Your class doesn't have spell preparation."), ephemeral=True)
             return
 
-        # Auto-init known spells for new wizards
-        known = _get_wizard_known_spells(self.db, uid, gid)
+        # Auto-init known spells on first use
+        _wsd  = self._spell_data_for(char_class)
+        known = _get_known_spells(self.db, uid, gid)
         if not known:
-            known = list(char_var.WIZARD_STARTING_SPELLS)
+            known = list(_wsd[2])
             self.db.execute(
                 "INSERT OR REPLACE INTO dnd_character_choices "
                 "(user_id, guild_id, choice_key, choice_val) VALUES (?,?,?,?)",
-                (uid, gid, "wizard_known_spells", ",".join(known)))
+                (uid, gid, "known_spells", ",".join(known)))
 
         stats    = self._get_char_combat_stats(uid, gid)
         int_mod  = stats["mods"]["intelligence"] if stats else 0
         max_prep = max(2, int_mod + max(1, (level or 1) // 2))
-        prepared = _get_wizard_prepared_spells(self.db, uid, gid)
+        prepared = _get_prepared_spells(self.db, uid, gid)
 
-        spell_lookup = {s["id"]: s for s in char_var.WIZARD_SPELLS}
-        cantrips     = char_var.WIZARD_CANTRIPS
+        spell_lookup = {s["id"]: s for s in _wsd[0]}
+        cantrips     = _wsd[1]
         preparable   = [
             spell_lookup[sid]
             for sid in known
@@ -1518,7 +1513,7 @@ class DungeonMasterCog(commands.Cog):
 
     @app_commands.command(
         name="spells",
-        description="Wizard only: view your known and prepared spells.")
+        description="View your known and prepared spells.")
     async def spells(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
@@ -1531,22 +1526,24 @@ class DungeonMasterCog(commands.Cog):
                 embed=self._err("You don't have a character yet."), ephemeral=True)
             return
         char_class, level = rows[0]
-        if char_class != "wizard":
+        _sp_klass = self._engine.registry.get_class(char_class) if self._engine else None
+        if not _sp_klass or not _sp_klass.get("has_spell_preparation"):
             await interaction.response.send_message(
-                embed=self._err("Only Wizards have spells."), ephemeral=True)
+                embed=self._err("Your class doesn't have a spell system."), ephemeral=True)
             return
 
-        known    = _get_wizard_known_spells(self.db, uid, gid)
-        prepared = _get_wizard_prepared_spells(self.db, uid, gid)
+        known    = _get_known_spells(self.db, uid, gid)
+        prepared = _get_prepared_spells(self.db, uid, gid)
 
-        spell_lookup = {s["id"]: s for s in char_var.WIZARD_SPELLS}
-        cantrips     = char_var.WIZARD_CANTRIPS
+        _wsd         = self._spell_data_for(char_class)
+        spell_lookup = {s["id"]: s for s in _wsd[0]}
+        cantrips     = _wsd[1]
 
         cantrip_lines  = []
         prepared_lines = []
         known_lines    = []
 
-        for sid in (known or list(char_var.WIZARD_STARTING_SPELLS)):
+        for sid in (known or list(_wsd[2])):
             s = spell_lookup.get(sid)
             if not s:
                 continue
@@ -1583,7 +1580,7 @@ class DungeonMasterCog(commands.Cog):
 
     @app_commands.command(
         name="learn_spell",
-        description="Wizard only: consume a spell scroll from your inventory to learn that spell.")
+        description="Consume a spell scroll from your inventory to learn that spell.")
     async def learn_spell(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
@@ -1597,9 +1594,14 @@ class DungeonMasterCog(commands.Cog):
         rows = self.db.execute(
             "SELECT char_class FROM dnd_characters WHERE user_id=? AND guild_id=?",
             (uid, gid))
-        if not rows or rows[0][0] != "wizard":
+        if not rows:
             await interaction.response.send_message(
-                embed=self._err("Only Wizards can learn spells from scrolls."), ephemeral=True)
+                embed=self._err("You don't have a character yet."), ephemeral=True)
+            return
+        _ls_klass = self._engine.registry.get_class(rows[0][0]) if self._engine else None
+        if not _ls_klass or not _ls_klass.get("has_spell_preparation"):
+            await interaction.response.send_message(
+                embed=self._err("Your class can't learn spells from scrolls."), ephemeral=True)
             return
 
         inv_rows  = self.db.execute(
@@ -1651,15 +1653,16 @@ class DungeonMasterCog(commands.Cog):
                 embed=self._err("You don't have a character yet."), ephemeral=True)
             return
         char_class, level = rows[0]
-        if char_class != "ranger":
+        _comp_klass = self._engine.registry.get_class(char_class) if self._engine else None
+        if not _comp_klass or not _comp_klass.get("has_companion_system"):
             await interaction.response.send_message(
-                embed=self._err("Only Rangers have animal companions."), ephemeral=True)
+                embed=self._err("Your class doesn't have an animal companion system."), ephemeral=True)
             return
-        sc = _get_subclass(self.db, uid, gid, "ranger")
+        sc = _get_subclass(self.db, uid, gid, char_class)
         if sc != "beast_master":
             await interaction.response.send_message(
                 embed=self._err(
-                    "Only **Beast Master** Rangers have a companion.\n"
+                    "Only **Beast Master** characters have a companion.\n"
                     "Choose your archetype at level 3 with `/subclass`."),
                 ephemeral=True)
             return
@@ -1989,7 +1992,6 @@ class DungeonMasterCog(commands.Cog):
                 "warding_flare":        set(),
                 "arcane_distraction":   set(),
                 "natures_wrath_active": False,
-                # Fighter-specific
                 "sup_dice":             {},   # {uid: int} Battle Master dice remaining
                 "sup_die_type":         {},   # {uid: str} "1d8"|"1d10"|"1d12"
                 "bm_pending":           {},   # {uid: {type, die}} queued maneuver effect
@@ -2006,14 +2008,12 @@ class DungeonMasterCog(commands.Cog):
                 "bm_riposte_set":       set(),# BM Riposte pending this round
                 "enemy_ac_penalty":     0,    # BM Trip: enemy AC reduced
                 "enemy_atk_penalty":    0,    # BM Disarm: enemy ATK reduced
-                # Ranger-specific
                 "favored_enemy":        {},   # {uid: str|None} favored enemy type
                 "ensnaring_uids":       set(),# Ensnaring Strike armed (next ranged hit restrain)
                 "hail_uids":            set(),# Hail of Thorns armed (next ranged hit +1d10)
                 "vanish_uids":          set(),# Vanish active this round (half dmg from next hit)
                 "beast_protect_uids":   set(),# Beast Guard active this round (half dmg from next hit)
-                # Wizard-specific
-                "wizard_prepared":      {},   # {uid: list[str]} spells prepared for this combat
+                "spell_prepared":      {},   # {uid: list[str]} spells prepared for this combat
                 "counterspell_uids":    set(),# Counterspell cast — enemy skips attack this round
                 "misty_step_uids":      set(),# Misty Step — half dmg from next hit this round
                 # New engine DLC state
@@ -2034,7 +2034,6 @@ class DungeonMasterCog(commands.Cog):
                     sc  = _get_subclass(self.db, uid, gid, char_class)
                     fs  = _get_fighting_style(self.db, uid, gid, char_class)
                     run_state["fighting_style"][uid]  = fs
-                    run_state["favored_enemy"][uid]   = _get_favored_enemy(self.db, uid, gid)
 
                     if sc == "abjuration":
                         int_mod = stats["mods"]["intelligence"]
@@ -2064,25 +2063,12 @@ class DungeonMasterCog(commands.Cog):
                         run_state["sup_dice"][uid]    = n_dice
                         run_state["sup_die_type"][uid] = die_type
 
-                    if char_class == "fighter":
-                        surge_uses = 2 if level >= 17 else 1
-                        run_state["action_surge_uses"][uid] = surge_uses
-                        indom_uses = (3 if level >= 17 else 2 if level >= 13 else 1) if level >= 9 else 0
-                        run_state["indomitable_uses"][uid]  = indom_uses
-
                     if fs == "protection":
                         run_state["protection_uids"].add(uid)
 
-                    if char_class == "wizard":
-                        _prep = _get_wizard_prepared_spells(self.db, uid, gid)
-                        # Always include cantrips; fallback to starting spells if nothing prepared
-                        _cantrips = list(char_var.WIZARD_CANTRIPS)
-                        if not _prep:
-                            _prep = list(char_var.WIZARD_STARTING_SPELLS)
-                        for _c in _cantrips:
-                            if _c not in _prep:
-                                _prep = [_c] + _prep
-                        run_state["wizard_prepared"][uid] = _prep
+                    _klass_ci = self._engine.registry.get_class(char_class) if self._engine else None
+                    if _klass_ci and "combat_init" in _klass_ci:
+                        _klass_ci["combat_init"](run_state, uid, stats, self.db, gid)
 
                     feat = _get_human_feat(self.db, uid, gid)
                     if feat == "alert":
@@ -2273,8 +2259,9 @@ class DungeonMasterCog(commands.Cog):
                 continue
             _uid_class = _uid_stats["char_class"]
             _uid_level = _uid_stats["level"]
-            if _uid_class == "fighter":
-                run["action_surge_uses"][_uid] = 2 if _uid_level >= 17 else 1
+            _uid_klass = self._engine.registry.get_class(_uid_class) if self._engine else None
+            if _uid_klass and "combat_init" in _uid_klass:
+                _uid_klass["combat_init"](run, _uid, _uid_stats, self.db, gid)
             _uid_sc = _get_subclass(self.db, _uid, gid, _uid_class)
             if _uid_sc == "battle_master" and _uid_level >= 3:
                 _n = 4 + (1 if _uid_level >= 7 else 0) + (1 if _uid_level >= 10 else 0) + (1 if _uid_level >= 15 else 0)
@@ -2374,11 +2361,13 @@ class DungeonMasterCog(commands.Cog):
                 color=var.COLOR_ERROR))
             await asyncio.sleep(1)
 
-        # Ranger Primeval Awareness (Lv 3+): sense if enemy matches favored type
+        # Primeval Awareness: class flag in registry, triggers at Lv 3+
         for _pa_uid, _pa_name in run["participants"]:
             _pa_stats = self._get_char_combat_stats(_pa_uid, gid)
-            if (_pa_stats and _pa_stats["char_class"] == "ranger"
-                    and _pa_stats["level"] >= 3):
+            if not _pa_stats or _pa_stats["level"] < 3:
+                continue
+            _pa_klass = self._engine.registry.get_class(_pa_stats["char_class"]) if self._engine else None
+            if _pa_klass and _pa_klass.get("has_primeval_awareness"):
                 _pa_fe = run.get("favored_enemy", {}).get(_pa_uid)
                 if _pa_fe and _enemy_matches_type(enemy["name"], _pa_fe):
                     await channel.send(embed=discord.Embed(
@@ -3071,10 +3060,12 @@ class DungeonMasterCog(commands.Cog):
                     if stats:
                         char_class = stats["char_class"]
                         level      = stats["level"]
-                        n_atk      = _n_attacks(char_class, level)
+                        n_atk      = _n_attacks(self._engine, char_class, level)
                         is_raging  = uid in run.get("raging_uids", set())
                         is_marked  = uid in run.get("hunters_mark_uids", set())
-                        imp_smite  = char_class == "paladin" and level >= 9
+                        _pal_klass = self._engine.registry.get_class(char_class) if self._engine else None
+                        _smite_lv  = _pal_klass.get("improved_smite_level") if _pal_klass else None
+                        imp_smite  = _smite_lv is not None and level >= _smite_lv
                         help_bonus = run.setdefault("helped_next_attack", {}).pop(uid, 0)
                         b_txt      = f"{stats['atk_bonus']:+d}"
                         rage_txt   = " 💢*(rage ×2)*" if is_raging else ""
@@ -3581,7 +3572,7 @@ class DungeonMasterCog(commands.Cog):
                                 dmg = _tw_dmg_taken(run, target_uid, dmg)
                                 ret_notes.append("*(Bear — half dmg)*")
                                 note_sfx = (" " + " ".join(ret_notes)).rstrip()
-                            # Protection fighting style: other fighter with shield reduces dmg
+                            # Protection fighting style: ally with shield reduces dmg
                             prot_users = [pu for pu in active
                                           if pu != target_uid and pu in run.get("protection_uids", set())
                                           and run["player_hp"].get(pu, 0) > 0]
@@ -3611,9 +3602,9 @@ class DungeonMasterCog(commands.Cog):
                                 "dmg": dmg, "round": rnd,
                             })
                             if run["player_hp"][target_uid] <= 0:
-                                # Indomitable: Fighter saves vs death
                                 indom_left = run.get("indomitable_uses", {}).get(target_uid, 0)
-                                if stats and stats["char_class"] == "fighter" and indom_left > 0:
+                                _indom_klass = self._engine.registry.get_class(stats["char_class"]) if self._engine else None
+                                if indom_left > 0 and _indom_klass and _indom_klass.get("has_indomitable"):
                                     con_mod = stats["mods"]["constitution"]
                                     isave   = random.randint(1, 20) + con_mod
                                     run["indomitable_uses"][target_uid] -= 1
@@ -3842,12 +3833,12 @@ class DungeonMasterCog(commands.Cog):
         # Proficiency bonus if the checked ability is a saving throw proficiency for the class
         char_class  = stats.get("char_class") if stats else None
         _klass_reg  = (self._engine.registry.get_class(char_class) if self._engine and char_class else None)
-        _save_profs = (_klass_reg.get("saving_throws") if _klass_reg else None) or _CLASS_SAVE_PROFS.get(char_class or "", [])
+        _save_profs = _klass_reg.get("saving_throws", []) if _klass_reg else []
         prof_bonus  = stats["prof"] if (stats and skill in _save_profs) else 0
         # Apply Help bonus: +4 from a party member who used /support (must be a different player)
         help_bonus    = 4 if (helper_uid and helper_uid != roller_uid) else 0
-        # Ranger Natural Explorer (Lv 1+): +1 to all skill checks
-        explore_bonus = 1 if (stats and stats["char_class"] == "ranger") else 0
+        _ex_klass     = self._engine.registry.get_class(stats["char_class"]) if (self._engine and stats) else None
+        explore_bonus = (_ex_klass.get("natural_explorer_bonus", 0) if _ex_klass else 0)
         total       = roll + mod + prof_bonus + help_bonus + explore_bonus
         dc          = encounter["dc"]
         success     = total >= dc
@@ -3855,7 +3846,7 @@ class DungeonMasterCog(commands.Cog):
         prof_line    = f"\n⭐ *Proficient — +{prof_bonus} proficiency bonus*\n" if prof_bonus else ""
         help_line    = (f"\n🤝 **{helper_name}** helped — +{help_bonus} bonus!\n"
                         if help_bonus else "")
-        explore_line = "\n🌿 *Natural Explorer — +1 to skill check*\n" if explore_bonus else ""
+        explore_line = f"\n🌿 *Explorer bonus — +{explore_bonus} to skill check*\n" if explore_bonus else ""
         flavor_line  = f'\n*"{flavor}"*\n' if flavor else ""
         roll_detail  = (f"🎲 Rolled **{roll}** {mod:+d}"
                         + (f" +{prof_bonus} (prof)" if prof_bonus else "")

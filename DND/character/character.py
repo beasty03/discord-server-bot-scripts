@@ -789,6 +789,15 @@ class CharacterCog(commands.Cog):
         race  = _get_race(char["race"], self._extra_races())
         klass = _get_class(char["char_class"], self._extra_classes())
 
+        # Add equipped armor / shield AC to the sheet display
+        _eq_rows = self.db.execute(
+            "SELECT item_id FROM dnd_inventory WHERE user_id=? AND guild_id=? AND equipped=1",
+            (uid, gid))
+        for (_eq_id,) in (_eq_rows or []):
+            _eq_item = self._item(_eq_id)
+            if _eq_item and _eq_item.get("slot") in ("armor", "offhand"):
+                d["ac"] += _eq_item.get("ac_bonus", 0)
+
         self.db.ensure_user(uid, gid, target.display_name)
         coins = self.db.get_balance(uid, gid)
 

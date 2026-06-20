@@ -65,7 +65,7 @@ class EngineAPI:
         class_id    = data["id"]
         existing_ids = {a["id"] for a in data.get("abilities", [])}
         for sp in self._r.spells.values():
-            if sp.get("class", "wizard") == class_id and sp["id"] not in existing_ids:
+            if sp.get("class") == class_id and sp["id"] not in existing_ids:
                 handler = sp.get("handler")
                 data.setdefault("abilities", []).append({
                     "id":        sp["id"],
@@ -95,6 +95,8 @@ class EngineAPI:
         log.info("[API] item: %s", item_id)
 
     def add_spell(self, data: dict):
+        if "class" not in data:
+            raise ValueError(f"add_spell({data.get('id')!r}): missing required 'class' field")
         item_id = data["id"]
         handler = data.get("handler")
         if callable(handler):
@@ -103,7 +105,7 @@ class EngineAPI:
         self._r.add_spell(data)
         # If the target class is already registered, inject into its abilities now.
         # (If not registered yet, add_class() will pick up pre-registered spells instead.)
-        target_class = data.get("class", "wizard")
+        target_class = data["class"]
         cls = self._r.classes.get(target_class)
         if cls is not None and not any(a["id"] == item_id for a in cls.get("abilities", [])):
             cls.setdefault("abilities", []).append({
