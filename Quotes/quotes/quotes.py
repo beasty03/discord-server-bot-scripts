@@ -136,6 +136,24 @@ class QuotesCog(commands.Cog):
             )
         """)
 
+    async def _ensure_quote_tracker_role(self, guild: discord.Guild):
+        if any(r.name.lower() == _QUOTE_TRACKER_ROLE for r in guild.roles):
+            return
+        try:
+            await guild.create_role(
+                name="Quote Tracker",
+                reason="Auto-created by Quotes cog — assign to members who can use quote stat commands.",
+            )
+            log.info("QuotesCog: created 'Quote Tracker' role in %s", guild.name)
+        except discord.Forbidden:
+            log.warning("QuotesCog: missing permissions to create 'Quote Tracker' role in %s", guild.name)
+        except Exception as e:
+            log.error("QuotesCog: failed to create 'Quote Tracker' role in %s: %s", guild.name, e)
+
+    @commands.Cog.listener()
+    async def on_guild_available(self, guild: discord.Guild):
+        await self._ensure_quote_tracker_role(guild)
+
     def _get_channel(self) -> discord.TextChannel | None:
         cid = _load_settings().get('quote_channel_id')
         return self.bot.get_channel(int(cid)) if cid else None
