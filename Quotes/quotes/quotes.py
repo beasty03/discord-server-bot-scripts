@@ -30,6 +30,33 @@ def _save_settings(data: dict):
     _SETTINGS_FILE.write_text(json.dumps(data, indent=2), 'utf-8')
 
 
+def _get_period_filter() -> tuple[str, list]:
+    settings = _load_settings()
+    from_date = settings.get('period_from')
+    to_date   = settings.get('period_to')
+    clauses, params = [], []
+    if from_date:
+        clauses.append("created_at >= ?")
+        params.append(from_date)
+    if to_date:
+        clauses.append("created_at <= ?")
+        params.append(to_date + "T23:59:59")
+    return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _period_label() -> str:
+    settings = _load_settings()
+    from_date = settings.get('period_from')
+    to_date   = settings.get('period_to')
+    if from_date and to_date:
+        return f"{from_date} → {to_date}"
+    if from_date:
+        return f"from {from_date}"
+    if to_date:
+        return f"until {to_date}"
+    return ""
+
+
 def _is_gif(message: discord.Message) -> bool:
     if any(a.filename.lower().endswith('.gif') for a in message.attachments):
         return True
@@ -58,6 +85,15 @@ def _extract_gif_url(message: discord.Message) -> str:
     return ''
 
 
+_QUOTE_TRACKER_ROLE = "quote tracker"
+
+
+def _require_quote_tracker(interaction: discord.Interaction) -> bool:
+    if not isinstance(interaction.user, discord.Member):
+        return False
+    return any(r.name.lower() == _QUOTE_TRACKER_ROLE for r in interaction.user.roles)
+
+
 class QuotesCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
@@ -65,6 +101,22 @@ class QuotesCog(commands.Cog):
         self.db  = ForgeDB.get()
         # guild_id -> pending quote data (before gif is submitted)
         self._pending: dict[str, dict] = {}
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            msg = "❌ You need administrator permissions to use this command."
+        elif isinstance(error, app_commands.CheckFailure):
+            msg = f"❌ You need the **Quote Tracker** role to use this command."
+        else:
+            raise error
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=discord.Embed(description=msg, color=var.COLOR_ERROR), ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                embed=discord.Embed(description=msg, color=var.COLOR_ERROR), ephemeral=True
+            )
 
     async def cog_load(self):
         self.db.execute("""
@@ -317,14 +369,14 @@ class QuotesCog(commands.Cog):
             ephemeral=True,
         )
 
-    # ── /edit_quote ───────────────────────────────────────────────────────────
+    # ── /quote_edit ───────────────────────────────────────────────────────────
 
-    @app_commands.command(name="edit_quote", description="Edit your most recently submitted quote.")
+    @app_commands.command(name="quote_edit", description="Edit your most recently submitted quote.")
     @app_commands.describe(
         text="New quote text (leave blank to keep current)",
         user="New person being quoted (leave blank to keep current)",
     )
-    async def edit_quote(
+    async def quote_edit(
         self,
         interaction: discord.Interaction,
         text: str | None = None,
@@ -413,23 +465,27 @@ class QuotesCog(commands.Cog):
 
     @app_commands.command(name="quote_count", description="Show quote statistics for a user.")
     @app_commands.describe(user="User to check (defaults to yourself)")
+    @app_commands.check(_require_quote_tracker)
     async def quote_count(self, interaction: discord.Interaction, user: discord.Member | None = None):
         target = user or interaction.user
         uid    = str(target.id)
         gid    = str(interaction.guild_id)
 
+        period_sql, period_params = _get_period_filter()
+
         rows = self.db.execute(
-            "SELECT COUNT(*) FROM quotes WHERE guild_id = ? AND quoted_user_id = ?",
-            (gid, uid),
+            f"SELECT COUNT(*) FROM quotes WHERE guild_id = ? AND quoted_user_id = ?{period_sql}",
+            (gid, uid, *period_params),
         )
         times_quoted = rows[0][0] if rows else 0
 
         rows = self.db.execute(
-            "SELECT COUNT(*) FROM quotes WHERE guild_id = ? AND quoter_user_id = ?",
-            (gid, uid),
+            f"SELECT COUNT(*) FROM quotes WHERE guild_id = ? AND quoter_user_id = ?{period_sql}",
+            (gid, uid, *period_params),
         )
         times_quoter = rows[0][0] if rows else 0
 
+        period = _period_label()
         embed = discord.Embed(
             title=f"📖 Quote Stats — {target.display_name}",
             color=var.COLOR_QUOTE,
@@ -437,7 +493,7 @@ class QuotesCog(commands.Cog):
         embed.add_field(name="Times Quoted",      value=f"**{times_quoted:,}**", inline=True)
         embed.add_field(name="Quotes Submitted",  value=f"**{times_quoter:,}**", inline=True)
         embed.set_thumbnail(url=target.display_avatar.url)
-        embed.set_footer(text=var.SERVER_NAME)
+        embed.set_footer(text=f"{period} · {var.SERVER_NAME}" if period else var.SERVER_NAME)
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed)
 
@@ -480,6 +536,278 @@ class QuotesCog(commands.Cog):
 
         if gif_url:
             await interaction.followup.send(gif_url)
+
+    # ── /quote_top_quoted ─────────────────────────────────────────────────────
+
+    @app_commands.command(name="quote_top_quoted", description="Show who has been quoted the most on this server.")
+    @app_commands.check(_require_quote_tracker)
+    async def quote_top_quoted(self, interaction: discord.Interaction):
+        gid = str(interaction.guild_id)
+
+        period_sql, period_params = _get_period_filter()
+        rows = self.db.execute(
+            f"""SELECT quoted_user_name, COUNT(*) as cnt
+               FROM quotes WHERE guild_id = ?{period_sql}
+               GROUP BY quoted_user_id
+               ORDER BY cnt DESC LIMIT 10""",
+            (gid, *period_params),
+        )
+
+        if not rows:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="No quotes in the archives yet! Use `/quote` to add some.",
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        medals = ["🥇", "🥈", "🥉"]
+        lines = []
+        for i, (name, cnt) in enumerate(rows):
+            prefix = medals[i] if i < 3 else f"**{i + 1}.**"
+            lines.append(f"{prefix} **{name}** — {cnt:,} quote{'s' if cnt != 1 else ''}")
+
+        period = _period_label()
+        embed = discord.Embed(
+            title="📖 Most Quoted",
+            description="\n".join(lines),
+            color=var.COLOR_QUOTE,
+        )
+        embed.set_footer(text=f"{period} · {var.SERVER_NAME}" if period else var.SERVER_NAME)
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed)
+
+    # ── /quote_search ─────────────────────────────────────────────────────────
+
+    @app_commands.command(name="quote_search", description="Browse quotes by a specific person.")
+    @app_commands.describe(
+        user="Person to look up",
+        filter="'quoted' = things they said, 'submitted' = quotes they submitted (default: quoted)",
+    )
+    @app_commands.choices(filter=[
+        app_commands.Choice(name="quoted",    value="quoted"),
+        app_commands.Choice(name="submitted", value="submitted"),
+    ])
+    @app_commands.check(_require_quote_tracker)
+    async def quote_search(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        filter: str = "quoted",
+    ):
+        gid = str(interaction.guild_id)
+        uid = str(user.id)
+
+        period_sql, period_params = _get_period_filter()
+
+        if filter == "submitted":
+            rows = self.db.execute(
+                f"""SELECT quote_text, quoted_user_name, quoter_user_name, created_at
+                   FROM quotes
+                   WHERE guild_id = ? AND quoter_user_id = ?{period_sql}
+                   ORDER BY id DESC LIMIT 8""",
+                (gid, uid, *period_params),
+            )
+            label = f"Quotes submitted by {user.display_name}"
+        else:
+            rows = self.db.execute(
+                f"""SELECT quote_text, quoted_user_name, quoter_user_name, created_at
+                   FROM quotes
+                   WHERE guild_id = ? AND quoted_user_id = ?{period_sql}
+                   ORDER BY id DESC LIMIT 8""",
+                (gid, uid, *period_params),
+            )
+            label = f"Quotes from {user.display_name}"
+
+        if not rows:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f"No quotes found for **{user.display_name}** ({filter}).",
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        def fmt_row(r):
+            text, quoted_name, quoter_name, created_at = r
+            date = created_at[:10] if created_at else "?"
+            return f'> {text}\n**— {quoted_name}** · *Submitted by {quoter_name} · {date}*'
+
+        description = "\n\n".join(fmt_row(r) for r in rows)
+        if len(description) > 4096:
+            description = description[:4090] + "…"
+
+        period = _period_label()
+        footer_parts = ["Showing up to 8 most recent"]
+        if period:
+            footer_parts.append(period)
+        footer_parts.append(var.SERVER_NAME)
+
+        embed = discord.Embed(
+            title=f"📖 {label}",
+            description=description,
+            color=var.COLOR_QUOTE,
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_footer(text=" · ".join(footer_parts))
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed)
+
+    # ── /quote_lookup ─────────────────────────────────────────────────────────
+
+    @app_commands.command(name="quote_lookup", description="Search quotes containing a specific word or phrase.")
+    @app_commands.describe(word="Word or phrase to search for in the quote text")
+    @app_commands.check(_require_quote_tracker)
+    async def quote_lookup(self, interaction: discord.Interaction, word: str):
+        gid = str(interaction.guild_id)
+
+        period_sql, period_params = _get_period_filter()
+        rows = self.db.execute(
+            f"""SELECT quote_text, quoted_user_name, quoter_user_name, created_at
+               FROM quotes
+               WHERE guild_id = ? AND LOWER(quote_text) LIKE ?{period_sql}
+               ORDER BY id DESC LIMIT 8""",
+            (gid, f"%{word.lower()}%", *period_params),
+        )
+
+        if not rows:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description=f'No quotes found containing **"{word}"**.',
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        def fmt_row(r):
+            text, quoted_name, quoter_name, created_at = r
+            date = created_at[:10] if created_at else "?"
+            return f'> {text}\n**— {quoted_name}** · *Submitted by {quoter_name} · {date}*'
+
+        description = "\n\n".join(fmt_row(r) for r in rows)
+        if len(description) > 4096:
+            description = description[:4090] + "…"
+
+        period = _period_label()
+        footer_parts = ["Showing up to 8 results"]
+        if period:
+            footer_parts.append(period)
+        footer_parts.append(var.SERVER_NAME)
+
+        embed = discord.Embed(
+            title=f'📖 Quotes containing "{word}"',
+            description=description,
+            color=var.COLOR_QUOTE,
+        )
+        embed.set_footer(text=" · ".join(footer_parts))
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed)
+
+    # ── /quote_top_quoters ────────────────────────────────────────────────────
+
+    @app_commands.command(name="quote_top_quoters", description="Show who has submitted the most quotes on this server.")
+    @app_commands.check(_require_quote_tracker)
+    async def quote_top_quoters(self, interaction: discord.Interaction):
+        gid = str(interaction.guild_id)
+
+        period_sql, period_params = _get_period_filter()
+        rows = self.db.execute(
+            f"""SELECT quoter_user_name, COUNT(*) as cnt
+               FROM quotes WHERE guild_id = ?{period_sql}
+               GROUP BY quoter_user_id
+               ORDER BY cnt DESC LIMIT 10""",
+            (gid, *period_params),
+        )
+
+        if not rows:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="No quotes in the archives yet! Use `/quote` to add some.",
+                    color=var.COLOR_ERROR,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        medals = ["🥇", "🥈", "🥉"]
+        lines = []
+        for i, (name, cnt) in enumerate(rows):
+            prefix = medals[i] if i < 3 else f"**{i + 1}.**"
+            lines.append(f"{prefix} **{name}** — {cnt:,} quote{'s' if cnt != 1 else ''}")
+
+        period = _period_label()
+        embed = discord.Embed(
+            title="📖 Top Quoters",
+            description="\n".join(lines),
+            color=var.COLOR_QUOTE,
+        )
+        embed.set_footer(text=f"{period} · {var.SERVER_NAME}" if period else var.SERVER_NAME)
+        embed.timestamp = datetime.utcnow()
+        await interaction.response.send_message(embed=embed)
+
+    # ── /quote_statsdate ──────────────────────────────────────────────────────
+
+    @app_commands.command(name="quote_statsdate", description="Set or clear the date range all stat commands filter by.")
+    @app_commands.describe(
+        from_date="Start date (YYYY-MM-DD). Leave blank to clear the filter.",
+        to_date="End date (YYYY-MM-DD, optional — leave blank for no end).",
+    )
+    @app_commands.check(_require_quote_tracker)
+    async def quote_statsdate(
+        self,
+        interaction: discord.Interaction,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ):
+        if from_date is None and to_date is None:
+            data = _load_settings()
+            data.pop('period_from', None)
+            data.pop('period_to', None)
+            _save_settings(data)
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="✅ Date filter cleared — all stat commands now show all-time.",
+                    color=var.COLOR_WIN,
+                ),
+                ephemeral=True,
+            )
+            return
+
+        for label, d in [("from_date", from_date), ("to_date", to_date)]:
+            if d is None:
+                continue
+            try:
+                datetime.strptime(d, "%Y-%m-%d")
+            except ValueError:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        description=f'❌ Invalid date **"{d}"**. Use **YYYY-MM-DD** (e.g. `2024-06-15`).',
+                        color=var.COLOR_ERROR,
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+        data = _load_settings()
+        data['period_from'] = from_date
+        if to_date:
+            data['period_to'] = to_date
+        else:
+            data.pop('period_to', None)
+        _save_settings(data)
+
+        label = f"**{from_date}** → **{to_date}**" if to_date else f"**{from_date}** onwards"
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Stat commands will now filter to {label}.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
 
     # ── /set_quote_channel ────────────────────────────────────────────────────
 
