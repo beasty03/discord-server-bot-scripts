@@ -221,12 +221,17 @@ class ImportQuotesCog(commands.Cog):
             content = (msg.content or '').strip()
 
             sep = content.rfind(' - ')
-            if sep == -1:
-                i += 1
-                continue
+            if sep != -1:
+                name_start = sep + 3
+            else:
+                sep = content.rfind(' -')
+                if sep == -1:
+                    i += 1
+                    continue
+                name_start = sep + 2
 
             quote_text = content[:sep].strip().strip('"').strip("'")
-            raw_name   = content[sep + 3:].strip()
+            raw_name   = content[name_start:].strip()
 
             if not quote_text or not raw_name or raw_name.startswith('http'):
                 i += 1

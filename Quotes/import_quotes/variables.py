@@ -29,4 +29,7 @@ NAME_MAP: dict[str, tuple[str, str]] = {
     "siebe": ("364106811504197632", "Siebe"),
     "Joran": ("442295615636897822", "Joran"),
     "joran": ("442295615636897822", "Joran"),
+    "Your mom":                        ("external", "Your Mom"),
+    "your mom":                        ("external", "Your Mom"),
+    "Some dude thats a commentator":   ("external", "Some Dude"),
 }
