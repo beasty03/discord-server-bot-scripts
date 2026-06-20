@@ -564,9 +564,11 @@ class QuotesCog(commands.Cog):
 
         period_sql, period_params = _get_period_filter()
         rows = self.db.execute(
-            f"""SELECT quoted_user_name, COUNT(*) as cnt
+            f"""SELECT MAX(quoted_user_name), COUNT(*) as cnt
                FROM quotes WHERE guild_id = ?{period_sql}
-               GROUP BY quoted_user_id
+               GROUP BY CASE WHEN quoted_user_id = '0'
+                             THEN LOWER(quoted_user_name)
+                             ELSE quoted_user_id END
                ORDER BY cnt DESC LIMIT 10""",
             (gid, *period_params),
         )
