@@ -94,8 +94,8 @@ class _ConfirmView(discord.ui.View):
             try:
                 if q["is_update"]:
                     self.cog.db.execute(
-                        "UPDATE quotes SET quoted_user_id = ? WHERE id = ?",
-                        (q["quoted_uid"], q["existing_id"]),
+                        "UPDATE quotes SET quoted_user_id = ?, quoted_user_name = ? WHERE id = ?",
+                        (q["quoted_uid"], q["quoted_uname"], q["existing_id"]),
                     )
                     updated += 1
                 else:
@@ -260,24 +260,27 @@ class ImportQuotesCog(commands.Cog):
             date_str     = msg.created_at.isoformat()
 
             existing = self.db.execute(
-                "SELECT id, quoted_user_id FROM quotes WHERE guild_id = ? AND quote_text = ? AND quoted_user_name = ?",
+                "SELECT id, quoted_user_id, quoted_user_name FROM quotes "
+                "WHERE guild_id = ? AND quote_text = ? AND quoted_user_name = ? COLLATE NOCASE",
                 (gid, quote_text, quoted_uname),
             )
             if existing:
-                existing_id, existing_uid = existing[0]
-                if existing_uid == "0" and quoted_uid != "0":
+                existing_id, existing_uid, existing_uname = existing[0]
+                needs_uid_fix  = existing_uid == "0" and quoted_uid != "0"
+                needs_name_fix = existing_uname != quoted_uname
+                if needs_uid_fix or needs_name_fix:
                     pending.append({
-                        "quote_text":  quote_text,
-                        "quoted_uid":  quoted_uid,
+                        "quote_text":   quote_text,
+                        "quoted_uid":   quoted_uid,
                         "quoted_uname": quoted_uname,
-                        "quoter_uid":  quoter_uid,
+                        "quoter_uid":   quoter_uid,
                         "quoter_uname": quoter_uname,
-                        "date_str":    date_str,
-                        "msg_id":      str(msg.id),
-                        "gif_url":     gif_url,
-                        "channel_id":  str(channel.id),
-                        "is_update":   True,
-                        "existing_id": existing_id,
+                        "date_str":     date_str,
+                        "msg_id":       str(msg.id),
+                        "gif_url":      gif_url,
+                        "channel_id":   str(channel.id),
+                        "is_update":    True,
+                        "existing_id":  existing_id,
                     })
                 else:
                     duplicates += 1
