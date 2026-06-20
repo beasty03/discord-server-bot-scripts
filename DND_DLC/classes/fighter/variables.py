@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
     # ── Damage types ──────────────────────────────────────────────────────────
     api.define_damage_type("fire",   label="Fire",   icon="🔥")

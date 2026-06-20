@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Message, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Message, Status
 
     api.define_status("misty_stepped", label="Misty Step", icon="💨",
                       effects={"damage_mult": 0.5, "clears_on_take_hit": True})

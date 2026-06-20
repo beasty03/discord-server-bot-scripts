@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Message, Modify
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Message, Modify
 
     # ── Shop listing for campaign drop ────────────────────────────────────────
     # storm_breaker is registered in campaigns/the_lonely_ice_mountain/variables.py

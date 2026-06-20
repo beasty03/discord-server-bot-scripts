@@ -1,5 +1,3 @@
-from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
-
 # ── Wizard spell catalog — used by /prepare_spells, /spells, /learn_spell ────
 _WIZARD_SPELL_DATA: list[dict] = [
     {"id": "magic_missile", "name": "Magic Missile", "emoji": "✨",
@@ -41,6 +39,7 @@ _WIZARD_STARTING_SPELL_IDS: list[str] = ["magic_missile", "shield_spell", "burni
 
 
 def register(api):
+    from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
     _reg = api.registry
 

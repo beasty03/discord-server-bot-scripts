@@ -1,6 +1,3 @@
-from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
-
-
 def _ranger_combat_init(run: dict, uid: str, stats: dict, db, gid: str) -> None:
     rows = db.execute(
         "SELECT choice_val FROM dnd_character_choices "
@@ -24,6 +21,7 @@ def _ranger_on_subclass_chosen(chosen_id: str, db, uid: str, gid: str) -> None:
 
 
 def register(api):
+    from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
     # ── Statuses ──────────────────────────────────────────────────────────────
     api.define_status("ensnared",       label="Ensnared",       icon="🕸️",

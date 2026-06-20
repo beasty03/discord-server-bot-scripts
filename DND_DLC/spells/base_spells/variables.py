@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Message, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Message, Status
 
     api.define_status("shielded", label="Shielded", icon="🛡️",
                       effects={"player_ac_bonus": 5, "clears_on_take_hit": True})

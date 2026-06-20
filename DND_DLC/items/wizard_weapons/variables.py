@@ -1,5 +1,3 @@
-from DND.DungeonMaster.effects import Message, Modify
-
 # All wizard ability IDs — keeps the hook from firing on normal attacks
 _WIZARD_ABILITY_IDS = frozenset({
     "fire_bolt", "ray_of_frost", "acid_splash",
@@ -11,6 +9,7 @@ _FIRE_SPELL_IDS      = frozenset({"fire_bolt", "burning_hands", "scorching_ray"}
 
 
 def register(api):
+    from DND.DungeonMaster.effects import Message, Modify
 
     def _wizard_weapon_passive(ctx):
         if ctx.player.char_class != "wizard": return []

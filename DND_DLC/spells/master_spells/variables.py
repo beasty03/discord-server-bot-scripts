@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Message, Modify, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Message, Modify, Status
 
     api.define_damage_type("fire", label="Fire", icon="🔥")
 

@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Heal, Message, Modify
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Heal, Message, Modify
 
     # ── Campaign-exclusive items ───────────────────────────────────────────────
 

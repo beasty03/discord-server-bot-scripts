@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import BonusAttack, Flag, Heal, Message, Modify, Status
 
     # ── Statuses ──────────────────────────────────────────────────────────────
     api.define_status("gwm_primed",   label="Great Weapon",  icon="⚔️",

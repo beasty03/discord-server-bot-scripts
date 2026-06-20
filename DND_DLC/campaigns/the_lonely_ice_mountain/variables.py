@@ -1,7 +1,5 @@
-from DND.DungeonMaster.effects import Flag, Message, Modify, Status
-
-
 def register(api):
+    from DND.DungeonMaster.effects import Flag, Message, Modify, Status
 
     # ── Campaign-exclusive items ───────────────────────────────────────────────
 
