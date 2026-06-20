@@ -102,9 +102,11 @@ class ImportQuotesCog(commands.Cog):
     @app_commands.check(_require_quote_tracker)
     async def quote_import(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await interaction.response.defer(ephemeral=True)
+        _spec.loader.exec_module(var)  # reload so NAME_MAP changes take effect without restart
 
         gid = str(interaction.guild_id)
         imported      = 0
+        updated       = 0
         skipped       = 0
         duplicates    = 0
         unknown_names: set[str] = set()
@@ -161,11 +163,19 @@ class ImportQuotesCog(commands.Cog):
             date_str = msg.created_at.isoformat()
 
             existing = self.db.execute(
-                "SELECT id FROM quotes WHERE guild_id = ? AND quote_text = ? AND quoted_user_name = ?",
+                "SELECT id, quoted_user_id FROM quotes WHERE guild_id = ? AND quote_text = ? AND quoted_user_name = ?",
                 (gid, quote_text, quoted_uname),
             )
             if existing:
-                duplicates += 1
+                existing_id, existing_uid = existing[0]
+                if existing_uid == "0" and quoted_uid != "0":
+                    self.db.execute(
+                        "UPDATE quotes SET quoted_user_id = ? WHERE id = ?",
+                        (quoted_uid, existing_id),
+                    )
+                    updated += 1
+                else:
+                    duplicates += 1
                 i += 2 if skip_next else 1
                 continue
 
@@ -198,6 +208,8 @@ class ImportQuotesCog(commands.Cog):
             i += 2 if skip_next else 1
 
         out = [f"✅ Imported **{imported}** quote(s) from {channel.mention}."]
+        if updated:
+            out.append(f"🔄 Updated **{updated}** quote(s) that had an unresolved name — user ID now set.")
         if duplicates:
             out.append(f"⏭️ Skipped **{duplicates}** duplicate(s) already in the database.")
         if skipped:
