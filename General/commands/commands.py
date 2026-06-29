@@ -20,6 +20,7 @@ log = logging.getLogger("launcher")
 _ADMIN_SECTIONS = [
     ("⚙️ Config",          "ConfigCog"),
     ("👋 Welcome System",  "WelcomeSystem"),
+    ("📜 Rules",           "Rules"),
     ("📋 Commands",        "CommandsCog"),
 ]
 
@@ -61,7 +62,6 @@ _CATEGORIES = [
         "label":   "📋 General",
         "color":   var.COLOR_GENERAL,
         "sections": [
-            ("📜 Rules",         "Rules"),
             ("🎭 Self Roles",    "SelfRoles"),
             ("💬 Quotes",        "QuotesCog"),
             ("📖 Help",          "HelpCog"),
@@ -161,6 +161,36 @@ def _check_command_channel(db) -> str:
     return "⚠️ **Command channel not set** — run `/set_command_channel`"
 
 
+# ── Bot logs helper ────────────────────────────────────────────────────────────
+
+def _bot_logs(guild: discord.Guild) -> discord.TextChannel | None:
+    return discord.utils.get(guild.text_channels, name="bot-logs")
+
+
+async def _send_status_if_incomplete(guild: discord.Guild, db):
+    """Post the setup status embed to #bot-logs if anything is not configured."""
+    lines = _check_welcome(db)
+    lines.append(_check_self_roles(db))
+    lines.append(_check_command_channel(db))
+
+    if all(l.startswith("✅") for l in lines):
+        return  # everything configured — no need to notify
+
+    ch = _bot_logs(guild)
+    if not ch:
+        return
+
+    embed = discord.Embed(
+        title="⚠️ Server Setup Incomplete",
+        description="\n".join(lines),
+        color=var.COLOR_WARN,
+    )
+    embed.set_footer(
+        text=f"🤖 {var.SERVER_NAME}  •  Run the listed commands to finish setup"
+    )
+    await ch.send(embed=embed)
+
+
 # ── Embed builders ─────────────────────────────────────────────────────────────
 
 def _build_status_embed(db) -> discord.Embed:
@@ -189,7 +219,7 @@ def _build_category_embed(bot: commands.Bot, cat: dict) -> discord.Embed | None:
         cog  = bot.cogs.get(cog_name)
         if cog is None:
             continue
-        cmds = cog.get_app_commands()
+        cmds = [c for c in cog.get_app_commands() if not c.name.startswith("set_")]
         if not cmds:
             continue
         any_field = True
@@ -246,6 +276,10 @@ class CommandsCog(commands.Cog):
             log.info("Commands: command list auto-updated on ready")
         except Exception as exc:
             log.warning("Commands: auto-update on ready failed: %s", exc)
+        try:
+            await _send_status_if_incomplete(guild, self.db)
+        except Exception as exc:
+            log.warning("Commands: status check on ready failed: %s", exc)
 
     # ── Internal: post or edit ─────────────────────────────────────────────────
 
@@ -387,6 +421,11 @@ class CommandsCog(commands.Cog):
                 ),
                 ephemeral=True,
             )
+
+        try:
+            await _send_status_if_incomplete(interaction.guild, self.db)
+        except Exception as exc:
+            log.warning("Commands: status check on refresh failed: %s", exc)
 
 
 async def setup(bot: commands.Bot):
