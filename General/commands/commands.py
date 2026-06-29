@@ -167,28 +167,43 @@ def _bot_logs(guild: discord.Guild) -> discord.TextChannel | None:
     return discord.utils.get(guild.text_channels, name="bot-logs")
 
 
-async def _send_status_if_incomplete(guild: discord.Guild, db):
-    """Post the setup status embed to #bot-logs if anything is not configured."""
-    lines = _check_welcome(db)
-    lines.append(_check_self_roles(db))
-    lines.append(_check_command_channel(db))
-
-    if all(l.startswith("✅") for l in lines):
-        return  # everything configured — no need to notify
-
+async def _post_or_update_status_in_logs(guild: discord.Guild, db):
+    """Keep a single pinned status embed in #bot-logs, editing it in place on refresh."""
     ch = _bot_logs(guild)
     if not ch:
         return
 
+    lines = _check_welcome(db)
+    lines.append(_check_self_roles(db))
+    lines.append(_check_command_channel(db))
+
+    all_ok = all(l.startswith("✅") for l in lines)
     embed = discord.Embed(
-        title="⚠️ Server Setup Incomplete",
+        title="📊 Server Setup Status",
         description="\n".join(lines),
-        color=var.COLOR_WARN,
+        color=var.COLOR_OK if all_ok else var.COLOR_WARN,
     )
     embed.set_footer(
-        text=f"🤖 {var.SERVER_NAME}  •  Run the listed commands to finish setup"
+        text=f"🤖 {var.SERVER_NAME}  •  Last refreshed {datetime.utcnow().strftime('%d %b %Y · %H:%M')} UTC"
     )
-    await ch.send(embed=embed)
+
+    mid = _get_cfg(db, "status_message_id")
+    if mid:
+        try:
+            msg = await ch.fetch_message(int(mid))
+            await msg.edit(embed=embed)
+            return
+        except discord.NotFound:
+            pass
+        except Exception as exc:
+            log.warning("Commands: failed to edit status message in bot-logs: %s", exc)
+
+    msg = await ch.send(embed=embed)
+    _set_cfg(db, "status_message_id", str(msg.id))
+    try:
+        await msg.pin()
+    except discord.Forbidden:
+        log.warning("Commands: no permission to pin in #bot-logs")
 
 
 # ── Embed builders ─────────────────────────────────────────────────────────────
@@ -236,7 +251,7 @@ def _build_category_embed(bot: commands.Bot, cat: dict) -> discord.Embed | None:
 
 
 def _build_all_embeds(bot: commands.Bot, db) -> list[discord.Embed]:
-    embeds = [_build_status_embed(db)]
+    embeds = []
     for cat in _CATEGORIES:
         e = _build_category_embed(bot, cat)
         if e:
@@ -277,7 +292,7 @@ class CommandsCog(commands.Cog):
         except Exception as exc:
             log.warning("Commands: auto-update on ready failed: %s", exc)
         try:
-            await _send_status_if_incomplete(guild, self.db)
+            await _post_or_update_status_in_logs(guild, self.db)
         except Exception as exc:
             log.warning("Commands: status check on ready failed: %s", exc)
 
@@ -423,7 +438,7 @@ class CommandsCog(commands.Cog):
             )
 
         try:
-            await _send_status_if_incomplete(interaction.guild, self.db)
+            await _post_or_update_status_in_logs(interaction.guild, self.db)
         except Exception as exc:
             log.warning("Commands: status check on refresh failed: %s", exc)
 
