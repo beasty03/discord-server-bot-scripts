@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location('cc_variables', Path(__file__).parent / 'variables.py')
+_spec = _ilu.spec_from_file_location('cmd_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
@@ -15,13 +15,12 @@ from forge_db import ForgeDB
 log = logging.getLogger("launcher")
 
 # ── Category definitions ───────────────────────────────────────────────────────
-# Mirrors help.py CATEGORIES but extended with the new casino cog names.
 
 # These sections are excluded from the public command channel but shown via /see_admin_commands.
 _ADMIN_SECTIONS = [
     ("⚙️ Config",          "ConfigCog"),
     ("👋 Welcome System",  "WelcomeSystem"),
-    ("📌 Command Channel", "CommandChannelCog"),
+    ("📋 Commands",        "CommandsCog"),
 ]
 
 # Admin category is intentionally excluded — admin commands are for server owners only
@@ -198,7 +197,6 @@ def _build_category_embed(bot: commands.Bot, cat: dict) -> discord.Embed | None:
             f"`/{cmd.name}` — {cmd.description}" if cmd.description else f"`/{cmd.name}`"
             for cmd in sorted(cmds, key=lambda c: c.name)
         ]
-        # Keep field value within Discord's 1024-char limit
         value = "\n".join(lines)
         if len(value) > 1020:
             value = value[:1020] + "\n…"
@@ -220,7 +218,7 @@ def _build_all_embeds(bot: commands.Bot, db) -> list[discord.Embed]:
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
-class CommandChannelCog(commands.Cog):
+class CommandsCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -245,9 +243,9 @@ class CommandChannelCog(commands.Cog):
             return
         try:
             await self._post_or_update(guild)
-            log.info("CommandChannel: command list auto-updated on ready")
+            log.info("Commands: command list auto-updated on ready")
         except Exception as exc:
-            log.warning("CommandChannel: auto-update on ready failed: %s", exc)
+            log.warning("Commands: auto-update on ready failed: %s", exc)
 
     # ── Internal: post or edit ─────────────────────────────────────────────────
 
@@ -270,7 +268,7 @@ class CommandChannelCog(commands.Cog):
             except discord.NotFound:
                 pass  # message was deleted — post a fresh one
             except Exception as exc:
-                log.warning("CommandChannel: failed to edit message: %s", exc)
+                log.warning("Commands: failed to edit message: %s", exc)
 
         # Post fresh message and pin it
         msg = await channel.send(embeds=embeds)
@@ -278,7 +276,7 @@ class CommandChannelCog(commands.Cog):
         try:
             await msg.pin()
         except discord.Forbidden:
-            log.warning("CommandChannel: no permission to pin in #%s", channel.name)
+            log.warning("Commands: no permission to pin in #%s", channel.name)
         return msg
 
     # ── Commands ───────────────────────────────────────────────────────────────
@@ -392,5 +390,5 @@ class CommandChannelCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(CommandChannelCog(bot))
-    log.info("✅ Admin/CommandChannel cog loaded")
+    await bot.add_cog(CommandsCog(bot))
+    log.info("✅ General/Commands cog loaded")
