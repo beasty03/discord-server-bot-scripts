@@ -1,5 +1,5 @@
 
-# 🧠 Quote Quizes
+# 🧠 Quotes Event
 
 A standalone multiplayer event built from the server's own quote archive. The bot posts a 4-choice trivia question publicly — guess who said it, who submitted it, or complete the missing half — and only the fastest correct answer in the channel wins coins. Runs independently of the Casino Event system, with its own channel and trigger.
 
@@ -14,7 +14,7 @@ A standalone multiplayer event built from the server's own quote archive. The bo
 
 ## 🚀 Installation
 
-Load the cog as `Quotes.quote_quizes.quote_quizes`.
+Load the cog as `Events.quotes_event.quotes_event`.
 
 ## 🎮 Commands
 
@@ -46,4 +46,4 @@ This is its own event type — it is **not** part of `/startevent` or the Casino
 
 ## Requirements
 
-Needs at least **4 quotes** in the database with different authors to generate quiz questions. Use `/quote` and `/quote_import` to populate the archive.
+Needs at least **4 quotes** in the database with different authors to generate quiz questions. Use `/quote` and `/quote_import` (in the Quotes cogs) to populate the archive.

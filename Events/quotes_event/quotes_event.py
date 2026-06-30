@@ -10,13 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location('qq_variables', Path(__file__).parent / 'variables.py')
+_spec = _ilu.spec_from_file_location('qe_variables', Path(__file__).parent / 'variables.py')
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
 log = logging.getLogger("launcher")
-_SETTINGS_FILE = Path(__file__).parent / "quiz_settings.json"
+_SETTINGS_FILE = Path(__file__).parent / "quotes_event_settings.json"
 
 _MAX_LABEL = 70
 
@@ -216,7 +216,7 @@ class _QuizEventView(discord.ui.View):
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
-class QuoteQuizCog(commands.Cog):
+class QuotesEventCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot          = bot
@@ -264,8 +264,9 @@ class QuoteQuizCog(commands.Cog):
             description=(
                 f"**{n_questions} question{'s' if n_questions != 1 else ''}** "
                 f"· {var.EVENT_QUESTION_TIMEOUT}s per question\n\n"
-                f"🥇 First correct: {sym} **{var.EVENT_REWARD_FIRST:,}**\n"
-                f"✅ Any correct:   {sym} **{var.EVENT_REWARD_CORRECT:,}**"
+                f"Only the **first correct answer** wins!\n"
+                f"🥇 Instant: {sym} **{var.EVENT_REWARD_FIRST:,}** → "
+                f"⏱️ Last second: {sym} **{var.EVENT_REWARD_MIN:,}**"
             ),
             color=var.COLOR_EVENT,
         ))
@@ -412,5 +413,5 @@ class QuoteQuizCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(QuoteQuizCog(bot))
-    log.info("✅ Quotes/QuoteQuiz cog loaded")
+    await bot.add_cog(QuotesEventCog(bot))
+    log.info("✅ Events/QuotesEvent cog loaded")

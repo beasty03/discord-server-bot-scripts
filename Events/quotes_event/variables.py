@@ -9,7 +9,7 @@ CURRENCY_NAME   = config.get("currency_name",   "coins")
 CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # ============================================================================
-# QUIZ EVENT
+# QUOTE QUIZ EVENT
 # ============================================================================
 
 EVENT_QUESTIONS        = 5    # Default number of questions per event
