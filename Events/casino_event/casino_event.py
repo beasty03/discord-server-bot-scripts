@@ -162,6 +162,16 @@ def _hr_winner() -> int:
             return h["id"]
     return _HORSES[-1]["id"]
 
+# ── Shared dice helper ────────────────────────────────────────────────────────
+_DICE = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+
+def _dice_str(d1: int, d2: int) -> str:
+    return f"{_DICE[d1 - 1]} {_DICE[d2 - 1]}"
+
+# ── Under/Over data ───────────────────────────────────────────────────────────
+_UO_PAYOUT = {"under": 2.2, "exact": 5.5, "over": 2.2}
+_UO_LABELS = {"under": "🔽 Under 7", "exact": "7️⃣ Exactly 7", "over": "🔼 Over 7"}
+
 # ── Roulette data ─────────────────────────────────────────────────────────────
 _RED = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 
@@ -185,6 +195,8 @@ def _display_bet(bet) -> str:
         return f"{h['emoji']} {h['name']}"
     if not isinstance(bet, str) or not bet:
         return ""
+    if bet in _UO_LABELS:
+        return _UO_LABELS[bet]
     if bet.startswith("number:"):
         return f"🎯 {bet.split(':')[1]}"
     return bet
@@ -281,11 +293,83 @@ def resolve_horseracing(participants: dict, db, gid: str, dm_mult: float = 1.0, 
     return f"🏆 **{winner['emoji']} {winner['name']}** wins the race!", rows
 
 
+def resolve_craps(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = "", prize_pool: int = 0):
+    d1, d2  = random.randint(1, 6), random.randint(1, 6)
+    total   = d1 + d2
+    ds      = _dice_str(d1, d2)
+    _NATURALS = {7, 11}
+    _CRAPS    = {2, 3, 12}
+
+    if total in _NATURALS:
+        won     = True
+        summary = f"{ds} = **{total}** — Natural! Pass line wins!"
+    elif total in _CRAPS:
+        won     = False
+        summary = f"{ds} = **{total}** — Craps! Pass line loses."
+    else:
+        point   = total
+        rolls   = []
+        won     = False
+        while True:
+            r1, r2 = random.randint(1, 6), random.randint(1, 6)
+            rt = r1 + r2
+            rolls.append(rt)
+            if rt == point:
+                won = True
+                break
+            if rt == 7:
+                break
+        roll_str = " → ".join(str(r) for r in rolls)
+        outcome  = f"Point **{point}** hit!" if won else "Seven out!"
+        summary  = f"{ds} = **{total}** (point {point}) → {roll_str} — {outcome}"
+
+    rows = []
+    for uid, data in participants.items():
+        amount = data["amount"]
+        if won:
+            payout = amount * 2
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
+            db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
+            rows.append((uid, f"+{amount:,}", "✅", "Pass"))
+        else:
+            rows.append((uid, f"-{amount:,}", "❌", "Pass"))
+    return summary, rows
+
+
+def resolve_underover(participants: dict, db, gid: str, dm_mult: float = 1.0, bot_uid: str = "", prize_pool: int = 0):
+    d1, d2 = random.randint(1, 6), random.randint(1, 6)
+    total  = d1 + d2
+    ds     = _dice_str(d1, d2)
+    actual = "under" if total < 7 else ("exact" if total == 7 else "over")
+
+    rows = []
+    for uid, data in participants.items():
+        amount = data["amount"]
+        bet    = data["bet"]
+        if bet == actual:
+            mult   = _UO_PAYOUT[bet]
+            payout = int(amount * mult)
+            if dm_mult > 1.0:
+                payout = amount + int((payout - amount) * dm_mult)
+            db.update_balance(uid, gid, payout, 'event_win')
+            if bot_uid:
+                _house_tx(db, bot_uid, gid, -payout, 'house_payout')
+            rows.append((uid, f"+{payout - amount:,}", "✅", bet))
+        else:
+            rows.append((uid, f"-{amount:,}", "❌", bet))
+    return f"{ds} = **{total}** — {_UO_LABELS[actual]}!", rows
+
+
 RESOLVERS = {
     "roulette":    resolve_roulette,
     "gamble":      resolve_gamble,
     "baccarat":    resolve_baccarat,
     "horseracing": resolve_horseracing,
+    "craps":       resolve_craps,
+    "underover":   resolve_underover,
 }
 
 # ============================================================================
@@ -388,10 +472,20 @@ class HorseRacingEventView(_BetView):
         return _cb
 
 
+class UnderOverEventView(_BetView):
+    @discord.ui.button(label="🔽 Under 7  (2.2×)", style=discord.ButtonStyle.primary,   row=0)
+    async def under(self, i: discord.Interaction, _b): await self._pick(i, "under")
+    @discord.ui.button(label="7️⃣ Exactly 7 (5.5×)", style=discord.ButtonStyle.secondary, row=0)
+    async def exact(self,  i: discord.Interaction, _b): await self._pick(i, "exact")
+    @discord.ui.button(label="🔼 Over 7   (2.2×)", style=discord.ButtonStyle.primary,   row=0)
+    async def over(self,  i: discord.Interaction, _b): await self._pick(i, "over")
+
+
 _BET_VIEWS: dict[str, type[_BetView]] = {
     "roulette":    RouletteBetView,
     "baccarat":    BaccaratBetView,
     "horseracing": HorseRacingEventView,
+    "underover":   UnderOverEventView,
 }
 
 _DEFAULT_BETS: dict[str, callable] = {
@@ -399,6 +493,8 @@ _DEFAULT_BETS: dict[str, callable] = {
     "baccarat":    lambda: random.choice(["player", "banker"]),
     "gamble":      lambda: True,
     "horseracing": lambda: random.randint(1, 6),
+    "underover":   lambda: random.choice(["under", "over"]),
+    "craps":       lambda: "pass",
 }
 
 def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict, closed: bool = False) -> discord.Embed:
@@ -816,6 +912,13 @@ class CasinoEventCog(commands.Cog):
             mult_value = "Scheduled — exact time unknown until the current wait resolves."
         embed.add_field(name="✨ Multiplier Event", value=mult_value, inline=False)
 
+        quiz_cog = self.bot.get_cog("QuoteQuizCog")
+        if quiz_cog and getattr(quiz_cog, "event_active", False):
+            quiz_value = "🧠 **Quote Quiz event is live!**"
+        else:
+            quiz_value = "No quiz event running."
+        embed.add_field(name="🧠 Quote Quiz", value=quiz_value, inline=False)
+
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -912,8 +1015,9 @@ class CasinoEventCog(commands.Cog):
     @app_commands.command(name="startevent", description="Manually start a server event.")
     @app_commands.describe(event="Which type of event to start")
     @app_commands.choices(event=[
-        app_commands.Choice(name="Casino", value="casino"),
-        app_commands.Choice(name="Multiplier", value="multiplier"),
+        app_commands.Choice(name="Casino",      value="casino"),
+        app_commands.Choice(name="Multiplier",  value="multiplier"),
+        app_commands.Choice(name="Quote Quiz",  value="quiz"),
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def startevent(self, interaction: discord.Interaction, event: str):
@@ -927,12 +1031,24 @@ class CasinoEventCog(commands.Cog):
                 )
             else:
                 await interaction.followup.send("✅ Casino event started!", ephemeral=True)
-        else:
+        elif event == "multiplier":
             cog = self.bot.get_cog("MultiplierEventCog")
             if cog is None:
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         description="❌ Multiplier Event cog is not loaded.",
+                        color=var.COLOR_ERROR,
+                    ),
+                    ephemeral=True,
+                )
+                return
+            await cog.start_from_startevent(interaction)
+        else:  # quiz
+            cog = self.bot.get_cog("QuoteQuizCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        description="❌ Quote Quiz cog is not loaded.",
                         color=var.COLOR_ERROR,
                     ),
                     ephemeral=True,

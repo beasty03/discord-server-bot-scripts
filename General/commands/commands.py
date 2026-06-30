@@ -73,6 +73,7 @@ _CATEGORIES = [
         "sections": [
             ("🎰 Casino Events",    "CasinoEventCog"),
             ("💰 Multiplier Event", "MultiplierEventCog"),
+            ("🧠 Quote Quiz",       "QuoteQuizCog"),
         ],
     },
     {

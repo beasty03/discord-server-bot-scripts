@@ -64,6 +64,18 @@ CASINO_GAMES = [
         "color":       0x9B59B6,
         "pot_mode":    True,
     },
+    {
+        "id":          "craps",
+        "label":       "🎲 Craps",
+        "description": "Everyone bets the pass line — shared dice roll, win or lose together!",
+        "color":       0x2ECC71,
+    },
+    {
+        "id":          "underover",
+        "label":       "🎯 Under/Over",
+        "description": "Pick Under 7, Exactly 7, or Over 7 — one shared dice roll decides all!",
+        "color":       0x3498DB,
+    },
 ]
 
 # ── Poker event settings ──────────────────────────────────────────────────────
