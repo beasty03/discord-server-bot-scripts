@@ -420,7 +420,7 @@ class QuotesEventCog(commands.Cog):
             return "A quiz event is already running."
         channel = self._get_event_channel()
         if channel is None:
-            return "No event channel configured. Use `/set_quiz_channel` first."
+            return "No event channel configured. Use `/set_eventannouncement_channel` first."
         if n_questions < 1:
             return "Need at least 1 question."
         self.event_active = True
@@ -428,23 +428,6 @@ class QuotesEventCog(commands.Cog):
         return None
 
     # ── Commands ───────────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="start_quiz_event",
-        description="Start a public Quote Quiz event in the event channel.",
-    )
-    @app_commands.describe(questions="Number of questions (default 5)")
-    @app_commands.default_permissions(administrator=True)
-    async def start_quiz_event(self, interaction: discord.Interaction, questions: int = 5):
-        await interaction.response.defer(ephemeral=True)
-        err = await self._start_event(questions)
-        if err:
-            await interaction.followup.send(
-                embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_LOSE),
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send("✅ Quiz event started!", ephemeral=True)
 
     @app_commands.command(
         name="set_quiz_channel",

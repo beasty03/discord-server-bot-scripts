@@ -82,5 +82,6 @@ CASINO_GAMES = [
 POKER_EVENT_MIN_PLAYERS = 3   # minimum players needed to run a poker event
 
 # ── Embed colors ──────────────────────────────────────────────────────────────
+COLOR_INFO  = 0x5865F2   # blurple — status embeds
 COLOR_WIN   = 0x57F287
 COLOR_ERROR = 0xED4245
