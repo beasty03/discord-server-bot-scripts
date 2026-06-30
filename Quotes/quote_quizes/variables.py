@@ -9,13 +9,6 @@ CURRENCY_NAME   = config.get("currency_name",   "coins")
 CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 
 # ============================================================================
-# PERSONAL QUIZ
-# ============================================================================
-
-QUIZ_REWARD  = 100   # Coins awarded for a correct personal quiz answer
-QUIZ_TIMEOUT = 30    # Seconds before the personal quiz times out
-
-# ============================================================================
 # QUIZ EVENT
 # ============================================================================
 

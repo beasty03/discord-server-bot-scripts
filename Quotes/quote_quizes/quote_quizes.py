@@ -14,7 +14,6 @@ _spec = _ilu.spec_from_file_location('qq_variables', Path(__file__).parent / 'va
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
-from utils.config_loader import load_config
 
 log = logging.getLogger("launcher")
 _SETTINGS_FILE = Path(__file__).parent / "quiz_settings.json"
@@ -162,98 +161,6 @@ def _build_question(db, gid: str) -> dict | None:
     }
 
 
-# ── Personal quiz view ─────────────────────────────────────────────────────────
-
-class QuizView(discord.ui.View):
-
-    def __init__(self, cog, interaction: discord.Interaction, question: dict):
-        super().__init__(timeout=var.QUIZ_TIMEOUT)
-        self.cog         = cog
-        self.interaction = interaction
-        self.question    = question
-        self.uid         = str(interaction.user.id)
-        self.gid         = str(interaction.guild_id)
-        self.resolved    = False
-        self._build_buttons()
-
-    def _build_buttons(self):
-        for i, choice in enumerate(self.question["choices"]):
-            btn = discord.ui.Button(
-                label=_truncate(choice),
-                style=discord.ButtonStyle.primary,
-                row=i // 2,
-            )
-            btn.callback = self._make_callback(choice)
-            self.add_item(btn)
-
-    def _make_callback(self, choice: str):
-        async def cb(interaction: discord.Interaction):
-            if str(interaction.user.id) != self.uid:
-                await interaction.response.send_message("This isn't your quiz!", ephemeral=True)
-                return
-            if self.resolved:
-                await interaction.response.defer()
-                return
-            self.resolved = True
-            self.stop()
-
-            correct = choice == self.question["correct"]
-            sym     = var.CURRENCY_SYMBOL
-
-            if correct:
-                self.cog.db.ensure_user(self.uid, self.gid, interaction.user.display_name)
-                self.cog.db.update_balance(self.uid, self.gid, var.QUIZ_REWARD, "quiz_win")
-
-            for item in self.children:
-                item.disabled = True
-                if not hasattr(item, "label"):
-                    continue
-                if item.label == _truncate(self.question["correct"]):
-                    item.style = discord.ButtonStyle.success
-                elif item.label == _truncate(choice) and not correct:
-                    item.style = discord.ButtonStyle.danger
-
-            if correct:
-                embed = discord.Embed(
-                    title="✅ Correct!",
-                    description=(
-                        f"+{sym} **{var.QUIZ_REWARD:,} {var.CURRENCY_NAME}**\n\n"
-                        f"{self.question['reveal']}"
-                    ),
-                    color=var.COLOR_WIN,
-                )
-            else:
-                embed = discord.Embed(
-                    title="❌ Wrong!",
-                    description=(
-                        f"Correct answer: **{self.question['correct']}**\n\n"
-                        f"{self.question['reveal']}"
-                    ),
-                    color=var.COLOR_LOSE,
-                )
-            embed.set_footer(text=f"{var.SERVER_NAME} · Quote Quiz")
-            await interaction.response.edit_message(embed=embed, view=self)
-        return cb
-
-    async def on_timeout(self):
-        if self.resolved:
-            return
-        self.resolved = True
-        for item in self.children:
-            item.disabled = True
-            if hasattr(item, "label") and item.label == _truncate(self.question["correct"]):
-                item.style = discord.ButtonStyle.success
-        embed = discord.Embed(
-            title="⏰ Time's Up!",
-            description=f"Correct answer: **{self.question['correct']}**\n\n{self.question['reveal']}",
-            color=var.COLOR_LOSE,
-        )
-        try:
-            await self.interaction.edit_original_response(embed=embed, view=self)
-        except Exception:
-            pass
-
-
 # ── Event quiz view ────────────────────────────────────────────────────────────
 
 class _QuizEventView(discord.ui.View):
@@ -343,12 +250,6 @@ class QuoteQuizCog(commands.Cog):
             ch = self.bot.get_channel(int(cid))
             if ch:
                 return ch
-        # Fallback: shared casino announcement channel
-        cid = load_config().get("casino_announcement_channel_id")
-        if cid:
-            ch = self.bot.get_channel(int(cid))
-            if ch:
-                return ch
         return None
 
     async def _run_quiz_event(self, channel: discord.TextChannel, n_questions: int):
@@ -429,7 +330,7 @@ class QuoteQuizCog(commands.Cog):
                     f"*{question['reveal']}*\n\n"
                     + "\n".join(result_lines)
                 ),
-                color=var.COLOR_WIN if correct_uids else var.COLOR_LOSE,
+                color=var.COLOR_WIN if winner_uid else var.COLOR_LOSE,
             )
             result_embed.timestamp = datetime.utcnow()
             await msg.edit(embed=result_embed, view=view)
@@ -465,56 +366,14 @@ class QuoteQuizCog(commands.Cog):
             return "A quiz event is already running."
         channel = self._get_event_channel()
         if channel is None:
-            return "No event channel configured. Use `/set_quiz_channel` or `/set_eventannouncement_channel` first."
+            return "No event channel configured. Use `/set_quiz_channel` first."
         if n_questions < 1:
             return "Need at least 1 question."
         self.event_active = True
         self._event_task  = asyncio.create_task(self._run_quiz_event(channel, n_questions))
         return None
 
-    async def start_from_startevent(self, interaction: discord.Interaction):
-        """Called by CasinoEventCog's /startevent."""
-        await interaction.response.defer(ephemeral=True)
-        err = await self._start_event(var.EVENT_QUESTIONS)
-        if err:
-            await interaction.followup.send(
-                embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_LOSE),
-                ephemeral=True,
-            )
-        else:
-            await interaction.followup.send("✅ Quote Quiz event started!", ephemeral=True)
-
     # ── Commands ───────────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="quiz_quote",
-        description="Answer a 4-choice quote quiz — who said it, who submitted it, or complete it!",
-    )
-    async def quiz_quote(self, interaction: discord.Interaction):
-        gid      = str(interaction.guild_id)
-        question = _build_question(self.db, gid)
-
-        if question is None:
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=(
-                        "❌ Not enough quotes yet to generate a quiz question.\n"
-                        "Need at least **4 quotes** with different authors."
-                    ),
-                    color=var.COLOR_LOSE,
-                ),
-                ephemeral=True,
-            )
-            return
-
-        view  = QuizView(self, interaction, question)
-        embed = discord.Embed(title="🧠 Quote Quiz", color=var.COLOR_QUIZ)
-        embed.add_field(name=question["question"], value=question["display"], inline=False)
-        embed.set_footer(
-            text=f"You have {var.QUIZ_TIMEOUT}s · Correct = {var.CURRENCY_SYMBOL} {var.QUIZ_REWARD:,} · {var.SERVER_NAME}"
-        )
-        embed.timestamp = datetime.utcnow()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(
         name="start_quiz_event",

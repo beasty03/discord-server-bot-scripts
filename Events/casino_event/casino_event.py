@@ -912,13 +912,6 @@ class CasinoEventCog(commands.Cog):
             mult_value = "Scheduled — exact time unknown until the current wait resolves."
         embed.add_field(name="✨ Multiplier Event", value=mult_value, inline=False)
 
-        quiz_cog = self.bot.get_cog("QuoteQuizCog")
-        if quiz_cog and getattr(quiz_cog, "event_active", False):
-            quiz_value = "🧠 **Quote Quiz event is live!**"
-        else:
-            quiz_value = "No quiz event running."
-        embed.add_field(name="🧠 Quote Quiz", value=quiz_value, inline=False)
-
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1015,9 +1008,8 @@ class CasinoEventCog(commands.Cog):
     @app_commands.command(name="startevent", description="Manually start a server event.")
     @app_commands.describe(event="Which type of event to start")
     @app_commands.choices(event=[
-        app_commands.Choice(name="Casino",      value="casino"),
-        app_commands.Choice(name="Multiplier",  value="multiplier"),
-        app_commands.Choice(name="Quote Quiz",  value="quiz"),
+        app_commands.Choice(name="Casino", value="casino"),
+        app_commands.Choice(name="Multiplier", value="multiplier"),
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def startevent(self, interaction: discord.Interaction, event: str):
@@ -1031,24 +1023,12 @@ class CasinoEventCog(commands.Cog):
                 )
             else:
                 await interaction.followup.send("✅ Casino event started!", ephemeral=True)
-        elif event == "multiplier":
+        else:
             cog = self.bot.get_cog("MultiplierEventCog")
             if cog is None:
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         description="❌ Multiplier Event cog is not loaded.",
-                        color=var.COLOR_ERROR,
-                    ),
-                    ephemeral=True,
-                )
-                return
-            await cog.start_from_startevent(interaction)
-        else:  # quiz
-            cog = self.bot.get_cog("QuoteQuizCog")
-            if cog is None:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        description="❌ Quote Quiz cog is not loaded.",
                         color=var.COLOR_ERROR,
                     ),
                     ephemeral=True,
