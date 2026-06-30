@@ -383,11 +383,9 @@ class QuotesEventCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
 
         gif_url = question.get("gif_url")
-        msg = await channel.send(
-            content=gif_url if gif_url else None,
-            embed=embed,
-            view=view,
-        )
+        if gif_url:
+            await channel.send(gif_url)
+        msg = await channel.send(embed=embed, view=view)
         await view.wait()   # returns early if stop() called (winner found), or on timeout
         view.disable_all()
 
