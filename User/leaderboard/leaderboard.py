@@ -176,7 +176,7 @@ class LeaderboardCog(commands.Cog):
     async def top_daily(self, interaction: discord.Interaction):
         gid  = str(interaction.guild_id)
         rows = self.db.execute(
-            """SELECT user_id, streak, last_claimed_date
+            """SELECT user_id, streak
                FROM daily_streaks
                WHERE guild_id = ? AND streak > 0
                ORDER BY streak DESC
@@ -186,8 +186,8 @@ class LeaderboardCog(commands.Cog):
         await self._build_board(
             interaction,
             "🔥 Daily Streak Leaderboard",
-            [(r[0], r[1], r[2] or "?") for r in rows],
-            "**{v:,}** day streak{v_s} · last claimed {e0}",
+            [(r[0], r[1]) for r in rows],
+            "🔥 **{v:,}** day streak{v_s}",
         )
 
     @app_commands.command(name="top_give", description="Top players by total coins given to others.")
