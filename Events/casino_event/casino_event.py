@@ -912,6 +912,17 @@ class CasinoEventCog(commands.Cog):
             mult_value = "Scheduled — exact time unknown until the current wait resolves."
         embed.add_field(name="✨ Multiplier Event", value=mult_value, inline=False)
 
+        # Quote Quiz event
+        quiz_cog = self.bot.get_cog("QuotesEventCog")
+        if quiz_cog and getattr(quiz_cog, "event_active", False):
+            quiz_value = "🧠 **Quote Quiz event is live!**"
+        elif quiz_cog and getattr(quiz_cog, "_next_event_ts", None):
+            ts = quiz_cog._next_event_ts
+            quiz_value = f"Next event <t:{ts}:R> (<t:{ts}:F>)"
+        else:
+            quiz_value = "Scheduled — exact time unknown until the current wait resolves."
+        embed.add_field(name="🧠 Quote Quiz Event", value=quiz_value, inline=False)
+
         embed.set_footer(text=var.SERVER_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1008,8 +1019,9 @@ class CasinoEventCog(commands.Cog):
     @app_commands.command(name="startevent", description="Manually start a server event.")
     @app_commands.describe(event="Which type of event to start")
     @app_commands.choices(event=[
-        app_commands.Choice(name="Casino", value="casino"),
-        app_commands.Choice(name="Multiplier", value="multiplier"),
+        app_commands.Choice(name="Casino",      value="casino"),
+        app_commands.Choice(name="Multiplier",  value="multiplier"),
+        app_commands.Choice(name="Quote Quiz",  value="quiz"),
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def startevent(self, interaction: discord.Interaction, event: str):
@@ -1023,12 +1035,24 @@ class CasinoEventCog(commands.Cog):
                 )
             else:
                 await interaction.followup.send("✅ Casino event started!", ephemeral=True)
-        else:
+        elif event == "multiplier":
             cog = self.bot.get_cog("MultiplierEventCog")
             if cog is None:
                 await interaction.response.send_message(
                     embed=discord.Embed(
                         description="❌ Multiplier Event cog is not loaded.",
+                        color=var.COLOR_ERROR,
+                    ),
+                    ephemeral=True,
+                )
+                return
+            await cog.start_from_startevent(interaction)
+        else:  # quiz
+            cog = self.bot.get_cog("QuotesEventCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    embed=discord.Embed(
+                        description="❌ Quotes Event cog is not loaded.",
                         color=var.COLOR_ERROR,
                     ),
                     ephemeral=True,
@@ -1059,13 +1083,20 @@ class CasinoEventCog(commands.Cog):
     @app_commands.command(name="set_eventannouncement_channel", description="Set the announcement channel for a specific event type.")
     @app_commands.describe(event="Which event to configure", channel="Channel to post announcements in")
     @app_commands.choices(event=[
-        app_commands.Choice(name="Casino", value="casino"),
-        app_commands.Choice(name="Multiplier", value="multiplier"),
+        app_commands.Choice(name="Casino",      value="casino"),
+        app_commands.Choice(name="Multiplier",  value="multiplier"),
+        app_commands.Choice(name="Quote Quiz",  value="quiz"),
     ])
     async def set_eventannouncement_channel(self, interaction: discord.Interaction, event: str, channel: discord.TextChannel):
-        cfg = load_config()
-        key  = 'casino_announcement_channel_id' if event == 'casino' else 'multiplier_announcement_channel_id'
-        name = "Casino Event" if event == 'casino' else "Multiplier Event"
+        cfg  = load_config()
+        keys = {
+            'casino':     'casino_announcement_channel_id',
+            'multiplier': 'multiplier_announcement_channel_id',
+            'quiz':       'quiz_announcement_channel_id',
+        }
+        names = {'casino': "Casino Event", 'multiplier': "Multiplier Event", 'quiz': "Quote Quiz"}
+        key  = keys[event]
+        name = names[event]
         cfg[key] = channel.id
         save_config(cfg)
         await interaction.response.send_message(
@@ -1085,6 +1116,7 @@ class CasinoEventCog(commands.Cog):
     @app_commands.choices(event=[
         app_commands.Choice(name="Casino",      value="casino"),
         app_commands.Choice(name="Multiplier",  value="multiplier"),
+        app_commands.Choice(name="Quote Quiz",  value="quiz"),
     ])
     @app_commands.checks.has_permissions(administrator=True)
     async def set_event_downtime(
@@ -1107,7 +1139,8 @@ class CasinoEventCog(commands.Cog):
             )
             return
 
-        label = "Casino" if event == "casino" else "Multiplier"
+        labels = {"casino": "Casino", "multiplier": "Multiplier", "quiz": "Quote Quiz"}
+        label  = labels[event]
 
         if event == "casino":
             data = _load_settings()
@@ -1125,7 +1158,7 @@ class CasinoEventCog(commands.Cog):
                 if restarted else
                 "Takes effect after the current event ends."
             )
-        else:
+        elif event == "multiplier":
             cog = self.bot.get_cog("MultiplierEventCog")
             if cog is None:
                 await interaction.response.send_message(
@@ -1135,6 +1168,21 @@ class CasinoEventCog(commands.Cog):
                 return
             cog.set_interval(min_minutes, max_minutes)
             active = self.bot.multiplier_event_mult is not None
+            note = (
+                "Takes effect after the current event ends."
+                if active else
+                f"Next event will fire in **{min_minutes}–{max_minutes} minutes**."
+            )
+        else:  # quiz
+            cog = self.bot.get_cog("QuotesEventCog")
+            if cog is None:
+                await interaction.response.send_message(
+                    embed=discord.Embed(description="❌ QuotesEventCog is not loaded.", color=var.COLOR_ERROR),
+                    ephemeral=True,
+                )
+                return
+            cog.set_interval(min_minutes, max_minutes)
+            active = getattr(cog, "event_active", False)
             note = (
                 "Takes effect after the current event ends."
                 if active else

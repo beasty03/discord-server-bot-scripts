@@ -14,6 +14,7 @@ _spec = _ilu.spec_from_file_location('qe_variables', Path(__file__).parent / 'va
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
+from utils.config_loader import load_config
 
 log = logging.getLogger("launcher")
 _SETTINGS_FILE = Path(__file__).parent / "quotes_event_settings.json"
@@ -223,6 +224,8 @@ class QuotesEventCog(commands.Cog):
         self.db           = ForgeDB.get()
         self.event_active = False
         self._event_task: asyncio.Task | None = None
+        self._loop_task:  asyncio.Task | None = None
+        self._next_event_ts: int | None = None
 
     async def cog_load(self):
         self.db.execute("""
@@ -245,12 +248,62 @@ class QuotesEventCog(commands.Cog):
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _get_event_channel(self) -> discord.TextChannel | None:
-        cid = _load_settings().get("quiz_channel_id")
-        if cid:
-            ch = self.bot.get_channel(int(cid))
+        shared = load_config().get('quiz_announcement_channel_id')
+        if shared:
+            ch = self.bot.get_channel(int(shared))
             if ch:
                 return ch
-        return None
+        cid = _load_settings().get("quiz_channel_id") or var.EVENT_CHANNEL_ID
+        return self.bot.get_channel(int(cid)) if cid else None
+
+    # ── Auto-loop ─────────────────────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._event_loop())
+
+    def cog_unload(self):
+        if self._loop_task:
+            self._loop_task.cancel()
+        if self._event_task:
+            self._event_task.cancel()
+
+    async def _event_loop(self):
+        await self.bot.wait_until_ready()
+        while True:
+            cfg   = _load_settings()
+            min_m = cfg.get("interval_min", var.EVENT_INTERVAL_MIN)
+            max_m = cfg.get("interval_max", var.EVENT_INTERVAL_MAX)
+            wait  = random.randint(min_m, max_m)
+            self._next_event_ts = int(time.time()) + wait * 60
+            log.info("QuotesEvent: next event in %d minutes", wait)
+            await asyncio.sleep(wait * 60)
+            self._next_event_ts = None
+            if not self.event_active:
+                await self._start_event(var.EVENT_QUESTIONS)
+
+    def set_interval(self, min_minutes: int, max_minutes: int):
+        data = _load_settings()
+        data["interval_min"] = min_minutes
+        data["interval_max"] = max_minutes
+        _save_settings(data)
+        if not self.event_active:
+            if self._loop_task and not self._loop_task.done():
+                self._loop_task.cancel()
+            self._loop_task = asyncio.create_task(self._event_loop())
+
+    # Called by /startevent's "Quote Quiz" choice in casino_event.py
+    async def start_from_startevent(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        err = await self._start_event(var.EVENT_QUESTIONS)
+        if err:
+            await interaction.followup.send(
+                embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_LOSE),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send("✅ Quote Quiz event started!", ephemeral=True)
 
     async def _run_quiz_event(self, channel: discord.TextChannel, n_questions: int):
         gid    = str(channel.guild.id)

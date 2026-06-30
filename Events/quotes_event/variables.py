@@ -12,6 +12,14 @@ CURRENCY_SYMBOL = config.get("currency_symbol", "🪙")
 # QUOTE QUIZ EVENT
 # ============================================================================
 
+# ── Channel ───────────────────────────────────────────────────────────────────
+EVENT_CHANNEL_ID = 0  # ← set via /set_quiz_channel or /set_eventannouncement_channel
+
+# ── Auto-loop interval ────────────────────────────────────────────────────────
+# A random interval is picked in [MIN, MAX] minutes between automatic event fires.
+EVENT_INTERVAL_MIN = 30   # minutes
+EVENT_INTERVAL_MAX = 90   # minutes
+
 EVENT_QUESTIONS        = 5    # Default number of questions per event
 EVENT_QUESTION_TIMEOUT = 20   # Seconds each event question stays open
 EVENT_REWARD_FIRST     = 250  # Max coins for the first correct answer (answer instantly)
