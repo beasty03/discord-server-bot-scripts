@@ -85,7 +85,8 @@ def _build_question(db, gid: str) -> dict | None:
     # ── GIF type (separate quote that must have a gif_url) ────────────────────
     gif_rows = db.execute(
         "SELECT id, quote_text, gif_url, quoted_user_name, quoter_user_name "
-        "FROM quotes WHERE guild_id = ? AND gif_url IS NOT NULL AND gif_url != '' "
+        "FROM quotes WHERE guild_id = ? "
+        "AND (gif_url LIKE '%tenor.com%' OR gif_url LIKE '%giphy.com%') "
         "ORDER BY RANDOM() LIMIT 1",
         (gid,),
     )
@@ -373,8 +374,6 @@ class QuotesEventCog(commands.Cog):
         view  = _QuizEventView(question, timeout=var.EVENT_QUESTION_TIMEOUT)
         embed = discord.Embed(title="🧠 Quote Quiz!", color=var.COLOR_QUIZ)
         embed.add_field(name=question["question"], value=question["display"], inline=False)
-        if question.get("gif_url"):
-            embed.set_image(url=question["gif_url"])
         embed.set_footer(
             text=(
                 f"First correct wins — instant: {sym} {var.EVENT_REWARD_FIRST:,} → "
@@ -383,7 +382,12 @@ class QuotesEventCog(commands.Cog):
         )
         embed.timestamp = datetime.utcnow()
 
-        msg = await channel.send(embed=embed, view=view)
+        gif_url = question.get("gif_url")
+        msg = await channel.send(
+            content=gif_url if gif_url else None,
+            embed=embed,
+            view=view,
+        )
         await view.wait()   # returns early if stop() called (winner found), or on timeout
         view.disable_all()
 
