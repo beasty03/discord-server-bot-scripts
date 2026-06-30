@@ -4,6 +4,7 @@ from discord import app_commands
 import logging
 import json
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 from pathlib import Path
 
 import importlib.util as _ilu
@@ -15,7 +16,8 @@ from utils.config_loader import load_config, save_config
 
 log = logging.getLogger("launcher")
 
-_SETTINGS_FILE = Path(__file__).parent / "bank_settings.json"
+_SETTINGS_FILE    = Path(__file__).parent / "bank_settings.json"
+_SORTED_TIMEZONES = sorted(available_timezones())
 
 
 def _load_settings() -> dict:
@@ -33,6 +35,27 @@ def _save_settings(data: dict):
 def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
     db.ensure_user(bot_uid, gid, "House")
     db.update_balance(bot_uid, gid, amount, tx_type)
+
+
+def _daily_reset_time() -> tuple[int, int]:
+    data = _load_settings()
+    return (
+        int(data.get("daily_reset_hour",   var.DAILY_RESET_HOUR)),
+        int(data.get("daily_reset_minute", var.DAILY_RESET_MINUTE)),
+    )
+
+
+def _daily_tz() -> ZoneInfo:
+    name = _load_settings().get("daily_timezone") or var.DAILY_TIMEZONE
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+def _effective_daily_date(now: datetime, reset_hour: int, reset_minute: int) -> date:
+    """The 'daily day' for streak/claim purposes, shifted so it rolls over at the reset time instead of midnight."""
+    return (now - timedelta(hours=reset_hour, minutes=reset_minute)).date()
 
 
 class BankCog(commands.Cog):
@@ -98,7 +121,10 @@ class BankCog(commands.Cog):
         gid = str(interaction.guild_id)
         self.db.ensure_user(uid, gid, interaction.user.display_name)
 
-        today     = datetime.utcnow().date()
+        reset_hour, reset_minute = _daily_reset_time()
+        tz        = _daily_tz()
+        now       = datetime.now(tz)
+        today     = _effective_daily_date(now, reset_hour, reset_minute)
         today_str = today.isoformat()
 
         rows          = self.db.execute(
@@ -108,10 +134,11 @@ class BankCog(commands.Cog):
         last_date_str  = rows[0][0] if rows else None
         current_streak = rows[0][1] if rows else 0
 
-        # Seconds until next midnight UTC (used in both branches)
-        now      = datetime.utcnow()
-        midnight = datetime(today.year, today.month, today.day) + timedelta(days=1)
-        secs     = int((midnight - now).total_seconds())
+        # Seconds until next reset (used in both branches)
+        next_reset = now.replace(hour=reset_hour, minute=reset_minute, second=0, microsecond=0)
+        if next_reset <= now:
+            next_reset += timedelta(days=1)
+        secs      = int((next_reset - now).total_seconds())
         hrs, mins = secs // 3600, (secs % 3600) // 60
 
         if last_date_str == today_str:
@@ -365,11 +392,11 @@ class BankCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # ── /set_daily ────────────────────────────────────────────────────────────
+    # ── /set_daily_amount ─────────────────────────────────────────────────────
 
-    @app_commands.command(name="set_daily", description="Set the daily bonus amount all players receive.")
+    @app_commands.command(name="set_daily_amount", description="Set the daily bonus amount all players receive.")
     @app_commands.describe(amount="Coins awarded each day (0 = use server default)")
-    async def set_daily(self, interaction: discord.Interaction, amount: int):
+    async def set_daily_amount(self, interaction: discord.Interaction, amount: int):
         if amount < 0:
             await interaction.response.send_message(
                 embed=discord.Embed(description="Amount must be 0 or higher.", color=var.COLOR_ERROR),
@@ -388,6 +415,57 @@ class BankCog(commands.Cog):
             embed=discord.Embed(description=f"✅ {msg}", color=var.COLOR_WIN),
             ephemeral=True,
         )
+
+    # ── /set_daily_time ───────────────────────────────────────────────────────
+
+    @app_commands.command(name="set_daily_time", description="Set the time the daily bonus resets (uses your configured timezone).")
+    @app_commands.describe(hour="Hour (0–23)", minute="Minute (0–59)")
+    async def set_daily_time(self, interaction: discord.Interaction, hour: int, minute: int):
+        if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+            await interaction.response.send_message("Invalid time — hour must be 0–23 and minute 0–59.", ephemeral=True)
+            return
+        data = _load_settings()
+        data["daily_reset_hour"]   = hour
+        data["daily_reset_minute"] = minute
+        _save_settings(data)
+        tz = _daily_tz()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Daily bonus now resets at **{hour:02d}:{minute:02d}** ({tz.key}).",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    # ── /set_daily_timezone ───────────────────────────────────────────────────
+
+    @app_commands.command(name="set_daily_timezone", description="Set the timezone for the daily bonus reset time (e.g. Europe/Brussels).")
+    @app_commands.describe(timezone="Start typing to search — e.g. Brussels, New_York, London")
+    async def set_daily_timezone(self, interaction: discord.Interaction, timezone: str):
+        try:
+            tz = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            await interaction.response.send_message(
+                f"`{timezone}` is not a valid timezone. Use an IANA name like `Europe/Brussels` or `America/New_York`.",
+                ephemeral=True,
+            )
+            return
+        data = _load_settings()
+        data["daily_timezone"] = timezone
+        _save_settings(data)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ Timezone set to **{tz.key}**. Daily reset time is now interpreted in that timezone.",
+                color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    @set_daily_timezone.autocomplete("timezone")
+    async def daily_timezone_autocomplete(self, _interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        lower   = current.lower()
+        matches = [tz for tz in _SORTED_TIMEZONES if lower in tz.lower()]
+        return [app_commands.Choice(name=tz, value=tz) for tz in matches[:25]]
 
 
 async def setup(bot: commands.Bot):

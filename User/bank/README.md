@@ -11,6 +11,9 @@ Centralised currency management for the entire bot. This is the **only** place t
 | `/daily` | Claim the daily coin bonus. Shows time remaining when on cooldown. |
 | `/top` | Leaderboard — top N players sorted by balance, with game count. |
 | `/give @member amount` | Transfer coins from your account to another player. |
+| `/set_daily_amount <amount>` | *(admin)* Set the daily bonus amount all players receive (`0` = server default). |
+| `/set_daily_time <hour> <minute>` | *(admin)* Set the time of day the daily bonus resets, in the configured timezone. |
+| `/set_daily_timezone <timezone>` | *(admin)* Set the IANA timezone (e.g. `Europe/Brussels`) the reset time is interpreted in. |
 
 ## Variables (`variables.py`)
 

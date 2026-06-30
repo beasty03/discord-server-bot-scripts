@@ -25,10 +25,15 @@ GIVE_MAX = 0
 # DAILY BONUS
 # ============================================================================
 
-DAILY_BONUS_AMOUNT   = 500   # Base daily reward (overridden by /set_daily)
+DAILY_BONUS_AMOUNT   = 500   # Base daily reward (overridden by /set_daily_amount)
 STREAK_BONUS_STARTS  = 3     # Streak day where the bonus first applies
 STREAK_BONUS_PER_DAY = 10    # Bonus % added per streak day above threshold
 STREAK_BONUS_MAX     = 100   # Cap on streak bonus % (100 = max 2× base)
+
+# Default time the daily bonus resets (interpreted in DAILY_TIMEZONE)
+DAILY_RESET_HOUR   = 0
+DAILY_RESET_MINUTE = 0
+DAILY_TIMEZONE     = "UTC"
 
 # How many players to show on /top
 LEADERBOARD_TOP_COUNT = 10
