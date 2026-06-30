@@ -40,62 +40,74 @@ def _truncate(text: str, max_len: int = _MAX_LABEL) -> str:
 
 
 def _build_question(db, gid: str) -> dict | None:
+    available: list[str] = []
+    pool: dict = {}
+
+    # ── Text-based types (single random quote as subject) ─────────────────────
     rows = db.execute(
         "SELECT id, quote_text, quoted_user_name, quoter_user_name "
         "FROM quotes WHERE guild_id = ? ORDER BY RANDOM() LIMIT 1",
         (gid,),
     )
-    if not rows:
-        return None
-    quote_id, text, quoted_name, quoter_name = rows[0]
+    if rows:
+        quote_id, text, quoted_name, quoter_name = rows[0]
+        pool["main"] = (quote_id, text, quoted_name, quoter_name)
 
-    available: list[str] = []
-    wrong_said: list[str] = []
-    wrong_quoted: list[str] = []
-    wrong_complete: list[str] = []
-
-    # ── who_said: need 3 other distinct quoted_user_names ─────────────────────
-    w = db.execute(
-        "SELECT DISTINCT quoted_user_name FROM quotes "
-        "WHERE guild_id = ? AND quoted_user_name != ? "
-        "ORDER BY RANDOM() LIMIT 3",
-        (gid, quoted_name),
-    )
-    if len(w) >= 3:
-        wrong_said = [r[0] for r in w]
-        available.append("who_said")
-
-    # ── who_quoted: need 3 other distinct quoter_user_names ───────────────────
-    w = db.execute(
-        "SELECT DISTINCT quoter_user_name FROM quotes "
-        "WHERE guild_id = ? AND quoter_user_name != ? "
-        "ORDER BY RANDOM() LIMIT 3",
-        (gid, quoter_name),
-    )
-    if len(w) >= 3:
-        wrong_quoted = [r[0] for r in w]
-        available.append("who_quoted")
-
-    # ── complete: quote must have 6+ words + 3 other quotes for endings ───────
-    words = text.split()
-    if len(words) >= 6:
         w = db.execute(
-            "SELECT quote_text FROM quotes "
-            "WHERE guild_id = ? AND id != ? "
-            "ORDER BY RANDOM() LIMIT 6",
-            (gid, quote_id),
+            "SELECT DISTINCT quoted_user_name FROM quotes "
+            "WHERE guild_id = ? AND quoted_user_name != ? ORDER BY RANDOM() LIMIT 3",
+            (gid, quoted_name),
         )
         if len(w) >= 3:
-            wrong_complete = [r[0] for r in w]
-            available.append("complete")
+            pool["wrong_said"] = [r[0] for r in w]
+            available.append("who_said")
+
+        w = db.execute(
+            "SELECT DISTINCT quoter_user_name FROM quotes "
+            "WHERE guild_id = ? AND quoter_user_name != ? ORDER BY RANDOM() LIMIT 3",
+            (gid, quoter_name),
+        )
+        if len(w) >= 3:
+            pool["wrong_quoted"] = [r[0] for r in w]
+            available.append("who_quoted")
+
+        words = text.split()
+        if len(words) >= 6:
+            w = db.execute(
+                "SELECT quote_text FROM quotes "
+                "WHERE guild_id = ? AND id != ? ORDER BY RANDOM() LIMIT 6",
+                (gid, quote_id),
+            )
+            if len(w) >= 3:
+                pool["wrong_complete"] = [r[0] for r in w]
+                available.append("complete")
+
+    # ── GIF type (separate quote that must have a gif_url) ────────────────────
+    gif_rows = db.execute(
+        "SELECT id, quote_text, gif_url, quoted_user_name, quoter_user_name "
+        "FROM quotes WHERE guild_id = ? AND gif_url IS NOT NULL AND gif_url != '' "
+        "ORDER BY RANDOM() LIMIT 1",
+        (gid,),
+    )
+    if gif_rows:
+        gq_id, gq_text, gif_url, gq_qname, gq_rname = gif_rows[0]
+        w = db.execute(
+            "SELECT quote_text FROM quotes "
+            "WHERE guild_id = ? AND id != ? ORDER BY RANDOM() LIMIT 6",
+            (gid, gq_id),
+        )
+        if len(w) >= 3:
+            pool["gif"] = (gq_id, gq_text, gif_url, gq_qname, gq_rname, [r[0] for r in w])
+            available.append("gif")
 
     if not available:
         return None
 
     q_type = random.choice(available)
+    quote_id, text, quoted_name, quoter_name = pool.get("main", (None, None, None, None))
 
     if q_type == "who_said":
-        choices = [quoted_name] + wrong_said
+        choices = [quoted_name] + pool["wrong_said"]
         random.shuffle(choices)
         return {
             "type":     "who_said",
@@ -107,7 +119,7 @@ def _build_question(db, gid: str) -> dict | None:
         }
 
     if q_type == "who_quoted":
-        choices = [quoter_name] + wrong_quoted
+        choices = [quoter_name] + pool["wrong_quoted"]
         random.shuffle(choices)
         return {
             "type":     "who_quoted",
@@ -118,27 +130,64 @@ def _build_question(db, gid: str) -> dict | None:
             "reveal":   f'Submitted by **{quoter_name}** · Said by **{quoted_name}**',
         }
 
-    # complete
-    mid         = len(words) // 2
-    first_half  = " ".join(words[:mid])
-    correct_end = " ".join(words[mid:])
-    correct_lbl = _truncate(correct_end)
+    if q_type == "complete":
+        words      = text.split()
+        mid        = len(words) // 2
+        first_half = " ".join(words[:mid])
+        correct_lbl = _truncate(" ".join(words[mid:]))
 
-    wrong_ends: list[str] = []
-    for (wtext,) in wrong_complete:
-        wwords = wtext.split()
-        wmid   = max(1, len(wwords) // 2)
-        ending = " ".join(wwords[wmid:]) if len(wwords) >= 4 else wtext
-        lbl    = _truncate(ending)
-        if lbl != correct_lbl and lbl not in wrong_ends:
-            wrong_ends.append(lbl)
-        if len(wrong_ends) == 3:
+        wrong_ends: list[str] = []
+        for wtext in pool["wrong_complete"]:
+            wwords = wtext.split()
+            wmid   = max(1, len(wwords) // 2)
+            ending = " ".join(wwords[wmid:]) if len(wwords) >= 4 else wtext
+            lbl    = _truncate(ending)
+            if lbl != correct_lbl and lbl not in wrong_ends:
+                wrong_ends.append(lbl)
+            if len(wrong_ends) == 3:
+                break
+
+        if len(wrong_ends) < 3:
+            if "who_said" in available:
+                choices = [quoted_name] + pool["wrong_said"]
+                random.shuffle(choices)
+                return {
+                    "type":     "who_said",
+                    "question": "🎙️ Who said this?",
+                    "display":  _truncate(f'"{text}"', 512),
+                    "correct":  quoted_name,
+                    "choices":  choices,
+                    "reveal":   f'Said by **{quoted_name}** · Submitted by **{quoter_name}**',
+                }
+            return None
+
+        choices = [correct_lbl] + wrong_ends
+        random.shuffle(choices)
+        return {
+            "type":     "complete",
+            "question": "✍️ Complete the quote:",
+            "display":  f'"{first_half}…"',
+            "correct":  correct_lbl,
+            "choices":  choices,
+            "reveal":   f'Full quote: "{text}" — **{quoted_name}**',
+        }
+
+    # gif
+    gq_id, gq_text, gif_url, gq_qname, gq_rname, wrong_texts = pool["gif"]
+    correct_lbl = _truncate(gq_text)
+    seen        = {correct_lbl}
+    wrong_lbls: list[str] = []
+    for wt in wrong_texts:
+        lbl = _truncate(wt)
+        if lbl not in seen:
+            seen.add(lbl)
+            wrong_lbls.append(lbl)
+        if len(wrong_lbls) == 3:
             break
 
-    if len(wrong_ends) < 3:
-        # Fall back to who_said if we couldn't make 3 distinct endings
+    if len(wrong_lbls) < 3:
         if "who_said" in available:
-            choices = [quoted_name] + wrong_said
+            choices = [quoted_name] + pool["wrong_said"]
             random.shuffle(choices)
             return {
                 "type":     "who_said",
@@ -150,15 +199,16 @@ def _build_question(db, gid: str) -> dict | None:
             }
         return None
 
-    choices = [correct_lbl] + wrong_ends
+    choices = [correct_lbl] + wrong_lbls
     random.shuffle(choices)
     return {
-        "type":     "complete",
-        "question": "✍️ Complete the quote:",
-        "display":  f'"{first_half}…"',
+        "type":     "gif",
+        "question": "🖼️ Which quote does this GIF belong to?",
+        "display":  "Match the GIF above to the correct quote.",
+        "gif_url":  gif_url,
         "correct":  correct_lbl,
         "choices":  choices,
-        "reveal":   f'Full quote: "{text}" — **{quoted_name}**',
+        "reveal":   f'Said by **{gq_qname}** · Submitted by **{gq_rname}**',
     }
 
 
@@ -197,9 +247,10 @@ class _QuizEventView(discord.ui.View):
             if correct and self.first_correct is None:
                 self.first_correct     = uid
                 self.first_correct_sec = time.monotonic() - self._start
+                self.stop()  # end immediately — winner found
             await interaction.response.send_message(
-                "✅ Correct! You're first!" if (correct and self.first_correct == uid)
-                else ("✅ Correct — but someone was faster!" if correct else "❌ Wrong!"),
+                "✅ Correct! You won!" if (correct and self.first_correct == uid)
+                else "❌ Wrong!",
                 ephemeral=True,
             )
         return cb
@@ -322,6 +373,8 @@ class QuotesEventCog(commands.Cog):
         view  = _QuizEventView(question, timeout=var.EVENT_QUESTION_TIMEOUT)
         embed = discord.Embed(title="🧠 Quote Quiz!", color=var.COLOR_QUIZ)
         embed.add_field(name=question["question"], value=question["display"], inline=False)
+        if question.get("gif_url"):
+            embed.set_image(url=question["gif_url"])
         embed.set_footer(
             text=(
                 f"First correct wins — instant: {sym} {var.EVENT_REWARD_FIRST:,} → "
@@ -331,8 +384,7 @@ class QuotesEventCog(commands.Cog):
         embed.timestamp = datetime.utcnow()
 
         msg = await channel.send(embed=embed, view=view)
-        await asyncio.sleep(var.EVENT_QUESTION_TIMEOUT)
-        view.stop()
+        await view.wait()   # returns early if stop() called (winner found), or on timeout
         view.disable_all()
 
         winner_uid = view.first_correct
