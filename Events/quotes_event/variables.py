@@ -20,8 +20,7 @@ EVENT_CHANNEL_ID = 0  # ← set via /set_quiz_channel or /set_eventannouncement_
 EVENT_INTERVAL_MIN = 30   # minutes
 EVENT_INTERVAL_MAX = 90   # minutes
 
-EVENT_QUESTIONS        = 5    # Default number of questions per event
-EVENT_QUESTION_TIMEOUT = 20   # Seconds each event question stays open
+EVENT_QUESTION_TIMEOUT = 20   # Seconds the question stays open
 EVENT_REWARD_FIRST     = 250  # Max coins for the first correct answer (answer instantly)
 EVENT_REWARD_MIN       = 75   # Min coins for the first correct answer (answer just before timeout)
 # Only the FIRST correct answer per question wins. Reward scales linearly from

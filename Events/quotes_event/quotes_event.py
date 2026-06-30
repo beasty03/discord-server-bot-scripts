@@ -281,7 +281,7 @@ class QuotesEventCog(commands.Cog):
             await asyncio.sleep(wait * 60)
             self._next_event_ts = None
             if not self.event_active:
-                await self._start_event(var.EVENT_QUESTIONS)
+                await self._start_event()
 
     def set_interval(self, min_minutes: int, max_minutes: int):
         data = _load_settings()
@@ -296,7 +296,7 @@ class QuotesEventCog(commands.Cog):
     # Called by /startevent's "Quote Quiz" choice in casino_event.py
     async def start_from_startevent(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        err = await self._start_event(var.EVENT_QUESTIONS)
+        err = await self._start_event()
         if err:
             await interaction.followup.send(
                 embed=discord.Embed(description=f"❌ {err}", color=var.COLOR_LOSE),
@@ -305,126 +305,78 @@ class QuotesEventCog(commands.Cog):
         else:
             await interaction.followup.send("✅ Quote Quiz event started!", ephemeral=True)
 
-    async def _run_quiz_event(self, channel: discord.TextChannel, n_questions: int):
-        gid    = str(channel.guild.id)
-        scores: dict[str, int] = {}
-        names:  dict[str, str] = {}
-        sym    = var.CURRENCY_SYMBOL
+    async def _run_quiz_event(self, channel: discord.TextChannel):
+        gid     = str(channel.guild.id)
+        sym     = var.CURRENCY_SYMBOL
         bot_uid = str(self.bot.user.id) if self.bot.user else ""
 
-        await channel.send(embed=discord.Embed(
-            title="🧠 Quote Quiz Event Starting!",
-            description=(
-                f"**{n_questions} question{'s' if n_questions != 1 else ''}** "
-                f"· {var.EVENT_QUESTION_TIMEOUT}s per question\n\n"
-                f"Only the **first correct answer** wins!\n"
-                f"🥇 Instant: {sym} **{var.EVENT_REWARD_FIRST:,}** → "
-                f"⏱️ Last second: {sym} **{var.EVENT_REWARD_MIN:,}**"
-            ),
-            color=var.COLOR_EVENT,
-        ))
-        await asyncio.sleep(3)
-
-        for q_num in range(1, n_questions + 1):
-            question = _build_question(self.db, gid)
-            if question is None:
-                await channel.send(embed=discord.Embed(
-                    description="⚠️ Not enough quotes in the database — ending early.",
-                    color=var.COLOR_LOSE,
-                ))
-                break
-
-            view  = _QuizEventView(question, timeout=var.EVENT_QUESTION_TIMEOUT)
-            embed = discord.Embed(
-                title=f"❓ Question {q_num}/{n_questions}",
-                color=var.COLOR_QUIZ,
-            )
-            embed.add_field(name=question["question"], value=question["display"], inline=False)
-            embed.set_footer(text=f"{var.EVENT_QUESTION_TIMEOUT}s to answer · {var.SERVER_NAME}")
-            embed.timestamp = datetime.utcnow()
-
-            msg = await channel.send(embed=embed, view=view)
-            await asyncio.sleep(var.EVENT_QUESTION_TIMEOUT)
-            view.stop()
-            view.disable_all()
-
-            winner_uid = view.first_correct
-
-            # Time-based reward: linear decay from EVENT_REWARD_FIRST → EVENT_REWARD_MIN
-            if winner_uid:
-                frac   = max(0.0, 1.0 - view.first_correct_sec / var.EVENT_QUESTION_TIMEOUT)
-                reward = int(var.EVENT_REWARD_MIN + (var.EVENT_REWARD_FIRST - var.EVENT_REWARD_MIN) * frac)
-                self.db.ensure_user(winner_uid, gid, winner_uid)
-                self.db.update_balance(winner_uid, gid, reward, "quiz_event_win")
-                if bot_uid:
-                    self.db.ensure_user(bot_uid, gid, "House")
-                    self.db.update_balance(bot_uid, gid, -reward, "house_payout")
-                scores[winner_uid] = scores.get(winner_uid, 0) + reward
-
-            # Resolve display names and build result lines
-            result_lines: list[str] = []
-            if winner_uid:
-                try:
-                    user = await self.bot.fetch_user(int(winner_uid))
-                    name = user.display_name
-                except Exception:
-                    name = f"<@{winner_uid}>"
-                names[winner_uid] = name
-                answered_in = f"{view.first_correct_sec:.1f}s"
-                result_lines.append(f"🥇 **{name}** answered in **{answered_in}** → +{sym} {reward:,}")
-
-            if not result_lines:
-                result_lines.append("❌ Nobody got it right in time!")
-
-            result_embed = discord.Embed(
-                title=f"Q{q_num} — Answer Revealed",
-                description=(
-                    f"**{question['question']}**\n"
-                    f"✔ **{question['correct']}**\n"
-                    f"*{question['reveal']}*\n\n"
-                    + "\n".join(result_lines)
-                ),
-                color=var.COLOR_WIN if winner_uid else var.COLOR_LOSE,
-            )
-            result_embed.timestamp = datetime.utcnow()
-            await msg.edit(embed=result_embed, view=view)
-
-            if q_num < n_questions:
-                await asyncio.sleep(3)
-
-        # Final scoreboard
-        if scores:
-            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-            medals = ["🥇", "🥈", "🥉"]
-            lines  = []
-            for i, (uid, total) in enumerate(sorted_scores[:10]):
-                name   = names.get(uid, f"<@{uid}>")
-                prefix = medals[i] if i < 3 else f"**{i + 1}.**"
-                lines.append(f"{prefix} **{name}** — {sym} {total:,}")
+        question = _build_question(self.db, gid)
+        if question is None:
             await channel.send(embed=discord.Embed(
-                title="🏆 Quiz Event — Final Scores",
-                description="\n".join(lines),
-                color=var.COLOR_EVENT,
-            ))
-        else:
-            await channel.send(embed=discord.Embed(
-                title="Quiz Event Over",
-                description="Nobody scored any points!",
+                description="⚠️ Not enough quotes in the database to run a quiz.",
                 color=var.COLOR_LOSE,
             ))
+            self.event_active = False
+            return
+
+        view  = _QuizEventView(question, timeout=var.EVENT_QUESTION_TIMEOUT)
+        embed = discord.Embed(title="🧠 Quote Quiz!", color=var.COLOR_QUIZ)
+        embed.add_field(name=question["question"], value=question["display"], inline=False)
+        embed.set_footer(
+            text=(
+                f"First correct wins — instant: {sym} {var.EVENT_REWARD_FIRST:,} → "
+                f"last second: {sym} {var.EVENT_REWARD_MIN:,} · {var.EVENT_QUESTION_TIMEOUT}s · {var.SERVER_NAME}"
+            )
+        )
+        embed.timestamp = datetime.utcnow()
+
+        msg = await channel.send(embed=embed, view=view)
+        await asyncio.sleep(var.EVENT_QUESTION_TIMEOUT)
+        view.stop()
+        view.disable_all()
+
+        winner_uid = view.first_correct
+
+        if winner_uid:
+            frac   = max(0.0, 1.0 - view.first_correct_sec / var.EVENT_QUESTION_TIMEOUT)
+            reward = int(var.EVENT_REWARD_MIN + (var.EVENT_REWARD_FIRST - var.EVENT_REWARD_MIN) * frac)
+            self.db.ensure_user(winner_uid, gid, winner_uid)
+            self.db.update_balance(winner_uid, gid, reward, "quiz_event_win")
+            if bot_uid:
+                self.db.ensure_user(bot_uid, gid, "House")
+                self.db.update_balance(bot_uid, gid, -reward, "house_payout")
+            try:
+                user = await self.bot.fetch_user(int(winner_uid))
+                name = user.display_name
+            except Exception:
+                name = f"<@{winner_uid}>"
+            result_line = f"🥇 **{name}** answered in **{view.first_correct_sec:.1f}s** → +{sym} {reward:,}"
+        else:
+            result_line = "❌ Nobody got it right in time!"
+
+        result_embed = discord.Embed(
+            title="Answer Revealed",
+            description=(
+                f"**{question['question']}**\n"
+                f"✔ **{question['correct']}**\n"
+                f"*{question['reveal']}*\n\n"
+                f"{result_line}"
+            ),
+            color=var.COLOR_WIN if winner_uid else var.COLOR_LOSE,
+        )
+        result_embed.timestamp = datetime.utcnow()
+        await msg.edit(embed=result_embed, view=view)
 
         self.event_active = False
 
-    async def _start_event(self, n_questions: int) -> str | None:
+    async def _start_event(self) -> str | None:
         if self.event_active:
             return "A quiz event is already running."
         channel = self._get_event_channel()
         if channel is None:
             return "No event channel configured. Use `/set_eventannouncement_channel` first."
-        if n_questions < 1:
-            return "Need at least 1 question."
         self.event_active = True
-        self._event_task  = asyncio.create_task(self._run_quiz_event(channel, n_questions))
+        self._event_task  = asyncio.create_task(self._run_quiz_event(channel))
         return None
 
     # ── Commands ───────────────────────────────────────────────────────────────
