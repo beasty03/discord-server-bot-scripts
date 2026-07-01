@@ -69,6 +69,7 @@ CASINO_GAMES = [
         "label":       "🎲 Craps",
         "description": "Everyone bets the pass line — shared dice roll, win or lose together!",
         "color":       0x2ECC71,
+        "footer_note": "Pass line — everyone wins or loses together!",
     },
     {
         "id":          "underover",

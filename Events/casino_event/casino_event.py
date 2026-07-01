@@ -444,11 +444,11 @@ class RouletteBetView(_BetView):
 
 
 class BaccaratBetView(_BetView):
-    @discord.ui.button(label="👤 Player", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="👤 Player", style=discord.ButtonStyle.primary,   row=0)
     async def player(self, i: discord.Interaction, _b): await self._pick(i, "player")
-    @discord.ui.button(label="🏦 Banker", style=discord.ButtonStyle.danger,  row=0)
+    @discord.ui.button(label="🏦 Banker", style=discord.ButtonStyle.primary,   row=0)
     async def banker(self, i: discord.Interaction, _b): await self._pick(i, "banker")
-    @discord.ui.button(label="🤝 Tie",    style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="🤝 Tie",    style=discord.ButtonStyle.secondary, row=0)
     async def tie(self,    i: discord.Interaction, _b): await self._pick(i, "tie")
 
 
@@ -516,11 +516,12 @@ def _build_join_embed(game: dict, min_bet: int, end_ts: int, participants: dict,
         prize_pool = total_player_pot * 2
         pool_value = f"{var.CURRENCY_SYMBOL} {prize_pool:,} *(house matched!)*" if count else f"{var.CURRENCY_SYMBOL} 0"
         embed.add_field(name="🏆 Prize Pool", value=pool_value, inline=True)
-        embed.set_footer(text=f"{var.SERVER_NAME} · House doubles the pot!")
+        footer_note = game.get("footer_note", "House doubles the pot!")
     else:
         wagered_value = f"{var.CURRENCY_SYMBOL} {total_player_pot:,}" if count else f"{var.CURRENCY_SYMBOL} 0"
         embed.add_field(name="💰 Total Wagered", value=wagered_value, inline=True)
-        embed.set_footer(text=f"{var.SERVER_NAME} · Winners paid at individual odds!")
+        footer_note = game.get("footer_note", "Winners paid at individual odds!")
+    embed.set_footer(text=f"{var.SERVER_NAME} · {footer_note}")
     embed.timestamp = datetime.utcnow()
     return embed
 
@@ -995,12 +996,15 @@ class CasinoEventCog(commands.Cog):
         join_window = cfg.get("join_window", var.JOIN_WINDOW)
 
         if game_id in _BET_VIEWS:
-            bet_label = default_bet if isinstance(default_bet, str) else ""
+            bet_label = _display_bet(default_bet) or "—"
             view      = _BET_VIEWS[game_id](self._participants, uid, timeout=join_window)
             await interaction.response.send_message(
-                content=(
-                    f"✅ You're in with **{var.CURRENCY_SYMBOL} {wage:,}**!\n"
-                    f"Default bet: **{bet_label}** — change it below if you want:"
+                embed=discord.Embed(
+                    description=(
+                        f"✅ You're in with **{var.CURRENCY_SYMBOL} {wage:,} {var.CURRENCY_NAME}**!\n"
+                        f"Current bet: **{bet_label}** — pick a different one below:"
+                    ),
+                    color=var.COLOR_WIN,
                 ),
                 view=view,
                 ephemeral=True,
