@@ -420,6 +420,7 @@ class FightClubCog(commands.Cog):
     # ── /challenge ────────────────────────────────────────────────────────────
 
     @app_commands.command(name="challenge", description="Challenge another user's tamagotchi to a fight")
+    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     @app_commands.describe(
         opponent="The user you want to challenge",
         bet=f"Coins to bet (minimum {var.BET_MIN:,})",
@@ -521,6 +522,7 @@ class FightClubCog(commands.Cog):
     # ── /fight_stats ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="fight_stats", description="View your tamagotchi's fight record")
+    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     async def fight_stats(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
@@ -558,12 +560,4 @@ class FightClubCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    cog = FightClubCog(bot)
-    if var.GUILD_ID:
-        try:
-            await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
-            log.info("FightClubCog registered as guild-specific (id=%s)", var.GUILD_ID)
-            return
-        except TypeError:
-            log.warning("guilds= not supported by this discord.py version; falling back to global")
-    await bot.add_cog(cog)
+    await bot.add_cog(FightClubCog(bot))

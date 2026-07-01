@@ -45,6 +45,7 @@ class AdminPanelCog(commands.Cog):
 
     @app_commands.command(name="bot_status", description="View the load status of every cog")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     async def bot_status(self, interaction: discord.Interaction):
         loaded = set(self.bot.cogs.keys())
         total_expected = total_loaded = 0
@@ -82,6 +83,7 @@ class AdminPanelCog(commands.Cog):
         name="log",
         description="Control what gets posted to #bot-logs and #mod-logs",
         default_permissions=discord.Permissions(administrator=True),
+        guild_ids=[var.GUILD_ID] if var.GUILD_ID else None,
     )
 
     @log.command(name="settings", description="Show all bot-logs category toggles")
@@ -116,12 +118,4 @@ class AdminPanelCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    cog = AdminPanelCog(bot)
-    if var.GUILD_ID:
-        try:
-            await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
-            log.info("AdminPanelCog registered as guild-specific (id=%s)", var.GUILD_ID)
-            return
-        except TypeError:
-            log.warning("guilds= not supported by this discord.py version; falling back to global")
-    await bot.add_cog(cog)
+    await bot.add_cog(AdminPanelCog(bot))
