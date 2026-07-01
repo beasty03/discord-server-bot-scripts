@@ -560,6 +560,10 @@ class FightClubCog(commands.Cog):
 async def setup(bot: commands.Bot):
     cog = FightClubCog(bot)
     if var.GUILD_ID:
-        await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
-    else:
-        await bot.add_cog(cog)
+        try:
+            await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
+            log.info("FightClubCog registered as guild-specific (id=%s)", var.GUILD_ID)
+            return
+        except TypeError:
+            log.warning("guilds= not supported by this discord.py version; falling back to global")
+    await bot.add_cog(cog)
