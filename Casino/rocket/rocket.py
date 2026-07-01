@@ -108,6 +108,7 @@ class RocketView(discord.ui.View):
         button.style    = discord.ButtonStyle.success
         button.disabled = True
 
+        max_payout = int(self.bet * self.crash_at)
         embed = discord.Embed(
             title=f"✅ Cashed out at {mult:.2f}×!",
             description=f"You won {var.CURRENCY_SYMBOL} **{profit:,}** {var.CURRENCY_NAME}!",
@@ -116,6 +117,11 @@ class RocketView(discord.ui.View):
         embed.add_field(name="Multiplier",  value=f"**{mult:.2f}×**",                      inline=True)
         embed.add_field(name="Payout",      value=f"{var.CURRENCY_SYMBOL} {payout:,}",     inline=True)
         embed.add_field(name="Balance",     value=f"{var.CURRENCY_SYMBOL} {new_bal:,}",    inline=True)
+        embed.add_field(
+            name="💥 Crashed at",
+            value=f"**{self.crash_at:.2f}×** — max {var.CURRENCY_SYMBOL} {max_payout:,}",
+            inline=False,
+        )
         if ev_mult > 1.0:
             embed.add_field(name="💰 Event bonus", value=f"**{ev_mult}×** applied!", inline=False)
         embed.set_footer(text=f"{interaction.user.display_name} · {var.SERVER_NAME}")
@@ -169,13 +175,20 @@ class RocketView(discord.ui.View):
         self.children[0].style    = discord.ButtonStyle.danger
         self.children[0].disabled = True
 
+        max_payout = int(self.bet * self.current_mult) if self.current_mult > 1.0 else 0
         embed = discord.Embed(
             title=f"💥 Rocket crashed at {self.crash_at:.2f}×!",
             description=f"Lost {var.CURRENCY_SYMBOL} **{self.bet:,}** {var.CURRENCY_NAME}.",
             color=var.COLOR_LOSE,
         )
-        embed.add_field(name="Crash point", value=f"**{self.crash_at:.2f}×**",          inline=True)
-        embed.add_field(name="Last safe",   value=f"**{self.current_mult:.2f}×**",       inline=True)
+        embed.add_field(name="Crash point", value=f"**{self.crash_at:.2f}×**",        inline=True)
+        embed.add_field(name="Last safe",   value=f"**{self.current_mult:.2f}×**",     inline=True)
+        if max_payout > 0:
+            embed.add_field(
+                name="💰 Max payout",
+                value=f"{var.CURRENCY_SYMBOL} {max_payout:,} *(at {self.current_mult:.2f}×)*",
+                inline=True,
+            )
         embed.set_footer(text=f"{self.interaction.user.display_name} · {var.SERVER_NAME}")
         embed.timestamp = datetime.utcnow()
         try:
