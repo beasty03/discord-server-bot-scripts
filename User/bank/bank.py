@@ -13,7 +13,15 @@ var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 from utils.config_loader import load_config, save_config
-from Admin.panel.log_config import is_log_enabled
+
+try:
+    from Admin.panel.log_config import is_log_enabled as _is_log_enabled
+except ImportError:
+    try:
+        from panel.log_config import is_log_enabled as _is_log_enabled
+    except ImportError:
+        def _is_log_enabled(category: str) -> bool:
+            return True
 
 log = logging.getLogger("launcher")
 
@@ -113,7 +121,7 @@ class BankCog(commands.Cog):
             _save_settings(settings)
 
             bot_logs = discord.utils.get(guild.text_channels, name="bot-logs")
-            if bot_logs and is_log_enabled("house_daily"):
+            if bot_logs and _is_log_enabled("house_daily"):
                 try:
                     await bot_logs.send(embed=discord.Embed(
                         title="🏦 House Daily Income",

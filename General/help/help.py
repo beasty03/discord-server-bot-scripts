@@ -195,7 +195,7 @@ class HelpCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="Commands_help", description="Browse all bot commands grouped by category.")
+    @app_commands.command(name="commands_help", description="Browse all bot commands grouped by category.")
     async def help(self, interaction: discord.Interaction):
         embed = _build_home_embed()
         await interaction.response.send_message(embed=embed, view=HelpView(self.bot), ephemeral=True)

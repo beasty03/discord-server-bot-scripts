@@ -19,7 +19,14 @@ _cfg_mod  = _ilu.module_from_spec(_cfg_spec)
 _cfg_spec.loader.exec_module(_cfg_mod)
 AutomodConfig = _cfg_mod.AutomodConfig
 
-from Admin.panel.log_config import is_log_enabled
+try:
+    from Admin.panel.log_config import is_log_enabled as _is_log_enabled
+except ImportError:
+    try:
+        from panel.log_config import is_log_enabled as _is_log_enabled
+    except ImportError:
+        def _is_log_enabled(category: str) -> bool:
+            return True
 
 log = logging.getLogger("launcher")
 
@@ -219,7 +226,7 @@ class AutomodCog(commands.Cog):
             pass
 
         # Log to mod-logs
-        log_ch = await self._get_log_channel(guild) if is_log_enabled("automod") else None
+        log_ch = await self._get_log_channel(guild) if _is_log_enabled("automod") else None
         if log_ch:
             try:
                 await log_ch.send(embed=_log_embed(

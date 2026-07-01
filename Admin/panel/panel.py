@@ -12,7 +12,10 @@ _spec = _ilu.spec_from_file_location("panel_variables", Path(__file__).parent / 
 var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 
-from Admin.panel.log_config import CATEGORIES, get_all, toggle_log
+try:
+    from Admin.panel.log_config import CATEGORIES, get_all, toggle_log
+except ImportError:
+    from panel.log_config import CATEGORIES, get_all, toggle_log
 
 log = logging.getLogger(__name__)
 

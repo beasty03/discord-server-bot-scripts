@@ -9,7 +9,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from forge_db import ForgeDB
-from Admin.panel.log_config import is_log_enabled
+
+try:
+    from Admin.panel.log_config import is_log_enabled as _is_log_enabled
+except ImportError:
+    try:
+        from panel.log_config import is_log_enabled as _is_log_enabled
+    except ImportError:
+        def _is_log_enabled(category: str) -> bool:
+            return True
 
 _spec = _ilu.spec_from_file_location("fc_variables", Path(__file__).parent / "variables.py")
 var = _ilu.module_from_spec(_spec)
@@ -183,12 +191,13 @@ def _record_fight(db, uid: str, gid: str, won: bool, earnings: int):
 
 class ChallengeView(discord.ui.View):
 
-    def __init__(self, cog, challenger: discord.Member, opponent: discord.Member, bet: int):
+    def __init__(self, cog, challenger: discord.Member, opponent: discord.Member, bet: int, guild_id: int):
         super().__init__(timeout=var.CHALLENGE_TIMEOUT)
         self.cog        = cog
         self.challenger = challenger
         self.opponent   = opponent
         self.bet        = bet
+        self.guild_id   = guild_id
         self.resolved   = False
 
     # ── guards ────────────────────────────────────────────────────────────────
@@ -344,7 +353,7 @@ class ChallengeView(discord.ui.View):
         embed.set_footer(text=f"Final HP — {n1}: {hp1_final}/{hp1_max}  |  {n2}: {hp2_final}/{hp2_max}")
 
         # Post summary to #bot-logs if enabled
-        if is_log_enabled("fight_results"):
+        if _is_log_enabled("fight_results"):
             bot_logs = discord.utils.get(interaction.guild.text_channels, name="bot-logs")
             if bot_logs:
                 try:
@@ -365,8 +374,8 @@ class ChallengeView(discord.ui.View):
     async def on_timeout(self):
         if not self.resolved:
             self.resolved = True
-            self.cog._unlock(None, self.challenger.id)
-            self.cog._unlock(None, self.opponent.id)
+            self.cog._unlock(self.guild_id, self.challenger.id)
+            self.cog._unlock(self.guild_id, self.opponent.id)
             self._disable_all()
 
 
@@ -485,7 +494,7 @@ class FightClubCog(commands.Cog):
         )
         embed.set_footer(text=f"{opponent.display_name} has {var.CHALLENGE_TIMEOUT}s to respond.")
 
-        view = ChallengeView(self, interaction.user, opponent, bet)
+        view = ChallengeView(self, interaction.user, opponent, bet, interaction.guild_id)
         await interaction.response.send_message(embed=embed, view=view)
         await view.wait()
 
