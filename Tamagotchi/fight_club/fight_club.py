@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import random
 import time
 import logging
@@ -10,14 +12,17 @@ from discord.ext import commands
 
 from forge_db import ForgeDB
 
+_is_log_enabled = lambda cat: True
 try:
-    from Admin.panel.log_config import is_log_enabled as _is_log_enabled
-except ImportError:
-    try:
-        from panel.log_config import is_log_enabled as _is_log_enabled
-    except ImportError:
-        def _is_log_enabled(category: str) -> bool:
-            return True
+    _lpath = Path(__file__).parent.parent.parent / "Admin" / "panel" / "log_config.py"
+    if not _lpath.exists():
+        _lpath = Path(__file__).parent.parent / "panel" / "log_config.py"
+    if _lpath.exists():
+        _ls = _ilu.spec_from_file_location("_log_cfg", _lpath)
+        _lm = _ilu.module_from_spec(_ls); _ls.loader.exec_module(_lm)
+        _is_log_enabled = _lm.is_log_enabled
+except Exception:
+    pass
 
 _spec = _ilu.spec_from_file_location("fc_variables", Path(__file__).parent / "variables.py")
 var = _ilu.module_from_spec(_spec)
