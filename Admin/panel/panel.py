@@ -41,11 +41,18 @@ class AdminPanelCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self):
+        if var.GUILD_ID:
+            _guild = discord.Object(id=var.GUILD_ID)
+            for _name in ("bot_status", "log"):
+                _cmd = self.bot.tree.remove_command(_name)
+                if _cmd:
+                    self.bot.tree.add_command(_cmd, guild=_guild)
+
     # ── /bot_status ───────────────────────────────────────────────────────────
 
     @app_commands.command(name="bot_status", description="View the load status of every cog")
     @app_commands.default_permissions(administrator=True)
-    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     async def bot_status(self, interaction: discord.Interaction):
         loaded = set(self.bot.cogs.keys())
         total_expected = total_loaded = 0
@@ -83,7 +90,6 @@ class AdminPanelCog(commands.Cog):
         name="log",
         description="Control what gets posted to #bot-logs and #mod-logs",
         default_permissions=discord.Permissions(administrator=True),
-        guild_ids=[var.GUILD_ID] if var.GUILD_ID else None,
     )
 
     @log.command(name="settings", description="Show all bot-logs category toggles")

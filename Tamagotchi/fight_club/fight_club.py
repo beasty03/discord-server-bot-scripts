@@ -416,11 +416,16 @@ class FightClubCog(commands.Cog):
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+        if var.GUILD_ID:
+            _guild = discord.Object(id=var.GUILD_ID)
+            for _name in ("challenge", "fight_stats"):
+                _cmd = self.bot.tree.remove_command(_name)
+                if _cmd:
+                    self.bot.tree.add_command(_cmd, guild=_guild)
 
     # ── /challenge ────────────────────────────────────────────────────────────
 
     @app_commands.command(name="challenge", description="Challenge another user's tamagotchi to a fight")
-    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     @app_commands.describe(
         opponent="The user you want to challenge",
         bet=f"Coins to bet (minimum {var.BET_MIN:,})",
@@ -522,7 +527,6 @@ class FightClubCog(commands.Cog):
     # ── /fight_stats ──────────────────────────────────────────────────────────
 
     @app_commands.command(name="fight_stats", description="View your tamagotchi's fight record")
-    @app_commands.guilds(discord.Object(id=var.GUILD_ID))
     async def fight_stats(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         gid = str(interaction.guild_id)
