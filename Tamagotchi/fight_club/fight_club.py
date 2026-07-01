@@ -416,10 +416,14 @@ class FightClubCog(commands.Cog):
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+        _global = [c.name for c in self.bot.tree.get_commands()]
+        log.warning("[FightClub] cog_load — GUILD_ID=%s | global tree (%s): %s",
+                    var.GUILD_ID, len(_global), _global)
         if var.GUILD_ID:
             _guild = discord.Object(id=var.GUILD_ID)
             for _name in ("challenge", "fight_stats"):
                 _cmd = self.bot.tree.remove_command(_name)
+                log.warning("[FightClub] remove_command(%r) → %s", _name, _cmd)
                 if _cmd:
                     self.bot.tree.add_command(_cmd, guild=_guild)
 
