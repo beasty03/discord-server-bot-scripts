@@ -32,12 +32,12 @@ CURRENCY_SYMBOL  = config.get("currency_symbol", "🪙")
 MIN_BET  = 10
 MAX_BET  = -1   # -1 = no limit
 
-TICK_DELAY = 2.0   # seconds between multiplier updates
+TICK_DELAY = 0.5   # seconds between multiplier updates
 
-# Multiplier stages the rocket climbs through before crashing
-TICK_STAGES = [1.0, 1.1, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 50.0]
+# +0.10 per tick from 1.00 to 100.00 (991 stages)
+TICK_STAGES = [round(1.0 + i * 0.10, 2) for i in range(991)]
 
-BUTTON_TIMEOUT = 60
+BUTTON_TIMEOUT = 180   # 3 min — covers up to ~37× before timeout fires
 
 # ============================================================================
 # EMBED COLORS
