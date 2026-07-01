@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import logging
 import json
@@ -13,6 +13,7 @@ var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 from utils.config_loader import load_config, save_config
+from Admin.panel.log_config import is_log_enabled
 
 log = logging.getLogger("launcher")
 
@@ -65,6 +66,7 @@ class BankCog(commands.Cog):
         self.db  = ForgeDB.get()
 
     async def cog_load(self):
+        self._house_daily_task.start()
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS daily_streaks (
                 user_id           TEXT NOT NULL,
@@ -74,6 +76,59 @@ class BankCog(commands.Cog):
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+
+    def cog_unload(self):
+        self._house_daily_task.cancel()
+
+    # ── House daily task ──────────────────────────────────────────────────────
+
+    @tasks.loop(hours=1)
+    async def _house_daily_task(self):
+        """Credit the house once per daily cycle, proportional to server member count."""
+        settings     = _load_settings()
+        reset_hour, reset_minute = _daily_reset_time()
+        tz           = _daily_tz()
+        now          = datetime.now(tz)
+        today        = _effective_daily_date(now, reset_hour, reset_minute)
+        today_str    = today.isoformat()
+        base_amount  = settings.get("daily_amount", 0) or var.DAILY_BONUS_AMOUNT
+        multiplier   = float(settings.get("house_daily_multiplier", var.HOUSE_DAILY_MULTIPLIER))
+
+        for guild in self.bot.guilds:
+            gid     = str(guild.id)
+            key     = f"last_house_daily_{gid}"
+            if settings.get(key) == today_str:
+                continue
+
+            member_count = sum(1 for m in guild.members if not m.bot)
+            if member_count == 0:
+                continue
+
+            house_daily = int(member_count * base_amount * multiplier)
+            bot_uid     = str(self.bot.user.id)
+            self.db.ensure_user(bot_uid, gid, "House")
+            self.db.update_balance(bot_uid, gid, house_daily, 'house_daily')
+
+            settings[key] = today_str
+            _save_settings(settings)
+
+            bot_logs = discord.utils.get(guild.text_channels, name="bot-logs")
+            if bot_logs and is_log_enabled("house_daily"):
+                try:
+                    await bot_logs.send(embed=discord.Embed(
+                        title="🏦 House Daily Income",
+                        description=(
+                            f"House credited **{var.CURRENCY_SYMBOL} {house_daily:,} {var.CURRENCY_NAME}**\n"
+                            f"*{member_count} members × {var.CURRENCY_SYMBOL} {base_amount:,} × {multiplier}×*"
+                        ),
+                        color=0x57F287,
+                    ))
+                except Exception:
+                    pass
+
+    @_house_daily_task.before_loop
+    async def _before_house_daily(self):
+        await self.bot.wait_until_ready()
 
     # ── /balance ──────────────────────────────────────────────────────────────
 
@@ -457,6 +512,36 @@ class BankCog(commands.Cog):
             embed=discord.Embed(
                 description=f"✅ Timezone set to **{tz.key}**. Daily reset time is now interpreted in that timezone.",
                 color=var.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+    # ── /set_house_daily_multiplier ───────────────────────────────────────────
+
+    @app_commands.command(
+        name="set_house_daily_multiplier",
+        description="Set how much the house earns per player per daily cycle (1.0 = full daily per player).",
+    )
+    @app_commands.describe(multiplier="Multiplier (e.g. 1.0 = member_count × daily_amount, 0.5 = half that)")
+    async def set_house_daily_multiplier(self, interaction: discord.Interaction, multiplier: float):
+        if multiplier < 0:
+            return await interaction.response.send_message(
+                embed=discord.Embed(description="Multiplier must be 0 or higher.", color=0xED4245),
+                ephemeral=True,
+            )
+        data = _load_settings()
+        data["house_daily_multiplier"] = multiplier
+        _save_settings(data)
+        base    = data.get("daily_amount", 0) or var.DAILY_BONUS_AMOUNT
+        example = int(50 * base * multiplier)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=(
+                    f"✅ House daily multiplier set to **{multiplier}×**.\n"
+                    f"On a 50-member server with a {var.CURRENCY_SYMBOL} {base:,} daily, "
+                    f"the house earns **{var.CURRENCY_SYMBOL} {example:,}** per cycle."
+                ),
+                color=0x57F287,
             ),
             ephemeral=True,
         )

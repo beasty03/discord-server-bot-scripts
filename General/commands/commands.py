@@ -19,10 +19,15 @@ log = logging.getLogger("launcher")
 # These sections are excluded from the public command channel but shown via /see_admin_commands.
 _ADMIN_SECTIONS = [
     ("⚙️ Config",          "ConfigCog"),
+    ("🛡️ AutoMod",         "AutomodCog"),
+    ("🖥️ Admin Panel",     "AdminPanelCog"),
     ("👋 Welcome System",  "WelcomeSystem"),
     ("📜 Rules",           "Rules"),
     ("📋 Commands",        "CommandsCog"),
 ]
+
+# Admin commands that don't follow the set_ prefix convention but must still be hidden.
+_ADMIN_CMD_NAMES = frozenset({"startevent", "stop_multiplier_event"})
 
 # Admin category is intentionally excluded — admin commands are for server owners only
 # and should not appear in the public command channel.
@@ -86,6 +91,24 @@ _CATEGORIES = [
             ("🏪 Shop",           "ShopCog"),
             ("⚗️ Recipes",        "RecipesCog"),
             ("📖 Scribe",         "ScribeCog"),
+        ],
+    },
+    {
+        "label":   "🐾 Tamagotchi",
+        "color":   0xFF9FF3,
+        "sections": [
+            ("🐾 Pet",        "TamagotchiCog"),
+            ("⚔️ Fight Club", "FightClubCog"),
+        ],
+    },
+    {
+        "label":   "🎮 Minigames",
+        "color":   var.COLOR_MINIGAMES,
+        "sections": [
+            ("🎯 Hangman",      "HangmanCog"),
+            ("🟩 Wordle",       "WordleCog"),
+            ("❌ Tic-Tac-Toe",  "TicTacToeCog"),
+            ("🔴 Connect 4",    "Connect4Cog"),
         ],
     },
     {
@@ -235,7 +258,8 @@ def _build_category_embed(bot: commands.Bot, cat: dict) -> discord.Embed | None:
         cog  = bot.cogs.get(cog_name)
         if cog is None:
             continue
-        cmds = [c for c in cog.get_app_commands() if not c.name.startswith("set_")]
+        cmds = [c for c in cog.get_app_commands()
+                if not c.name.startswith("set_") and c.name not in _ADMIN_CMD_NAMES]
         if not cmds:
             continue
         any_field = True

@@ -26,6 +26,7 @@ GIVE_MAX = 0
 # ============================================================================
 
 DAILY_BONUS_AMOUNT   = 500   # Base daily reward (overridden by /set_daily_amount)
+HOUSE_DAILY_MULTIPLIER = 1.0 # House daily = member_count × daily_amount × this (overridden by /set_house_daily_multiplier)
 STREAK_BONUS_STARTS  = 3     # Streak day where the bonus first applies
 STREAK_BONUS_PER_DAY = 10    # Bonus % added per streak day above threshold
 STREAK_BONUS_MAX     = 100   # Cap on streak bonus % (100 = max 2× base)
