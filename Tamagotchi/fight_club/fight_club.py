@@ -558,4 +558,8 @@ class FightClubCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(FightClubCog(bot))
+    cog = FightClubCog(bot)
+    if var.GUILD_ID:
+        await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
+    else:
+        await bot.add_cog(cog)

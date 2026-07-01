@@ -116,4 +116,8 @@ class AdminPanelCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(AdminPanelCog(bot))
+    cog = AdminPanelCog(bot)
+    if var.GUILD_ID:
+        await bot.add_cog(cog, guilds=[discord.Object(id=var.GUILD_ID)])
+    else:
+        await bot.add_cog(cog)
