@@ -5,7 +5,7 @@ from pathlib import Path
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import importlib.util as _ilu
 _spec = _ilu.spec_from_file_location('tama_var', Path(__file__).parent / 'variables.py')
@@ -61,6 +61,26 @@ _MOOD_FACES = {
         "content": "¬_¬  ...fine.",
         "sad":     "( ._.) ...disappointing.",
         "miserable":"(ಠ_ಠ) you neglected me.",
+    },
+    "dino": {
+        "dead":    "💀",
+        "critical":"(ᗒᗣᗕ)՞",
+        "sick":    "( ˘_˘ )",
+        "ecstatic":"ヾ(＾▽＾)ﾉ RAWR!",
+        "happy":   "(ﾉ^∇^)ﾉ",
+        "content": "(￣▽￣)",
+        "sad":     "(；＿；)",
+        "miserable":"(｡•́_•̀｡)",
+    },
+    "rock": {
+        "dead":    "(─_─) ...crumbled",
+        "critical":"(;_,)",
+        "sick":    "(,_,)",
+        "ecstatic":"(._.) ★",
+        "happy":   "(._.) ✓",
+        "content": "(._.)",
+        "sad":     "(,_,)",
+        "miserable":"(;_,)",
     },
 }
 
@@ -149,7 +169,7 @@ _COLS = (
     "user_id", "guild_id", "name", "pet_type",
     "hunger", "happiness", "health", "energy", "weight",
     "born_at", "last_updated", "last_fed", "last_played", "last_cleaned", "last_rested",
-    "alive", "total_fed", "total_played",
+    "alive", "total_fed", "total_played", "last_dm_sent",
 )
 
 
@@ -170,7 +190,7 @@ def _save_pet(db, p: dict):
         """UPDATE tamagotchi SET
                hunger=?, happiness=?, health=?, energy=?, weight=?,
                last_updated=?, last_fed=?, last_played=?, last_cleaned=?, last_rested=?,
-               alive=?, total_fed=?, total_played=?, name=?
+               alive=?, total_fed=?, total_played=?, name=?, last_dm_sent=?
            WHERE user_id=? AND guild_id=?""",
         (
             round(p["hunger"], 4), round(p["happiness"], 4),
@@ -179,6 +199,7 @@ def _save_pet(db, p: dict):
             p["last_updated"], p["last_fed"], p["last_played"],
             p["last_cleaned"], p["last_rested"],
             p["alive"], p["total_fed"], p["total_played"], p["name"],
+            p.get("last_dm_sent", 0),
             p["user_id"], p["guild_id"],
         ),
     )
@@ -469,9 +490,74 @@ class TamagotchiCog(commands.Cog):
                 alive        INTEGER NOT NULL DEFAULT 1,
                 total_fed    INTEGER NOT NULL DEFAULT 0,
                 total_played INTEGER NOT NULL DEFAULT 0,
+                last_dm_sent REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, guild_id)
             )
         """)
+        try:
+            self.db.execute("ALTER TABLE tamagotchi ADD COLUMN last_dm_sent REAL NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        self._pet_dm_check.start()
+
+    def cog_unload(self):
+        self._pet_dm_check.cancel()
+
+    # ── DM notifications ─────────────────────────────────────────────────────
+
+    async def _check_and_dm(self, p: dict):
+        now = time.time()
+        if (now - p.get("last_dm_sent", 0)) < var.DM_COOLDOWN_HOURS * 3600:
+            return
+
+        ptype = var.PET_TYPES.get(p["pet_type"], {"emoji": "🐾", "name": p["pet_type"].title()})
+        warnings = []
+        if p["hunger"] >= var.DM_WARN_HUNGER:
+            warnings.append(f"🍖 **{p['name']}** is hungry! Feed it soon.")
+        if p["health"] <= var.DM_WARN_HEALTH:
+            warnings.append(f"❤️ **{p['name']}**'s health is low ({int(p['health'])}/100). Clean and rest it!")
+        if p["happiness"] <= var.DM_WARN_HAPPINESS:
+            warnings.append(f"😔 **{p['name']}** is unhappy ({int(p['happiness'])}/100). Play with it!")
+        if p["energy"] <= var.DM_WARN_ENERGY:
+            warnings.append(f"⚡ **{p['name']}** is exhausted ({int(p['energy'])}/100). Let it rest!")
+
+        if not warnings:
+            return
+
+        try:
+            user = await self.bot.fetch_user(int(p["user_id"]))
+            embed = discord.Embed(
+                title=f"{ptype['emoji']} {p['name']} needs attention!",
+                description="\n".join(warnings) + "\n\nUse `/mypet` to take care of them!",
+                color=var.COLOR_SICK,
+            )
+            embed.set_footer(text=var.SERVER_NAME)
+            await user.send(embed=embed)
+            p["last_dm_sent"] = now
+            _save_pet(self.db, p)
+        except Exception:
+            pass
+
+    @tasks.loop(hours=1)
+    async def _pet_dm_check(self):
+        try:
+            rows = self.db.execute(
+                f"SELECT {', '.join(_COLS)} FROM tamagotchi WHERE alive = 1"
+            )
+            for raw in rows:
+                p = _row_to_dict(raw)
+                p = _apply_decay(p)
+                if p["health"] <= 0:
+                    p["alive"] = 0
+                    _save_pet(self.db, p)
+                    continue
+                await self._check_and_dm(p)
+        except Exception as e:
+            log.error("[Tamagotchi] DM check error: %s", e)
+
+    @_pet_dm_check.before_loop
+    async def _before_pet_dm_check(self):
+        await self.bot.wait_until_ready()
 
     # ── /adopt ────────────────────────────────────────────────────────────────
 
@@ -489,6 +575,8 @@ class TamagotchiCog(commands.Cog):
         app_commands.Choice(name="🐲 Dragon",      value="dragon"),
         app_commands.Choice(name="🌸 Waifu",       value="waifu"),
         app_commands.Choice(name="🖤 Goth Mommy",  value="goth_mommy"),
+        app_commands.Choice(name="🦕 Dino",        value="dino"),
+        app_commands.Choice(name="🪨 Pet Rock",    value="rock"),
     ])
     async def adopt(self, interaction: discord.Interaction, name: str, pet_type: str):
         uid = str(interaction.user.id)

@@ -21,6 +21,8 @@ PET_TYPES = {
     "dragon":     {"emoji": "🐲",  "name": "Dragon"},
     "waifu":      {"emoji": "🌸",  "name": "Waifu"},
     "goth_mommy": {"emoji": "🖤",  "name": "Goth Mommy"},
+    "dino":       {"emoji": "🦕",  "name": "Dino"},
+    "rock":       {"emoji": "🪨",  "name": "Pet Rock"},
 }
 
 # ============================================================================
@@ -87,6 +89,16 @@ STAGE_TEEN_DAYS  = 14   # 7 → 14 days
 # ============================================================================
 # VIEW TIMEOUT
 # ============================================================================
+
+# ============================================================================
+# DM NOTIFICATIONS
+# ============================================================================
+
+DM_WARN_HUNGER    = 70   # DM when hunger reaches this value
+DM_WARN_HEALTH    = 30   # DM when health drops to this value
+DM_WARN_HAPPINESS = 30   # DM when happiness drops to this value
+DM_WARN_ENERGY    = 20   # DM when energy drops to this value
+DM_COOLDOWN_HOURS = 4    # minimum hours between DMs per pet
 
 VIEW_TIMEOUT = 90    # seconds before buttons disable
 
