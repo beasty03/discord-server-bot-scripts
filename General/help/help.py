@@ -61,10 +61,11 @@ CATEGORIES = [
     {
         "label":       "🔔 Webhooks",
         "value":       "webhooks",
-        "description": "Automated posting — Wordle Recap",
+        "description": "Automated posting — Wordle Recap, Minecraft Server",
         "color":       var.COLOR_WEBHOOKS,
         "sections": [
-            ("📰 Wordle Recap", "WordleRecap"),
+            ("📰 Wordle Recap",      "WordleRecap"),
+            ("⛏️ Minecraft Server",  "MinecraftServerCog"),
         ],
     },
     {

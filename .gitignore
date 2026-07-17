@@ -16,6 +16,9 @@ config.yaml
 config.yml
 *.secret
 
+# /set_mc_server can persist a raw Client API key here — never commit it
+Webhooks/minecraft_server/mc_servers_config.json
+
 # ── DLC — guides and templates (dev tools, not live content) ──────────────────
 DND_DLC/CREATOR_GUIDE.md
 DND_DLC/_template/
