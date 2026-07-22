@@ -100,6 +100,7 @@ CATEGORIES = [
         "sections": [
             ("⚙️ Config",        "ConfigCog"),
             ("👋 Welcome System", "WelcomeSystem"),
+            ("⚡ Elevated Rights", "ElevatedRights"),
         ],
     },
 ]
