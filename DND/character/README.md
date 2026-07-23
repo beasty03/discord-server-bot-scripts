@@ -2,6 +2,8 @@
 
 Create and manage your D&D character — roll ability scores, pick a race and class, and view your full character sheet.
 
+Commands: 13
+
 ## Commands
 
 | Command | Description |

@@ -2,6 +2,8 @@
 
 A server-wide economy boost event. When active, all currency earned across the bot is multiplied by a random value between the configured min and max. The multiplier applies to **profit only** — the original wager is always returned on top of the boosted profit.
 
+Commands: 5
+
 ## How it works
 
 1. An admin runs `/startevent Multiplier` (or `/start_multiplier_event`).

@@ -2,6 +2,8 @@
 
 Manages a persistent server rules embed. Admins can add, edit, and remove rules via slash commands — every change automatically updates the pinned embed in place so the rules channel always shows one clean, up-to-date message.
 
+Commands: 5
+
 ## Commands
 
 - `/rules_channel #channel` — set the channel where the rules embed is posted

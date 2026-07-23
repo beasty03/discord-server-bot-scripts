@@ -2,6 +2,8 @@
 
 Multiplayer casino game where players bet on one of six horses and share a public race channel message.
 
+Commands: 1
+
 ## Command
 
 ```

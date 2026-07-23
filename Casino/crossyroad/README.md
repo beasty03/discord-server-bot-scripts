@@ -2,6 +2,8 @@
 
 An interactive hop-or-cashout game. Cross traffic lanes one at a time — each hop risks a car, but the further you go the bigger the reward. Cash out any time or get wiped out trying.
 
+Commands: 1
+
 ## How it works
 
 1. Use `/crossyroad <amount>` to start a game (ephemeral — only you see it).

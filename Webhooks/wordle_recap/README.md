@@ -2,6 +2,8 @@
 
 Posts yesterday's Wordle answer every day at a configurable time (default **00:05 UTC**) in a channel of your choice (default **#general**). The answer is fetched from the official NYT Wordle API.
 
+Commands: 5
+
 ## Commands
 
 - `/set_wordle_channel #channel` — set the channel where the recap is posted

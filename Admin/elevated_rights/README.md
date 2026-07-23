@@ -2,6 +2,8 @@
 
 Grants a member a role for a fixed duration and removes it automatically when time is up. Useful for temporary VIP access, event roles, timed permissions, "elevated" support access, etc. Grants persist in ForgeDB, so they survive a bot restart — an expired grant is cleaned up the next time the background check runs, even if that's on a fresh process.
 
+Commands: 5
+
 ## Commands
 
 - `/elevate @member [role] [duration] [reason]` — grant a role for a duration (default `1h`). `role` is optional if a default is set via `/set_elevate_role`. Duration accepts `s`/`m`/`h`/`d`/`w`, and combinations like `1d12h`.

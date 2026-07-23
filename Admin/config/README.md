@@ -2,6 +2,8 @@
 
 Manages global channel and role restrictions for all bot commands. Registers a single `bot.tree.add_check()` that runs before every slash command — no other cog needs to be modified.
 
+Commands: 6
+
 ## Rules
 
 | Command type | Where it works | Who can use it |

@@ -4,6 +4,8 @@ Poverty-themed commands. `/beg` and `/dumpster_dive` let broke players scrape to
 
 ---
 
+Commands: 5
+
 ## Commands
 
 | Command | Description |

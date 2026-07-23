@@ -3,6 +3,8 @@
 
 A multiplayer event built from the server's own quote archive. The bot posts a 4-choice trivia question publicly — guess who said it, who submitted it, or complete the missing half — and only the fastest correct answer in the channel wins coins. It fires automatically on a random interval (like Casino and Multiplier events) and shares their admin commands.
 
+Commands: 1
+
 ## 📋 Features
 
 - 🎙️ **Who said it?** — Show a quote, pick the correct author from 4 names

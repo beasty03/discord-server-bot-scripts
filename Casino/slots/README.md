@@ -2,6 +2,8 @@
 
 A slot machine game with 8 weighted symbols, 3-of-a-kind jackpots, and 2-of-a-kind consolation payouts.
 
+Commands: 1
+
 ## How it works
 
 1. Use `/slots <amount>` to spin.

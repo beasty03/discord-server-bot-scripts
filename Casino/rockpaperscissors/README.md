@@ -2,6 +2,8 @@
 
 Classic Rock Paper Scissors with betting. Play against the bot for an instant result, or challenge another server member to a simultaneous PvP match where both picks are hidden until revealed.
 
+Commands: 1
+
 ## Commands
 
 | Command | Description |

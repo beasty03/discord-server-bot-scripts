@@ -2,6 +2,8 @@
 
 A Discord casino game where players guess whether the next number will be higher or lower than the current one. Each correct guess stacks a multiplier — cash out at any time to lock in your winnings, or keep pushing your luck for bigger payouts.
 
+Commands: 1
+
 ## Features
 
 - 🎴 **Higher / Lower gameplay** — guess the next number correctly to climb the multiplier ladder

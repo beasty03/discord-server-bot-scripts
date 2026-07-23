@@ -4,6 +4,8 @@ Daily rotating item shop with a tier system, limited stock, and DLC registration
 
 ---
 
+Commands: 4
+
 ## Commands
 
 | Command | Description |

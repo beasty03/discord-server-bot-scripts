@@ -2,6 +2,8 @@
 
 A channel-based quote system. Members can quote each other with `/quote`, which posts a formatted embed to a dedicated quotes channel. After each quote, the quoter must drop a gif in the channel before the next quote can be posted — keeping the channel lively.
 
+Commands: 10
+
 ## How it works
 
 1. An admin sets the quotes channel with `/set_quote_channel`.

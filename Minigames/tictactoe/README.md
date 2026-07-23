@@ -2,6 +2,8 @@
 
 Play Tic-Tac-Toe against the bot on a 3×3 button grid. Bet coins — win to double your bet, lose to forfeit it.
 
+Commands: 1
+
 ## 📋 Features
 
 - 🎮 **Button-based 3×3 grid** — click any open cell to place your mark

@@ -2,6 +2,8 @@
 
 Roll two dice and bet on whether the sum will be under 7, exactly 7, or over 7.
 
+Commands: 1
+
 ## How to play
 
 1. Use `/underover <amount>` to place your bet.

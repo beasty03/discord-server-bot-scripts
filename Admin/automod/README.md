@@ -2,6 +2,8 @@
 
 Automated message moderation with configurable filters. Detects bad words, spam, excessive caps, mass mentions, and unsafe links. Violations accumulate strikes and can auto-timeout offenders.
 
+Commands: 15
+
 ## 📋 Features
 
 - 🤬 **Bad word filter** — configurable word list, wildcards supported

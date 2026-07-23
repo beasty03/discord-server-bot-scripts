@@ -4,6 +4,8 @@ Crafting system for the D&D module. Players collect materials from campaign enco
 
 ---
 
+Commands: 3
+
 ## Commands
 
 | Command | Description |

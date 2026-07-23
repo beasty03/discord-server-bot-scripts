@@ -3,6 +3,8 @@
 
 A Discord bot that lets users play Blackjack against the dealer using virtual currency, with interactive Hit/Stand buttons.
 
+Commands: 1
+
 ## 📋 Features
 
 - 🃏 **Blackjack Game** - Full Hit/Stand gameplay against an automated dealer

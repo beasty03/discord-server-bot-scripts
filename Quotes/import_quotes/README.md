@@ -3,6 +3,8 @@
 
 Bulk-import old quotes from any channel into the Quotes database. Scans messages in `"quote - Name"` format, resolves names to Discord user IDs via a configurable name map, attaches GIFs posted within 5 minutes of the quote, and shows a confirmation preview before writing anything.
 
+Commands: 1
+
 ## 📋 Features
 
 - 🔍 **Channel scan** — reads the full history of any text channel and picks out quote-formatted messages

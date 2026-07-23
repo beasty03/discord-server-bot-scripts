@@ -2,6 +2,8 @@
 
 Centralised currency management for the entire bot. This is the **only** place that provides `/balance`, `/bal`, `/daily`, `/top`, and `/give` — all other casino cogs have had these removed.
 
+Commands: 11
+
 ## Commands
 
 | Command | Description |

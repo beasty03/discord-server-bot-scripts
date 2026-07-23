@@ -2,6 +2,8 @@
 
 Challenge another user's tamagotchi to a PvP battle. Your pet's stats (health, energy, happiness, weight) determine its fighting power — a well-cared pet fights harder. Bet coins, fight, and claim the prize.
 
+Commands: 2
+
 ## 📋 Features
 
 - ⚔️ **PvP challenges** — challenge any server member who owns a living pet

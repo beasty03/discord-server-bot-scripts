@@ -2,6 +2,8 @@
 
 A classic word-guessing game. The bot picks a hidden word and you guess letters one at a time — guess too many wrong and the man gets hanged. Bet coins to play; a correct guess pays out 2×.
 
+Commands: 2
+
 ## 📋 Features
 
 - 🔤 **Letter-by-letter guessing** — click the button and type a letter in the popup

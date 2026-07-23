@@ -2,6 +2,8 @@
 
 A heads-or-tails betting game. Play against the bot for a quick 50/50, or challenge another server member to a PvP flip where the winner takes both bets.
 
+Commands: 1
+
 ## Commands
 
 | Command | Description |

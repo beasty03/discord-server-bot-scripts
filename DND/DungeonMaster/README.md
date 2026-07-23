@@ -4,6 +4,8 @@ Turn-based D&D combat engine — runs campaigns, processes DLC events, and expos
 
 ---
 
+Commands: 21
+
 ## Commands
 
 | Command | Description |

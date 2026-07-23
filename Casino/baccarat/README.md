@@ -2,6 +2,8 @@
 
 A Discord bot that lets users play Baccarat using virtual currency. Bet on Player, Banker, or Tie — cards are dealt automatically following official baccarat rules and the result is shown immediately.
 
+Commands: 1
+
 ## Features
 
 - 🃏 **Full baccarat rules** — official third-card drawing rules for both Player and Banker

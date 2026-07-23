@@ -2,6 +2,8 @@
 
 A Discord bot cog that gives users an interactive overview of all available commands, grouped by category via a dropdown select menu.
 
+Commands: 1
+
 ## Features
 
 - 📖 **Single command** — `/help` shows everything, no need to remember command names

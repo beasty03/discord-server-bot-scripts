@@ -2,6 +2,8 @@
 
 Bet coins and guess the hidden 5-letter word in 6 tries. Each guess reveals which letters are correct (🟩), in the word but wrong spot (🟨), or not in the word at all (⬛). Guess it in fewer attempts to earn a higher payout.
 
+Commands: 2
+
 ## 📋 Features
 
 - 🟩🟨⬛ **Classic colour feedback** — updated live after every guess

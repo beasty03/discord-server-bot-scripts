@@ -2,6 +2,8 @@
 
 Spin a prize wheel and see what multiplier you land on. Instant result, no buttons needed.
 
+Commands: 1
+
 ## How to play
 
 1. Use `/spinwheel <amount>` to spin.

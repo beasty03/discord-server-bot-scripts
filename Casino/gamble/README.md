@@ -3,6 +3,8 @@
  
 A Discord bot that allows users to gamble virtual currency with customizable settings and statistics tracking.
  
+Commands: 1
+
 ## 📋 Features
  
 - 🎰 **Gambling System** - Bet virtual currency for a chance to win

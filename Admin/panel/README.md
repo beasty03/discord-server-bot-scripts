@@ -2,6 +2,8 @@
 
 Two admin tools in one cog: a cog status dashboard to see what's loaded, and a log control system to decide what gets posted to `#bot-logs` and `#mod-logs`.
 
+Commands: 3
+
 ## 📋 Features
 
 ### `/bot_status`

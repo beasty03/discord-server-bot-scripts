@@ -2,6 +2,8 @@
 
 Shows a player's profile card — level, balance, and anything else added to the stats system over time.
 
+Commands: 1
+
 ## Commands
 
 | Command | Description |

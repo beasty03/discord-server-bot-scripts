@@ -2,6 +2,8 @@
 
 A virtual pet system. Adopt a pet, name it, and keep it alive by feeding, playing, cleaning, and resting. Stats decay over time — neglect your pet and it will die. All actions use Discord buttons.
 
+Commands: 4
+
 ## 📋 Features
 
 - 🐣 **8 pet types** — Cat, Dog, Bunny, Chick, Turtle, Dragon, Waifu, Goth Mommy (each with unique mood expressions)

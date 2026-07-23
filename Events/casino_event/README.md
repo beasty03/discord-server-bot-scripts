@@ -2,6 +2,8 @@
 
 Runs periodic multiplayer casino events in a configured channel. A random game is picked from a configurable list, players join during a timed window, then a single shared resolution is posted for all participants.
 
+Commands: 6
+
 ## Flow
 
 1. Background task fires every `EVENT_INTERVAL_MINUTES` minutes.

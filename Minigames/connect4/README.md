@@ -2,6 +2,8 @@
 
 Drop coloured discs into a 7-column, 6-row grid and try to connect four in a row before the bot does. Bet coins — win to double your bet, lose to forfeit it.
 
+Commands: 1
+
 ## 📋 Features
 
 - 🎮 **Button-based column selection** — 7 column buttons drop your disc into that column

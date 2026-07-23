@@ -2,6 +2,8 @@
 
 Shows server-wide coin rankings.
 
+Commands: 6
+
 ## Commands
 
 | Command | Description |

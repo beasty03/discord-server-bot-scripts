@@ -2,6 +2,8 @@
 
 A classic casino dice game. Roll two dice and bet on the pass line — win fast on a natural or fight to make your point.
 
+Commands: 1
+
 ## How to play
 
 1. Use `/craps <amount>` to place a pass line bet.

@@ -2,6 +2,8 @@
 
 Posts a persistent panel in a channel with buttons for each self-assignable role. Users click a button to add or remove that role from themselves. Admins manage the list via slash commands — the panel updates in place every time a role is added or removed.
 
+Commands: 4
+
 ## Commands
 
 - `/selfroles_channel #channel` — set the channel where the panel is posted

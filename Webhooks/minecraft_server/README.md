@@ -4,6 +4,8 @@ Lets admins start, stop, and restart one or more Minecraft servers (the game pro
 
 Supports a single server or many — either one panel running several servers, or multiple panels each with their own API key.
 
+Commands: 9
+
 ## Commands
 
 - `/mc_list` — list every configured server with its current state. Anyone can use this.

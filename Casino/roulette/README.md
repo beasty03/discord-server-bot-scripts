@@ -2,6 +2,8 @@
 
 A Discord bot that lets users play European Roulette (0–36) using virtual currency, with interactive bet-type buttons and a straight-up number modal.
 
+Commands: 1
+
 ## Features
 
 - 🎡 **European Roulette** — numbers 0–36, nine bet types

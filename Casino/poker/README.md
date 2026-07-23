@@ -2,6 +2,8 @@
 
 Multiplayer Texas Hold'em with ante buy-in. Players join a lobby, receive private hole cards via DM, and compete for the full pot across a Flop → Turn → River reveal. Best hand wins.
 
+Commands: 1
+
 ## Commands
 
 | Command | Description |

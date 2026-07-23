@@ -3,6 +3,8 @@
 
 Posts and maintains a pinned command list in a designated channel, grouped by category. Admins set the channel once — the bot auto-updates the post on every restart and on demand. A setup status embed is also sent to `#bot-logs` whenever something is not configured.
 
+Commands: 3
+
 ## 📋 Features
 
 - 📌 **Pinned command list** — posts a multi-embed message listing all loaded slash commands grouped by category (Casino, User, General, Events, DnD, Webhooks)

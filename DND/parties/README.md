@@ -2,6 +2,8 @@
 
 Form and manage adventuring parties. All actions live under the `/party` command group. A character (from the `character` script) is required to use any party command.
 
+Commands: 5
+
 ## Commands
 
 | Command | Description |

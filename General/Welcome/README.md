@@ -2,6 +2,8 @@
 
 Gates server access behind a Terms & Conditions DM, assigns the member role on acceptance, posts a welcome shoutout, and logs new-member chat activity to #bot-logs on a configurable interval.
 
+Commands: 7
+
 ## Commands
 - `/set_welcome_channel #channel` — set the channel where new members receive their welcome shoutout
 - `/set_welcome_role @role` — set the role granted to members after accepting T&C

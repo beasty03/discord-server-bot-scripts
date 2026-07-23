@@ -4,6 +4,8 @@ Records campaign runs and generates a narrative story recap. Currently template-
 
 ---
 
+Commands: 2
+
 ## Commands
 
 | Command | Description |

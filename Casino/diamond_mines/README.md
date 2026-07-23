@@ -2,6 +2,8 @@
 
 A minesweeper-style casino game. Reveal diamonds on a 4×4 grid and cash out before you hit a mine.
 
+Commands: 1
+
 ## How to play
 
 1. Use `/mines <amount> [mines]` to start. Default: 3 mines.

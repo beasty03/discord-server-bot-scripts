@@ -2,6 +2,8 @@
 
 A DraftKings-style crash game. Watch the multiplier climb in real time and cash out before the rocket explodes.
 
+Commands: 1
+
 ## How to play
 
 1. Use `/rocket <amount>` to place your bet.
