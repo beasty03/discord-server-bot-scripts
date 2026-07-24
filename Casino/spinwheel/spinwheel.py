@@ -14,22 +14,9 @@ from forge_db import ForgeDB
 
 log = logging.getLogger("launcher")
 
-# (label, multiplier, weight)
-# Total weight: 25
-# EV ≈ (0×9 + 0.5×3 + 1.2×4 + 1.5×3 + 2×2 + 3×2 + 5×1 + 10×1) / 25 = 35.8/25 ≈ 1.43×
-_SEGMENTS = [
-    ("💀 Bust",   0.0,  9),
-    ("🔴 0.5×",   0.5,  3),
-    ("✨ 1.2×",   1.2,  4),
-    ("💛 1.5×",   1.5,  3),
-    ("💚 2×",     2.0,  2),
-    ("💙 3×",     3.0,  2),
-    ("💜 5×",     5.0,  1),
-    ("🔥 10×",   10.0,  1),
-]
-_WEIGHTS = [s[2] for s in _SEGMENTS]
+_WEIGHTS = [s[2] for s in var.SEGMENTS]
 
-_WHEEL_DISPLAY = " | ".join(s[0] for s in _SEGMENTS)
+_WHEEL_DISPLAY = " | ".join(s[0] for s in var.SEGMENTS)
 
 
 def _record_stats(db, uid: str, gid: str, won: int = 0, lost: int = 0):
@@ -52,7 +39,7 @@ def _house_tx(db, bot_uid: str, gid: str, amount: int, tx_type: str):
 
 
 def _spin() -> tuple:
-    return random.choices(_SEGMENTS, weights=_WEIGHTS, k=1)[0]
+    return random.choices(var.SEGMENTS, weights=_WEIGHTS, k=1)[0]
 
 
 class SpinWheelCog(commands.Cog):
