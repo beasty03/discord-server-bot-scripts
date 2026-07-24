@@ -103,6 +103,16 @@ CATEGORIES = [
             ("⚡ Elevated Rights", "ElevatedRights"),
         ],
     },
+    {
+        "label":       "✨ Aesthetic",
+        "value":       "aesthetic",
+        "description": "Cosmetic extras — Rainbow Role, Bot Status",
+        "color":       var.COLOR_AESTHETIC,
+        "sections": [
+            ("🌈 Rainbow Role", "RainbowRole"),
+            ("🤖 Bot Status",   "BotStatus"),
+        ],
+    },
 ]
 
 
