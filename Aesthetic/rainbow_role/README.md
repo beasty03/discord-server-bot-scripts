@@ -18,7 +18,7 @@ Commands: 4
 - `DEFAULT_ROLE_NAME` — name used when `/rainbow_join` auto-creates the role, default `"🌈 Rainbow"`.
 - `DEFAULT_INTERVAL_SECONDS` — how often (seconds) the color shifts, default `5`. Overridable per server at runtime with `/set_rainbow_speed`.
 - `HUE_STEP_DEGREES` — how far (out of 360°) the hue advances each shift, default `6` (a full cycle takes 60 shifts).
-- `MIN_INTERVAL_SECONDS` — lowest value `/set_rainbow_speed` will accept, default `3`, to keep the bot from hammering Discord's rate limit on role edits.
+- `MIN_INTERVAL_SECONDS` — lowest value `/set_rainbow_speed` will accept, default `1`, to keep the bot from hammering Discord's rate limit on role edits.
 
 ## Setup
 

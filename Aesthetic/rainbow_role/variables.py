@@ -8,7 +8,7 @@ DEFAULT_INTERVAL_SECONDS = 5
 HUE_STEP_DEGREES = 6
 
 # Lowest interval an admin can set with /set_rainbow_speed (protects against Discord rate limits)
-MIN_INTERVAL_SECONDS = 3
+MIN_INTERVAL_SECONDS = 1
 
 # Embed colors
 COLOR_INFO  = 0x5865F2  # blurple
