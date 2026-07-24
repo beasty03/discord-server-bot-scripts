@@ -61,6 +61,20 @@ def _effective(server_cfg: dict) -> tuple[str, str, str]:
     return panel_url, api_key, server_id
 
 
+def _require_mc_admin(interaction: discord.Interaction) -> bool:
+    """Administrators always pass; otherwise the member needs the role set via /set_mc_adminrole.
+    If no role has been configured yet, only Administrators can use these commands."""
+    if not isinstance(interaction.user, discord.Member):
+        return False
+    if interaction.user.guild_permissions.administrator:
+        return True
+    cog = interaction.client.get_cog("MinecraftServerCog")
+    role_id = cog._cfg.get("admin_role_id") if cog else None
+    if role_id is None:
+        return False
+    return any(r.id == role_id for r in interaction.user.roles)
+
+
 # ============================================================================
 # PTERODACTYL CLIENT API HELPERS
 # ============================================================================
@@ -171,6 +185,22 @@ class MinecraftServerCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self._cfg = self._load_cfg()
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.CheckFailure):
+            role_id = self._cfg.get("admin_role_id")
+            msg = (
+                f"❌ You need the <@&{role_id}> role (or Administrator) to use this command."
+                if role_id else
+                "❌ You need Administrator, or a role set via `/set_mc_adminrole`, to use this command."
+            )
+            embed = discord.Embed(description=msg, color=var.COLOR_ERROR)
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        else:
+            raise error
 
     # ── Runtime config (JSON, layered on top of variables.py) ─────────────────
     # variables.py / the shared config file is the static baseline (e.g. what
@@ -305,7 +335,7 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="mc_start", description="Start a Minecraft server.")
     @app_commands.describe(server="Which server (defaults to the configured default)")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def mc_start(self, interaction: discord.Interaction, server: str | None = None):
         name, cfg = self._resolve_server(server)
         if name is None:
@@ -345,7 +375,7 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="mc_stop", description="Stop a Minecraft server (disconnects all players).")
     @app_commands.describe(server="Which server (defaults to the configured default)")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def mc_stop(self, interaction: discord.Interaction, server: str | None = None):
         name, cfg = self._resolve_server(server)
         if name is None:
@@ -379,7 +409,7 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="mc_restart", description="Restart a Minecraft server (disconnects all players).")
     @app_commands.describe(server="Which server (defaults to the configured default)")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def mc_restart(self, interaction: discord.Interaction, server: str | None = None):
         name, cfg = self._resolve_server(server)
         if name is None:
@@ -411,7 +441,7 @@ class MinecraftServerCog(commands.Cog):
         panel_url="Only set this if this server lives on a DIFFERENT panel/host than the shared default",
         client_api_key="Only set this if this server needs its own Client API key (Panel → Account → API Credentials)",
     )
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def set_mc_server(
         self,
         interaction: discord.Interaction,
@@ -460,7 +490,7 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="remove_mc_server", description="Remove a server added via /set_mc_server.")
     @app_commands.describe(name="Which server to remove")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def remove_mc_server(self, interaction: discord.Interaction, name: str):
         servers = self._cfg.get("servers", {})
         if name not in servers:
@@ -499,7 +529,7 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="set_mc_default", description="Set which server /mc_status, /mc_start, /mc_stop, /mc_restart act on by default.")
     @app_commands.describe(name="Which server should be the default")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def set_mc_default(self, interaction: discord.Interaction, name: str):
         servers = self._servers()
         if name not in servers:
@@ -520,7 +550,7 @@ class MinecraftServerCog(commands.Cog):
     # ── /view_mc_config ───────────────────────────────────────────────────────
 
     @app_commands.command(name="view_mc_config", description="Show all configured Minecraft servers and where each setting comes from.")
-    @app_commands.default_permissions(administrator=True)
+    @app_commands.check(_require_mc_admin)
     async def view_mc_config(self, interaction: discord.Interaction):
         servers = self._servers()
         if not servers:
@@ -542,7 +572,25 @@ class MinecraftServerCog(commands.Cog):
                 value=f"Server ID: `{server_id or '—'}`\nPanel: `{panel_url or '—'}`\nAPI key: `{masked}`\nSource: {source}{desc_line}",
                 inline=False,
             )
+        admin_role_id = self._cfg.get("admin_role_id")
+        embed.set_footer(text="Admin role: not set (Administrator required)" if admin_role_id is None else f"Admin role ID: {admin_role_id}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /set_mc_adminrole ─────────────────────────────────────────────────────
+
+    @app_commands.command(name="set_mc_adminrole", description="Set the role required to use Minecraft server commands.")
+    @app_commands.describe(role="The role that should be allowed to manage Minecraft servers (Administrators can always use these commands regardless)")
+    @app_commands.check(_require_mc_admin)
+    async def set_mc_adminrole(self, interaction: discord.Interaction, role: discord.Role):
+        self._cfg["admin_role_id"] = role.id
+        self._save_cfg()
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"✅ **{role.name}** can now use Minecraft server commands (Administrators always can too).",
+                color=var.COLOR_OK,
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):

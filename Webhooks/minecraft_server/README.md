@@ -4,7 +4,7 @@ Lets admins start, stop, and restart one or more Minecraft servers (the game pro
 
 Supports a single server or many — either one panel running several servers, or multiple panels each with their own API key.
 
-Commands: 9
+Commands: 10
 
 ## Commands
 
@@ -16,11 +16,12 @@ Commands: 9
 - `/set_mc_server <name> <server_id> [description] [panel_url] [client_api_key]` — add or update a server **without editing any config file or restarting the bot**. `name` is both the identifier and what's shown in embeds. `description` is an optional short blurb shown alongside it. Only pass `panel_url`/`client_api_key` if this particular server is on a different panel/account than the shared default.
 - `/remove_mc_server <name>` — remove a server added via `/set_mc_server`. Can't remove one that only exists in the static config file.
 - `/set_mc_default <name>` — change which server the other commands act on when `server` is omitted.
-- `/view_mc_config` — show every configured server (name, server ID, panel, masked API key) and whether each came from the config file or `/set_mc_server`.
+- `/view_mc_config` — show every configured server (name, server ID, panel, masked API key) and whether each came from the config file or `/set_mc_server`, plus the currently configured admin role.
+- `/set_mc_adminrole <role>` — set the role allowed to use the commands below. Administrators can always use them regardless of this setting.
 
 `server` is optional everywhere and autocompletes from your configured servers — omit it to act on the default (see `/set_mc_default`).
 
-`/mc_start`, `/mc_stop`, `/mc_restart`, `/set_mc_server`, `/remove_mc_server`, `/set_mc_default`, and `/view_mc_config` all require the **Administrator** permission.
+`/mc_start`, `/mc_stop`, `/mc_restart`, `/set_mc_server`, `/remove_mc_server`, `/set_mc_default`, `/view_mc_config`, and `/set_mc_adminrole` require either the **Administrator** permission or the role set via `/set_mc_adminrole`. Until a role is set, only Administrators can use them (including setting the role itself the first time).
 
 ## How the bot knows which API/server to talk to
 
@@ -105,6 +106,8 @@ Other variables in `variables.py`:
 3. **Load the cog** in your bot launcher as `Webhooks.minecraft_server.minecraft_server`.
 
 4. Run `/mc_list` to confirm the bot can reach every configured server before trying `/mc_start`.
+
+5. **(Optional)** Run `/set_mc_adminrole @role` if you want a role other than Administrator to manage servers — Administrators can always use every command regardless.
 
 > `mc_servers_config.json` (created next to this cog the first time `/set_mc_server` is used) can contain a raw Client API key — it's gitignored, never commit it.
 
