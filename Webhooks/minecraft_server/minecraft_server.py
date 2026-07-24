@@ -45,21 +45,20 @@ def _not_configured_embed() -> discord.Embed:
     )
 
 
-def _unknown_server_embed(key: str, known_keys) -> discord.Embed:
-    known = ", ".join(f"`{k}`" for k in known_keys) or "*(none configured)*"
+def _unknown_server_embed(name: str, known_names) -> discord.Embed:
+    known = ", ".join(f"`{n}`" for n in known_names) or "*(none configured)*"
     return discord.Embed(
-        description=f"⚠️ Unknown server `{key}`. Configured servers: {known}",
+        description=f"⚠️ Unknown server `{name}`. Configured servers: {known}",
         color=var.COLOR_ERROR,
     )
 
 
-def _effective(server_cfg: dict) -> tuple[str, str, str, str]:
+def _effective(server_cfg: dict) -> tuple[str, str, str]:
     """Merges a server entry with the shared PANEL_URL/CLIENT_API_KEY fallbacks."""
     panel_url = (server_cfg.get('panel_url') or var.PANEL_URL).rstrip('/')
     api_key   = server_cfg.get('client_api_key') or var.CLIENT_API_KEY
     server_id = server_cfg.get('server_id', '')
-    name      = server_cfg.get('display_name', 'Minecraft Server')
-    return panel_url, api_key, server_id, name
+    return panel_url, api_key, server_id
 
 
 # ============================================================================
@@ -196,37 +195,36 @@ class MinecraftServerCog(commands.Cog):
         merged.update(self._cfg.get("servers", {}))
         return merged
 
-    def _default_key(self) -> str | None:
+    def _default_name(self) -> str | None:
         servers = self._servers()
-        dk = self._cfg.get("default_server") or var.DEFAULT_SERVER_KEY
-        if dk in servers:
-            return dk
+        dn = self._cfg.get("default_server") or var.DEFAULT_SERVER_NAME
+        if dn in servers:
+            return dn
         return next(iter(servers), None)
 
-    def _resolve_server(self, key: str | None) -> tuple[str | None, dict | None]:
-        """Returns (key, server_cfg). key is None only when nothing could be resolved."""
+    def _resolve_server(self, name: str | None) -> tuple[str | None, dict | None]:
+        """Returns (name, server_cfg). name is None only when nothing could be resolved."""
         servers = self._servers()
         if not servers:
             return None, None
-        if key:
-            if key in servers:
-                return key, servers[key]
-            for k, cfg in servers.items():
-                if cfg.get('display_name', k).lower() == key.lower():
-                    return k, cfg
-            return key, None  # signals "given but not found"
-        dk = self._default_key()
-        if dk:
-            return dk, servers[dk]
+        if name:
+            if name in servers:
+                return name, servers[name]
+            for n in servers:
+                if n.lower() == name.lower():
+                    return n, servers[n]
+            return name, None  # signals "given but not found"
+        dn = self._default_name()
+        if dn:
+            return dn, servers[dn]
         return None, None
 
     async def _server_autocomplete(self, _interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         current_l = current.lower()
         choices = []
-        for key, cfg in self._servers().items():
-            label = cfg.get('display_name', key)
-            if current_l in key.lower() or current_l in label.lower():
-                choices.append(app_commands.Choice(name=f"{label} ({key})", value=key))
+        for name in self._servers():
+            if current_l in name.lower():
+                choices.append(app_commands.Choice(name=name, value=name))
         return choices[:25]
 
     # ── /mc_list ──────────────────────────────────────────────────────────────
@@ -240,21 +238,22 @@ class MinecraftServerCog(commands.Cog):
 
         await interaction.response.defer()
 
-        async def _one(key: str, cfg: dict):
-            panel_url, api_key, server_id, name = _effective(cfg)
+        async def _one(name: str, cfg: dict):
+            panel_url, api_key, server_id = _effective(cfg)
             state, _resources = await _get_state(panel_url, api_key, server_id)
-            return key, name, state
+            return name, state, cfg.get("description")
 
-        results = await asyncio.gather(*(_one(k, c) for k, c in servers.items()))
+        results = await asyncio.gather(*(_one(n, c) for n, c in servers.items()))
 
-        default_key = self._default_key()
+        default_name = self._default_name()
         embed = discord.Embed(title="🗺️ Minecraft Servers", color=var.COLOR_INFO)
-        for key, name, state in results:
+        for name, state, description in results:
             emoji = STATE_EMOJI.get(state, "⚪")
-            default_tag = " *(default)*" if key == default_key else ""
+            default_tag = "*(default)* — " if name == default_name else ""
+            desc_line = f"\n{description}" if description else ""
             embed.add_field(
                 name=f"{emoji} {name}",
-                value=f"`{key}`{default_tag} — `{state or 'unreachable'}`",
+                value=f"{default_tag}`{state or 'unreachable'}`{desc_line}",
                 inline=False,
             )
         await interaction.followup.send(embed=embed)
@@ -264,8 +263,8 @@ class MinecraftServerCog(commands.Cog):
     @app_commands.command(name="mc_status", description="Check a Minecraft server's current power state.")
     @app_commands.describe(server="Which server (defaults to the configured default)")
     async def mc_status(self, interaction: discord.Interaction, server: str | None = None):
-        key, cfg = self._resolve_server(server)
-        if key is None:
+        name, cfg = self._resolve_server(server)
+        if name is None:
             await interaction.response.send_message(embed=_not_configured_embed(), ephemeral=True)
             return
         if cfg is None:
@@ -273,7 +272,7 @@ class MinecraftServerCog(commands.Cog):
             return
 
         await interaction.response.defer()
-        panel_url, api_key, server_id, name = _effective(cfg)
+        panel_url, api_key, server_id = _effective(cfg)
         state, resources = await _get_state(panel_url, api_key, server_id)
         if state is None:
             await interaction.followup.send(embed=discord.Embed(
@@ -283,9 +282,11 @@ class MinecraftServerCog(commands.Cog):
             return
 
         emoji = STATE_EMOJI.get(state, "⚪")
+        description = cfg.get("description")
+        desc_prefix = f"{description}\n\n" if description else ""
         embed = discord.Embed(
             title=f"{emoji} {name}",
-            description=f"Current state: `{state}`",
+            description=f"{desc_prefix}Current state: `{state}`",
             color=STATE_COLOR.get(state, var.COLOR_INFO),
         )
         if resources:
@@ -306,8 +307,8 @@ class MinecraftServerCog(commands.Cog):
     @app_commands.describe(server="Which server (defaults to the configured default)")
     @app_commands.default_permissions(administrator=True)
     async def mc_start(self, interaction: discord.Interaction, server: str | None = None):
-        key, cfg = self._resolve_server(server)
-        if key is None:
+        name, cfg = self._resolve_server(server)
+        if name is None:
             await interaction.response.send_message(embed=_not_configured_embed(), ephemeral=True)
             return
         if cfg is None:
@@ -315,7 +316,7 @@ class MinecraftServerCog(commands.Cog):
             return
 
         await interaction.response.defer()
-        panel_url, api_key, server_id, name = _effective(cfg)
+        panel_url, api_key, server_id = _effective(cfg)
         state, _resources = await _get_state(panel_url, api_key, server_id)
         if state in ("running", "starting"):
             await interaction.followup.send(embed=discord.Embed(
@@ -346,8 +347,8 @@ class MinecraftServerCog(commands.Cog):
     @app_commands.describe(server="Which server (defaults to the configured default)")
     @app_commands.default_permissions(administrator=True)
     async def mc_stop(self, interaction: discord.Interaction, server: str | None = None):
-        key, cfg = self._resolve_server(server)
-        if key is None:
+        name, cfg = self._resolve_server(server)
+        if name is None:
             await interaction.response.send_message(embed=_not_configured_embed(), ephemeral=True)
             return
         if cfg is None:
@@ -355,7 +356,7 @@ class MinecraftServerCog(commands.Cog):
             return
 
         await interaction.response.defer()
-        panel_url, api_key, server_id, name = _effective(cfg)
+        panel_url, api_key, server_id = _effective(cfg)
         state, _resources = await _get_state(panel_url, api_key, server_id)
         if state == "offline":
             await interaction.followup.send(embed=discord.Embed(
@@ -380,8 +381,8 @@ class MinecraftServerCog(commands.Cog):
     @app_commands.describe(server="Which server (defaults to the configured default)")
     @app_commands.default_permissions(administrator=True)
     async def mc_restart(self, interaction: discord.Interaction, server: str | None = None):
-        key, cfg = self._resolve_server(server)
-        if key is None:
+        name, cfg = self._resolve_server(server)
+        if name is None:
             await interaction.response.send_message(embed=_not_configured_embed(), ephemeral=True)
             return
         if cfg is None:
@@ -389,7 +390,7 @@ class MinecraftServerCog(commands.Cog):
             return
 
         await interaction.response.defer()
-        panel_url, api_key, server_id, name = _effective(cfg)
+        panel_url, api_key, server_id = _effective(cfg)
         embed = discord.Embed(
             description=f"⚠️ This will **restart {name} and disconnect all players**. Are you sure?",
             color=var.COLOR_WARN,
@@ -404,9 +405,9 @@ class MinecraftServerCog(commands.Cog):
 
     @app_commands.command(name="set_mc_server", description="Add or update a Minecraft server the bot can control.")
     @app_commands.describe(
-        key="Short key used to select this server (e.g. 'survival')",
+        name="Name used to select this server, and shown in embeds (e.g. 'Survival')",
         server_id="The server's short identifier from its panel URL, e.g. the abc12345 in /server/abc12345 (not the long UUID)",
-        display_name="Name shown in embeds (defaults to the key)",
+        description="Optional short blurb shown alongside this server in embeds (e.g. 'Main survival world')",
         panel_url="Only set this if this server lives on a DIFFERENT panel/host than the shared default",
         client_api_key="Only set this if this server needs its own Client API key (Panel → Account → API Credentials)",
     )
@@ -414,26 +415,26 @@ class MinecraftServerCog(commands.Cog):
     async def set_mc_server(
         self,
         interaction: discord.Interaction,
-        key: str,
+        name: str,
         server_id: str,
-        display_name: str | None = None,
+        description: str | None = None,
         panel_url: str | None = None,
         client_api_key: str | None = None,
     ):
         servers = self._cfg.setdefault("servers", {})
-        entry = servers.get(key, {}).copy()
+        entry = servers.get(name, {}).copy()
         entry["server_id"] = server_id
-        if display_name:
-            entry["display_name"] = display_name
+        if description:
+            entry["description"] = description
         if panel_url:
             entry["panel_url"] = panel_url.rstrip("/")
         if client_api_key:
             entry["client_api_key"] = client_api_key
-        servers[key] = entry
+        servers[name] = entry
         self._save_cfg()
 
         if len(self._servers()) == 1 and not self._cfg.get("default_server"):
-            self._cfg["default_server"] = key
+            self._cfg["default_server"] = name
             self._save_cfg()
 
         overrides = []
@@ -445,75 +446,74 @@ class MinecraftServerCog(commands.Cog):
 
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=f"✅ Saved server `{key}` ({entry.get('display_name', key)}){override_note}.",
+                description=f"✅ Saved server **{name}**{override_note}.",
                 color=var.COLOR_OK,
             ),
             ephemeral=True,
         )
 
-    @set_mc_server.autocomplete("key")
+    @set_mc_server.autocomplete("name")
     async def set_mc_server_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._server_autocomplete(interaction, current)
 
     # ── /remove_mc_server ─────────────────────────────────────────────────────
 
     @app_commands.command(name="remove_mc_server", description="Remove a server added via /set_mc_server.")
-    @app_commands.describe(key="Which server to remove")
+    @app_commands.describe(name="Which server to remove")
     @app_commands.default_permissions(administrator=True)
-    async def remove_mc_server(self, interaction: discord.Interaction, key: str):
+    async def remove_mc_server(self, interaction: discord.Interaction, name: str):
         servers = self._cfg.get("servers", {})
-        if key not in servers:
+        if name not in servers:
             note = (
                 " It exists in the static config file, not something added via `/set_mc_server` — "
                 "remove it there instead."
-                if key in var.SERVERS else ""
+                if name in var.SERVERS else ""
             )
             await interaction.response.send_message(
-                embed=discord.Embed(description=f"⚠️ No runtime entry found for `{key}`.{note}", color=var.COLOR_ERROR),
+                embed=discord.Embed(description=f"⚠️ No runtime entry found for `{name}`.{note}", color=var.COLOR_ERROR),
                 ephemeral=True,
             )
             return
 
-        del servers[key]
+        del servers[name]
         self._cfg["servers"] = servers
-        if self._cfg.get("default_server") == key:
+        if self._cfg.get("default_server") == name:
             self._cfg["default_server"] = None
         self._save_cfg()
 
         await interaction.response.send_message(
-            embed=discord.Embed(description=f"🗑️ Removed `{key}`.", color=var.COLOR_OK),
+            embed=discord.Embed(description=f"🗑️ Removed `{name}`.", color=var.COLOR_OK),
             ephemeral=True,
         )
 
-    @remove_mc_server.autocomplete("key")
+    @remove_mc_server.autocomplete("name")
     async def remove_mc_server_autocomplete(self, interaction: discord.Interaction, current: str):
         current_l = current.lower()
         choices = []
-        for key, cfg in self._cfg.get("servers", {}).items():
-            label = cfg.get('display_name', key)
-            if current_l in key.lower() or current_l in label.lower():
-                choices.append(app_commands.Choice(name=f"{label} ({key})", value=key))
+        for name in self._cfg.get("servers", {}):
+            if current_l in name.lower():
+                choices.append(app_commands.Choice(name=name, value=name))
         return choices[:25]
 
     # ── /set_mc_default ───────────────────────────────────────────────────────
 
     @app_commands.command(name="set_mc_default", description="Set which server /mc_status, /mc_start, /mc_stop, /mc_restart act on by default.")
-    @app_commands.describe(key="Which server should be the default")
+    @app_commands.describe(name="Which server should be the default")
     @app_commands.default_permissions(administrator=True)
-    async def set_mc_default(self, interaction: discord.Interaction, key: str):
+    async def set_mc_default(self, interaction: discord.Interaction, name: str):
         servers = self._servers()
-        if key not in servers:
-            await interaction.response.send_message(embed=_unknown_server_embed(key, servers), ephemeral=True)
+        if name not in servers:
+            await interaction.response.send_message(embed=_unknown_server_embed(name, servers), ephemeral=True)
             return
 
-        self._cfg["default_server"] = key
+        self._cfg["default_server"] = name
         self._save_cfg()
         await interaction.response.send_message(
-            embed=discord.Embed(description=f"✅ Default server set to `{key}` ({servers[key].get('display_name', key)}).", color=var.COLOR_OK),
+            embed=discord.Embed(description=f"✅ Default server set to **{name}**.", color=var.COLOR_OK),
             ephemeral=True,
         )
 
-    @set_mc_default.autocomplete("key")
+    @set_mc_default.autocomplete("name")
     async def set_mc_default_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._server_autocomplete(interaction, current)
 
@@ -527,18 +527,19 @@ class MinecraftServerCog(commands.Cog):
             await interaction.response.send_message(embed=_not_configured_embed(), ephemeral=True)
             return
 
-        runtime_keys = set(self._cfg.get("servers", {}).keys())
-        default_key = self._default_key()
+        runtime_names = set(self._cfg.get("servers", {}).keys())
+        default_name = self._default_name()
 
         embed = discord.Embed(title="⚙️ Minecraft Server Config", color=var.COLOR_INFO)
-        for key, cfg in servers.items():
-            panel_url, api_key, server_id, name = _effective(cfg)
+        for name, cfg in servers.items():
+            panel_url, api_key, server_id = _effective(cfg)
             masked = f"{api_key[:6]}…" if api_key else "*(none set)*"
-            source = "`/set_mc_server`" if key in runtime_keys else "config file"
-            default_tag = " ⭐" if key == default_key else ""
+            source = "`/set_mc_server`" if name in runtime_names else "config file"
+            default_tag = " ⭐" if name == default_name else ""
+            desc_line = f"\n{cfg['description']}" if cfg.get("description") else ""
             embed.add_field(
-                name=f"{name} (`{key}`){default_tag}",
-                value=f"Server ID: `{server_id or '—'}`\nPanel: `{panel_url or '—'}`\nAPI key: `{masked}`\nSource: {source}",
+                name=f"{name}{default_tag}",
+                value=f"Server ID: `{server_id or '—'}`\nPanel: `{panel_url or '—'}`\nAPI key: `{masked}`\nSource: {source}{desc_line}",
                 inline=False,
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)

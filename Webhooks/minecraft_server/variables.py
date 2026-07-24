@@ -10,16 +10,17 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 # not the Panel/Wings/database containers themselves — those are managed via
 # `docker compose`, not this cog.
 #
-# Multi-server config shape (config.json), one entry per Pterodactyl server:
+# Multi-server config shape (config.json), one entry per Pterodactyl server,
+# keyed by the server's name (used to select it and shown in embeds):
 # {
 #   "minecraft_servers": {
-#     "survival": {"server_id": "abc12345", "display_name": "Survival"},
-#     "creative": {
-#       "server_id": "def67890", "display_name": "Creative",
+#     "Survival": {"server_id": "abc12345", "description": "Main survival world"},
+#     "Creative": {
+#       "server_id": "def67890",
 #       "panel_url": "http://other-panel.duckdns.org", "client_api_key": "ptlc_..."
 #     }
 #   },
-#   "minecraft_default_server": "survival",
+#   "minecraft_default_server": "Survival",
 #
 #   # Shared fallbacks — used by any entry above that omits its own
 #   # panel_url / client_api_key (the common case: one panel, many servers on it).
@@ -31,9 +32,10 @@ SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 
 # in http://.../server/abc12345 — not the long UUID from the Application API.
 # `client_api_key` must be a *Client* API key (Panel → Account → API
 # Credentials), never the Application key used for provisioning.
+# `description` is optional — a short blurb shown alongside the server in embeds.
 #
 # Single-server setups can keep using the old flat shape below — it's adopted
-# automatically as one entry keyed "default":
+# automatically as one entry keyed by its display_name (or "Minecraft Server" if unset):
 # { "minecraft_server": {"panel_url": ..., "client_api_key": ..., "server_id": ..., "display_name": ...} }
 
 PANEL_URL      = (config.get('minecraft_panel_url') or '').rstrip('/')
@@ -56,19 +58,19 @@ def _normalize_servers() -> dict:
     legacy = config.get('minecraft_server', {})
     sid = config.get('minecraft_server_id') or legacy.get('server_id')
     if sid:
+        name = legacy.get('display_name', 'Minecraft Server')
         return {
-            'default': {
+            name: {
                 'server_id':      sid,
                 'panel_url':      config.get('minecraft_panel_url') or legacy.get('panel_url', ''),
                 'client_api_key': config.get('minecraft_client_api_key') or legacy.get('client_api_key', ''),
-                'display_name':   legacy.get('display_name', 'Minecraft Server'),
             }
         }
     return {}
 
 
 SERVERS = _normalize_servers()
-DEFAULT_SERVER_KEY = config.get('minecraft_default_server') or (next(iter(SERVERS), None))
+DEFAULT_SERVER_NAME = config.get('minecraft_default_server') or (next(iter(SERVERS), None))
 
 # How long the /mc_stop and /mc_restart confirmation prompts stay active (seconds)
 CONFIRM_TIMEOUT = 30

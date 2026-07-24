@@ -13,10 +13,10 @@ Commands: 9
 - `/mc_start [server]` — send a start signal. No-ops if already `running` or `starting`.
 - `/mc_stop [server]` — send a stop signal, after a Confirm/Cancel prompt (disconnects all players).
 - `/mc_restart [server]` — send a restart signal, after a Confirm/Cancel prompt (disconnects all players).
-- `/set_mc_server <key> <server_id> [display_name] [panel_url] [client_api_key]` — add or update a server **without editing any config file or restarting the bot**. Only pass `panel_url`/`client_api_key` if this particular server is on a different panel/account than the shared default.
-- `/remove_mc_server <key>` — remove a server added via `/set_mc_server`. Can't remove one that only exists in the static config file.
-- `/set_mc_default <key>` — change which server the other commands act on when `server` is omitted.
-- `/view_mc_config` — show every configured server (key, server ID, panel, masked API key) and whether each came from the config file or `/set_mc_server`.
+- `/set_mc_server <name> <server_id> [description] [panel_url] [client_api_key]` — add or update a server **without editing any config file or restarting the bot**. `name` is both the identifier and what's shown in embeds. `description` is an optional short blurb shown alongside it. Only pass `panel_url`/`client_api_key` if this particular server is on a different panel/account than the shared default.
+- `/remove_mc_server <name>` — remove a server added via `/set_mc_server`. Can't remove one that only exists in the static config file.
+- `/set_mc_default <name>` — change which server the other commands act on when `server` is omitted.
+- `/view_mc_config` — show every configured server (name, server ID, panel, masked API key) and whether each came from the config file or `/set_mc_server`.
 
 `server` is optional everywhere and autocompletes from your configured servers — omit it to act on the default (see `/set_mc_default`).
 
@@ -29,7 +29,7 @@ There's no auto-discovery — a Client API key and a server ID are account-speci
 - **at runtime**, with `/set_mc_server` (recommended — no redeploy needed, and it's how you'd add a server that lives on a completely different panel/host later), or
 - **at deploy time**, by editing `variables.py` / the shared config file (see below).
 
-Whichever entry a server came from, it resolves its `panel_url` and `client_api_key` independently: if that entry doesn't specify its own, it falls back to the shared `PANEL_URL` / `CLIENT_API_KEY`. That's what makes "a server on another host" just work — set `panel_url`/`client_api_key` **only on that one entry** via `/set_mc_server`, and every other server keeps using the shared default. Runtime entries (`/set_mc_server`) always take priority over a config-file entry with the same key.
+Whichever entry a server came from, it resolves its `panel_url` and `client_api_key` independently: if that entry doesn't specify its own, it falls back to the shared `PANEL_URL` / `CLIENT_API_KEY`. That's what makes "a server on another host" just work — set `panel_url`/`client_api_key` **only on that one entry** via `/set_mc_server`, and every other server keeps using the shared default. Runtime entries (`/set_mc_server`) always take priority over a config-file entry with the same name.
 
 ## Settings (variables.py / config file)
 
@@ -38,34 +38,34 @@ Configure one or more servers under `minecraft_servers` in the shared config fil
 ```json
 {
   "minecraft_servers": {
-    "survival": {
+    "Survival": {
       "server_id": "abc12345",
-      "display_name": "Survival"
+      "description": "Main survival world"
     },
-    "creative": {
+    "Creative": {
       "server_id": "def67890",
-      "display_name": "Creative",
       "panel_url": "http://other-panel.duckdns.org",
       "client_api_key": "ptlc_..."
     }
   },
-  "minecraft_default_server": "survival",
+  "minecraft_default_server": "Survival",
 
   "minecraft_panel_url": "http://<subdomain>.duckdns.org",
   "minecraft_client_api_key": "ptlc_..."
 }
 ```
 
+- Each key under `minecraft_servers` (e.g. `"Survival"`) is both the server's identifier and what's shown in embeds.
 - `server_id` (required per entry) — the short server identifier from the panel URL, e.g. the `abc12345` in `http://.../server/abc12345` (not the long UUID).
+- `description` (optional per entry) — a short blurb shown alongside the server in `/mc_list`, `/mc_status`, and `/view_mc_config`.
 - `panel_url` / `client_api_key` (optional per entry) — only needed if that server lives on a **different** panel/account than the shared fallback. Most setups (one panel, several servers) can omit these and rely on the top-level `minecraft_panel_url` / `minecraft_client_api_key`.
-- `display_name` (optional) — shown in embeds instead of the raw key.
-- `minecraft_default_server` — which key `/mc_status`, `/mc_start`, `/mc_stop`, `/mc_restart` use when `server` is omitted. Defaults to the first entry in `minecraft_servers` if unset.
+- `minecraft_default_server` — which server name `/mc_status`, `/mc_start`, `/mc_stop`, `/mc_restart` use when `server` is omitted. Defaults to the first entry in `minecraft_servers` if unset.
 
 `client_api_key` must be a **Client** API key from Panel → Account → API Credentials — **not** the Application API key used for provisioning/admin.
 
 ### Single-server shorthand
 
-If you only run one server you can skip `minecraft_servers` entirely and use the flat legacy shape — it's adopted automatically as a single entry keyed `default`:
+If you only run one server you can skip `minecraft_servers` entirely and use the flat legacy shape — it's adopted automatically as a single entry keyed by its `display_name` (or `"Minecraft Server"` if unset):
 
 ```json
 {
