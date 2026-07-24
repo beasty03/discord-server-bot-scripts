@@ -36,9 +36,6 @@ class RainbowRole(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
-        rows = self.db.execute("SELECT interval_seconds FROM rainbow_role_config LIMIT 1")
-        interval = rows[0][0] if rows else var.DEFAULT_INTERVAL_SECONDS
-        self._cycle.change_interval(seconds=interval)
         self._cycle.start()
 
     def cog_unload(self):
@@ -98,6 +95,9 @@ class RainbowRole(commands.Cog):
     @_cycle.before_loop
     async def _before_cycle(self):
         await self.bot.wait_until_ready()
+        rows = self.db.execute("SELECT interval_seconds FROM rainbow_role_config LIMIT 1")
+        if rows:
+            self._cycle.change_interval(seconds=rows[0][0])
 
     # ── /rainbow_join ─────────────────────────────────────────────────────────
 
