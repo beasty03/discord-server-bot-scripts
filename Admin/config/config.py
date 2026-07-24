@@ -148,31 +148,32 @@ class ConfigCog(commands.Cog):
 
         if category == "bot":
             embed.title = "🤖 Bot Overview"
-            loaded_names = set(self.bot.cogs.keys())
-            groups = [
-                ("⚔️ DND",      ["DungeonMasterCog","EngineCore","CharacterCog","ShopCog","RecipesCog","PartiesCog","ScribeCog"]),
-                ("🎰 Casino",   ["SlotsCog","BlackjackCog","BaccaratCog","RouletteCog","GambleCog","CoinFlipCog","HigherLowerCog","HorseRacingCog","CrossyRoadCog","RPSCog","PokerCog","BrokeBoy"]),
-                ("🌐 General",  ["WelcomeSystem","SelfRoles","Rules","HelpCog"]),
-                ("👤 User",     ["BankCog","LeaderboardCog","StatsCog"]),
-                ("💬 Quotes",   ["QuotesCog"]),
-                ("🎉 Events",   ["CasinoEventCog","MultiplierEventCog"]),
-                ("🔗 Webhooks", ["WordleRecap"]),
-                ("⚙️ Admin",    ["ConfigCog","Moderation"]),
-            ]
+            loaded_names = sorted(self.bot.cogs.keys())
             embed.add_field(
                 name="📡 Status",
                 value=(
                     f"**Latency:** {round(self.bot.latency * 1000)} ms\n"
                     f"**Guilds:** {len(self.bot.guilds)}\n"
-                    f"**Total cogs loaded:** {len(loaded_names)}"
+                    f"**Cogs loaded:** {len(loaded_names)}"
                 ),
                 inline=False,
             )
-            for grp, names in groups:
-                val = "  ".join(
-                    f"{'✅' if n in loaded_names else '❌'} `{n}`" for n in names
-                )
-                embed.add_field(name=grp, value=val, inline=False)
+            # Lists whatever is actually loaded on THIS bot instance — not a fixed
+            # catalog. Each bot only loads whichever cogs were selected for it, so
+            # comparing against "every cog that exists in the repo" would falsely
+            # flag intentionally-absent ones as broken.
+            chunks, chunk, chunk_len = [], [], 0
+            for name in loaded_names:
+                token = f"`{name}`"
+                if chunk and chunk_len + len(token) + 2 > 1000:
+                    chunks.append(chunk)
+                    chunk, chunk_len = [], 0
+                chunk.append(token)
+                chunk_len += len(token) + 2
+            if chunk:
+                chunks.append(chunk)
+            for i, ch in enumerate(chunks):
+                embed.add_field(name="✅ Loaded Cogs" if i == 0 else "​", value="  ".join(ch), inline=False)
 
         elif category == "dnd":
             embed.title = "⚔️ DND / Engine"

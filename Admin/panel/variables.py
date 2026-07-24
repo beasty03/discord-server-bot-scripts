@@ -6,31 +6,6 @@ GUILD_ID    = int(config.get('guild_id') or config.get('server', {}).get('guild_
 SERVER_NAME = config.get('server_name') or config.get('server', {}).get('name', 'Unknown Server')
 
 # ============================================================================
-# KNOWN COG GROUPS  (used by /bot_status)
-# Add or remove entries here whenever a new cog is added to the bot.
-# ============================================================================
-
-COG_GROUPS: dict[str, list[str]] = {
-    "🎰 Casino": [
-        "GambleCog", "BlackjackCog", "RouletteCog", "HigherLowerCog",
-        "BaccaratCog", "SlotsCog", "HorseRacingCog", "CrossyRoadCog",
-        "CoinFlipCog", "RPSCog", "PokerCog", "DiamondMinesCog",
-        "RocketCog", "SpinWheelCog", "CrapsCog", "UnderOverCog",
-    ],
-    "👤 User": ["BankCog", "StatsCog", "LeaderboardCog"],
-    "📋 General": ["SelfRoles", "QuotesCog", "HelpCog"],
-    "🎉 Events": ["CasinoEventCog", "MultiplierEventCog", "QuotesEventCog"],
-    "⚔️ DnD": ["CharacterCog", "PartiesCog", "DungeonMasterCog", "ShopCog", "RecipesCog", "ScribeCog"],
-    "🐾 Tamagotchi": ["TamagotchiCog", "FightClubCog"],
-    "🎮 Minigames": ["HangmanCog", "WordleCog", "TicTacToeCog", "Connect4Cog"],
-    "🔗 Webhooks": ["WordleRecap"],
-    "⚙️ Admin": [
-        "ConfigCog", "AutomodCog", "WelcomeSystem", "Rules",
-        "CommandsCog", "AdminPanelCog",
-    ],
-}
-
-# ============================================================================
 # EMBED COLORS
 # ============================================================================
 

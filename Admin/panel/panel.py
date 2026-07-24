@@ -53,35 +53,32 @@ class AdminPanelCog(commands.Cog):
 
     @app_commands.command(name="bot_status", description="View the load status of every cog")
     @app_commands.default_permissions(administrator=True)
-    async def bot_status(self, interaction: discord.Interaction):
-        loaded = set(self.bot.cogs.keys())
-        total_expected = total_loaded = 0
-        all_ok = True
+    async def view_bot_status(self, interaction: discord.Interaction):
+        # Reports whatever is actually loaded on THIS bot instance, not a fixed
+        # catalog — each server's bot only loads whichever cogs were selected
+        # for it, so comparing against "every cog that exists in the repo"
+        # would falsely flag intentionally-absent ones as broken.
+        loaded = sorted(self.bot.cogs.keys())
         embed = discord.Embed(
             title=f"⚙️ Cog Status — {var.SERVER_NAME}",
+            description=f"**{len(loaded)}** cogs loaded",
             timestamp=datetime.now(timezone.utc),
             color=var.COLOR_OK,
         )
 
-        for group, cogs in var.COG_GROUPS.items():
-            total_expected += len(cogs)
-            missing = [c for c in cogs if c not in loaded]
-            n_loaded = len(cogs) - len(missing)
-            total_loaded += n_loaded
+        chunks, chunk, chunk_len = [], [], 0
+        for name in loaded:
+            token = f"`{name}`"
+            if chunk and chunk_len + len(token) + 2 > 1000:
+                chunks.append(chunk)
+                chunk, chunk_len = [], 0
+            chunk.append(token)
+            chunk_len += len(token) + 2
+        if chunk:
+            chunks.append(chunk)
+        for i, ch in enumerate(chunks):
+            embed.add_field(name="Loaded Cogs" if i == 0 else "​", value="  ".join(ch), inline=False)
 
-            if not missing:
-                value = f"✅ All {len(cogs)} loaded"
-            else:
-                all_ok = False
-                joined = ", ".join(f"`{c}`" for c in missing)
-                value = f"⚠️ {n_loaded}/{len(cogs)} loaded\n❌ {joined}"
-
-            embed.add_field(name=group, value=value, inline=True)
-
-        ratio  = f"{total_loaded}/{total_expected}"
-        color  = var.COLOR_OK if all_ok else (var.COLOR_WARN if total_loaded >= total_expected * 0.8 else var.COLOR_ERROR)
-        embed.color = color
-        embed.description = f"**{ratio}** cogs loaded"
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /log settings ─────────────────────────────────────────────────────────
