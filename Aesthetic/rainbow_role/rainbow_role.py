@@ -12,17 +12,6 @@ var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
-ForgeDB.declare_schema(
-    tables=[
-        """CREATE TABLE IF NOT EXISTS rainbow_role_config (
-               guild_id         TEXT PRIMARY KEY,
-               role_id          INTEGER NOT NULL,
-               interval_seconds INTEGER NOT NULL,
-               hue              INTEGER NOT NULL DEFAULT 0
-           )""",
-    ],
-)
-
 log = logging.getLogger("launcher")
 
 
@@ -36,16 +25,16 @@ class RainbowRole(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
-        # Belt-and-suspenders: create the table ourselves too, in case the shared
-        # declare_schema() migration pass doesn't pick this cog up for some reason.
-        self.db.execute(
-            """CREATE TABLE IF NOT EXISTS rainbow_role_config (
-                   guild_id         TEXT PRIMARY KEY,
-                   role_id          INTEGER NOT NULL,
-                   interval_seconds INTEGER NOT NULL,
-                   hue              INTEGER NOT NULL DEFAULT 0
-               )"""
-        )
+
+    async def cog_load(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS rainbow_role_config (
+                guild_id         TEXT PRIMARY KEY,
+                role_id          INTEGER NOT NULL,
+                interval_seconds INTEGER NOT NULL,
+                hue              INTEGER NOT NULL DEFAULT 0
+            )
+        """)
         self._cycle.start()
 
     def cog_unload(self):

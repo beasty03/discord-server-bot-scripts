@@ -13,24 +13,6 @@ var = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(var)
 from forge_db import ForgeDB
 
-ForgeDB.declare_schema(
-    tables=[
-        """CREATE TABLE IF NOT EXISTS elevated_rights_grants (
-               guild_id    TEXT    NOT NULL,
-               user_id     TEXT    NOT NULL,
-               role_id     INTEGER NOT NULL,
-               granted_by  TEXT    NOT NULL,
-               reason      TEXT,
-               expires_at  INTEGER NOT NULL,
-               PRIMARY KEY (guild_id, user_id, role_id)
-           )""",
-        """CREATE TABLE IF NOT EXISTS elevated_rights_config (
-               key   TEXT PRIMARY KEY,
-               value TEXT NOT NULL
-           )""",
-    ],
-)
-
 log = logging.getLogger("launcher")
 
 _DURATION_RE = re.compile(r"(\d+)\s*([smhdw])", re.IGNORECASE)
@@ -70,6 +52,25 @@ class ElevatedRights(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db  = ForgeDB.get()
+
+    async def cog_load(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS elevated_rights_grants (
+                guild_id    TEXT    NOT NULL,
+                user_id     TEXT    NOT NULL,
+                role_id     INTEGER NOT NULL,
+                granted_by  TEXT    NOT NULL,
+                reason      TEXT,
+                expires_at  INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, user_id, role_id)
+            )
+        """)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS elevated_rights_config (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         self._expiry_check.start()
 
     def cog_unload(self):
